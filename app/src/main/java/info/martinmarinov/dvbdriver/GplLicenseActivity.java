@@ -36,6 +36,7 @@ public class GplLicenseActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_gpl_license);
+        SystemBarInsets.apply(this);
 
         findViewById(R.id.license_btnOk).setOnClickListener(new View.OnClickListener() {
             @Override

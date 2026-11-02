@@ -111,3 +111,54 @@
 - **Validation đã chạy:** set JAVA_HOME từ Machine+SDKenv trong process; `gradlew.bat :usbxfer:testDebugUnitTest :drivers:testDebugUnitTest :dvbservice:testDebugUnitTest :app:assembleDebug --console plain --no-daemon --max-workers=1` exit0/59s,107tasks(8executed/99UP-TO-DATE); unit tasks UP-TO-DATE chứ không chạy lại mọi test. Không lint/release/hardware/Androidruntime mới; kết quả migration trước giữ nguyên.
 - **Hồ sơ chuẩn bị:** thêm checkpointSTATUS/WORKLOG trước commit để bàn giao origin/thời điểm/phạm vi và kết quả kiểm chứng. Hash commit tra gitlog sau thực thi, tránh ghi self-referential SHA vào chính commit. Không thay chỉ dẫn/skills/build ngoài các thay đổi đã có.
 - **Tiếp theo:** xác minh commit/index/workingtree rồi báo hash; người dùng có thể push nhánh hiện tại tới fork origin. Workspace file hiện ignored không thuộc commit. Android runtime/native-load/USBHost/TBS vẫnNOTRUN.
+
+## 2026-11-02 — Phase 1.1: kiểm thử Android runtime, không tuner
+
+- **Thời gian:** 19:31–20:07 +07. Windows 10.0.19045 / PowerShell 7.6.9, cwd `D:\API\TBS5530-DVB-Android\AndroidDvbDriver`.
+- **Git trước:** modernization tại `6da609ba49dd9f1f4d284291918f68a6378972ff`; người dùng xác nhận đã push, local ref `origin/chore/modernize-android-build` cũng trùng SHA. Không fetch để kiểm remote live. Có hai thay đổi local trước phiên: `.gitignore` đã thêm `!TBS5530.code-workspace`, workspace chưa tracked. Kiểm hash trước/sau khi `git switch -c test/android-runtime-smoke chore/modernize-android-build`: giữ nguyên cả hai. Không stash/reset/stage/commit/push/merge.
+- **Guidance:** đọc copilot-instructions, cả 6 scoped instructions, 2 project SKILL.md và hồ sơ mới nhất. Load project-handoff/android-cli/agent-customization; skills tbs-research chỉ đọc vì không nghiên cứu protocol mới. GitNexus list_repos không có target index; AgentMemory lookup không có match; không analyze hoặc sửa Proxy config. Đọc Android docs qua CLI cho instrumentation và edge-to-edge.
+
+### Môi trường và lựa chọn AVD
+
+- `GetEnvironmentVariable` Process/User/Machine: process vẫn JAVA_HOME cũ không tồn tại, thiếu SDK/AVD env; Machine JAVA_HOME hợp lệ `C:\Program Files\Java\latest\jdk-25`, User SDK/AVD đúng. Mỗi lệnh cần thiết set JAVA_HOME từ Machine và SDK/AVD process riêng, không thay global.
+- `android --help`, `android info sdk`, `android --sdk=D:\Android\Sdk sdk list`, `emulator list`, `emulator.exe -list-avds`, ADB `devices -l`, MCP `list_avds`: ban đầu không có AVD hoặc device. Có image `system-images;android-37.0;google_apis;x86_64` cài sẵn. User đồng ý tạo AVD riêng qua ask_user.
+- Android CLI `emulator create --help` chỉ hỗ trợ chọn profile, không chọn name/path/image chính xác; dùng avdmanager hiện có. `avdmanager create avd --help` trả lỗi cú pháp rồi in đúng options; không ghi gì. Sau đó `'no' | avdmanager.bat create avd -n TBS5530_Runtime_API37 -k 'system-images;android-37.0;google_apis;x86_64' -p D:\Android\AVD\TBS5530_Runtime_API37.avd -d medium_phone`, exit0; không `--force`, không tải SDK/image, không wipe data.
+- Emulator process shell1004: `emulator.exe -avd TBS5530_Runtime_API37 -port 5554 -no-snapshot -no-boot-anim -no-audio -no-window -gpu swiftshader_indirect`. Đợi `get-state=device` và `sys.boot_completed=1` có timeout4phút (1005exit0).
+- Runtime từ getprop: Android17, SDK37, x86_64; `getconf PAGE_SIZE=4096`; `emu avd name` đúng AVD đã tạo. `pm list features` không có USB host. Không gắn tuner/emulator USB passthrough. Source.properties image revision7, CLI catalog trước đó báo8; ghi metadata/runtime thực, không suy diễn runtime37.2 từ compileSDK.
+- `gradlew --version`: Gradle9.8.2/JDK25.0.5.0.3. Đọc scripts và source.properties xác nhận AGP9.4.1/compile37.2/target37/min21, NDK30.0.16248370/CMake4.1.2/BT37.0.0; ADB37.0.1/Emulator37.2.13. Không nâng version/dependency hoặc cài package nào.
+
+### Build, instrumentation và native load
+
+- Thêm `dvbservice/src/androidTest/.../NativeLibrarySmokeTest.java`: assertion `UsbHiSpeedBulk.IS_PLATFORM_SUPPORTED`, gọi direct `System.loadLibrary("UsbXfer")`; không tạo connection/request hoặc ioctl với fd giả. Thêm androidTestImplementation project(:usbxfer) chỉ cho test compile; không external library update.
+- `gradlew :app:assembleDebug :dvbservice:assembleDebugAndroidTest --console plain --no-daemon --max-workers=1`: shell1006 exit0,2m4s. ZIP APK có `lib/x86_64/libUsbXfer.so`,7320bytes.
+- `:dvbservice:tasks --all` xác nhận connectedDebugAndroidTest tồn tại. Lệnh filtered hai class1012 exit0 nhưng XML chỉ1 registry test; không tuyên bố native PASS từ exit code. Direct `am instrument`1017 trước reinstall test APK lỗi component missing vì Gradle đã gỡ test package sau run.
+- `adb -s emulator-5554 install -r <dvbservice-debug-androidTest.apk>` Success; direct `am instrument -w -r -e class info.martinmarinov.dvbservice.NativeLibrarySmokeTest info.martinmarinov.dvbservice.test/androidx.test.runner.AndroidJUnitRunner`1018 chạy **OK (1 test)**, assertion thành công,0.037s.
+- Rerun **không filter**, `$env:ANDROID_SERIAL='emulator-5554'; gradlew :dvbservice:connectedDebugAndroidTest --console plain --no-daemon --max-workers=1`1019 exit0/49s,92tasks(9executed/83UP-TO-DATE). XML `dvbservice/build/outputs/androidTest-results/connected/debug/TEST-TBS5530_Runtime_API37(AVD) - 17.xml`: testsuites **2tests/0failures/0errors**, tên chính xác registry.allDevicesAreInXml và NativeLibrarySmokeTest.usbTransferLibraryLoadsWithoutOpeningUsb. Giữ assertion registry cũ, không disable test.
+- Chép XML evidence ra session files/phase-1-1 (ngoài Git), SHA256 `689B2B2DED52D8E0649BACABEE09226C2E00D68CADEA270C2D1000890C35BC17`.
+
+### UI, lifecycle và lỗi tìm thấy
+
+- `adb -s emulator-5554 install -r app-debug.apk`1008 Success; `am start -W -n info.martinmarinov.dvbdriver/.WelcomeActivity`: Statusok/COLD,TotalTime6606ms,PID3840.
+- MCP describe_ui/screenshot phát hiện overlay **System UI isn't responding**, focused package com.android.systemui, không phải app. Chọn Wait bằng center từ hierarchy; overlay biến mất. Không kill SystemUI/disable security/đổi OS. Ghi firstboot SystemUI ANR là vấn đề môi trường, không ẩn nó.
+- Welcome→Diagnostic→Start mở dialog `No devices found` và stacktrace handled DvbException tại DeviceController:64, PID app vẫn sống, hardware/signal/lock unchecked; Tune/Record không bật. Không có app FATAL/UnsatisfiedLinkError/SecurityException trong log PID đã lọc. Đây không phải tuner test.
+- UI trước fix có controls bị system bars che: hierarchy rowTune bắt đầu y0; Close đến y2400. Screenshot xác nhận nội dung/status icons chồng. Thêm `SystemBarInsets.java`, dùng systemBars|displayCutout và padding gốc, chỉ API35+, dark icons; gọi từ WelcomeActivity/DvbFrontendActivity/GplLicenseActivity sau setContentView. Không đổi targetSDK/minSDK/USB/service logic.
+- `gradlew :app:assembleDebug :app:lintDebug --console plain --no-daemon --max-workers=1`1016 exit0/1m54s,162tasks(27executed/135UP-TO-DATE), lint0errors/11warnings, không suppress/baseline mới.
+- Reinstall APK fix1020 Success, amstart tạm trả PackageUpdateActivity (system transition); hierarchy tiếp theo đúng Welcome. Sau fix top inset63px/bottom63px, rowTune y63, controls dưới cùng dừng y2337 trên screen2400. MCP screenshot và persisted before/after PNG xác nhận.
+- Test Welcome→License→OK quay Welcome; Diagnostic→Home→amstart đưa task lại Diagnostic, state bình thường; Start lại vẫn no-device dialog; Back đóng dialog/rời Diagnostic về Welcome. `ACTION_VIEW dtvdriver:// -p <app>`1024 mở DeviceChooserActivity rồi finish về Welcome khi không có device, không ép start DvbService. Không có caller để assert returned result code nên không báo coverage contract đầy đủ.
+- Close button đưa về launcher; warm relaunch1026 Statusok,TotalTime1796ms,PID6344 sống. Filter log PID cuối0match FATAL/linker/security/appANR; dumpsys exit-info chỉ reason16 PACKAGE UPDATED do install-r, không crash. Không khẳng định mọi log trong toàn emulator không có warning.
+- Permission: READ/WRITE_EXTERNAL_STORAGE=false, internet/foreground permissions granted; no-tuner UI vẫn chạy. USB permission **NOT RUN** vì không có USB Host/device. DvbService foreground/streaming **NOT RUN** vì chưa có tuner/fixture hợp lệ; dumpsys không có service record của app. Không `am startservice` với intent giả/null.
+
+### Config, bảo toàn reference và cleanup
+
+- Workspace JSON có4roots relative đúng và default PowerShell. Exception `.gitignore` đã có sẵn trước phase; không thêm trùng/force-add/stage. Hash cuối .gitignore `DB291A4767C7E5C4B900D560E9B12781A24BDB5D287C280A0B076CBF625981A3`, workspace `B715366CEBE4B1C9A74B1ECC4F747024D10EECEB581B4FF1ED0800134F4D11F9`, giữ nguyên so trước branch.
+- Cập nhật English toolchain snapshot trong `.github/copilot-instructions.md` và `android-build.instructions.md`; giữ Windows/WSL/usbipd/MCP/hardware safety. Không sửa4instruction còn lại/skills/global settings. Không nâng AGP9.5 hoặc dependencies.
+- Reference commands chỉ `--no-lazy-fetch`/GIT_OPTIONAL_LOCKS0 rev-parse/status/sparse list/Test-Path: TBS SHA2ce787de9f6e81b4294692a45de15596ae2e1322 vẫn thiếuindex/81399D, tbs5530.c/.h và cxd2878.c thiếu trên đĩa. C SHA c5fa27eecbe80633cbb365cc44656daea1c0e2e3 và Go11228b05fb1626bf41c4e1879ace10cd0a8d575c sạch. Không sync/fetch/repair/reset hoặc USB/firmware/I2C/vendor writes.
+- Unit regression1028 exit0/32s,39tasksUP-TO-DATE: validation task thành công, không nói31methods chạy lại mới. Tests đã chạy thực mới là instrumentation2methods.
+- Cleanup: xác nhận `emu avd name` trước `adb -s emulator-5554 emu kill`; shell1004 kết thúc exit0. Lần list ngay3s sau còn serial do shutdown đang diễn ra; recheck1031 `adb devices -l` rỗng. AVD retained để tái sử dụng, không wipe/xóa hoặc dừng thiết bị khác.
+
+### Evidence và bàn giao
+
+- Bằng chứng ngoài Git: session files/phase-1-1 chứa diagnostic-before-insets.png, diagnostic-after-insets.png, no-tuner-after-insets.png, welcome-after-insets.png, instrumentation-results.xml, app-logcat-filtered.txt. Không raw personal device IDs/credentials, không commit log/screenshot build output.
+- Hash APKdebug đã runtime test sau fix: `8B4E47A9E60D6153CC3B97F244C45771AD0108BA0C1CA785F72332DA31FE38F6`; testAPK `F85C7D2ADE771570018623D4BD9163AB358D9B4A2530697FEA2F8D484FAB9872`.
+- SnapshotSTATUS/ENVIRONMENT/TEST-MATRIX và ADR-008 ghi PASS/FAIL/NOTRUN, không rewrite lịch sử. Chưa stage/commit/push; HEAD vẫn6da609b. Files cần review: 2instructions, local .gitignore/workspace,3Activity+SystemBarInsets, dvbservice/build.gradle+NativeLibrarySmokeTest,5projectrecords. Không sửa RESEARCH vì không phát sinh protocol findings.
+- **Điểm dừng:** Phase1.1 hoàn tất trong coverage Android17/API37/x86_64/4KiB. AndroidAPI21/arm64/16KiB runtime, foreground service streaming/USBpermission/TBS thật đều NOTRUN. Next: review và commit có chọn lọc khi được cho phép; không tự portdriver hoặc mở hardwaregate.

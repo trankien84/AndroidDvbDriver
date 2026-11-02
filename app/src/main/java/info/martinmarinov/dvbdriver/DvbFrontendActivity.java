@@ -69,6 +69,7 @@ public class DvbFrontendActivity extends FragmentActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_dvb_frontend);
+        SystemBarInsets.apply(this);
 
         editFreq = (EditText) findViewById(R.id.editFreq);
         spinBandwidth = (Spinner) findViewById(R.id.spinBandwidth);

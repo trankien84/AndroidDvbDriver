@@ -1,5 +1,41 @@
 # TBS5530 test matrix
 
+## 2026-11-02 — Phase1.1 Android runtime, 19:31–20:05 +07
+
+Branch `test/android-runtime-smoke`, HEAD6da609ba49dd9f1f4d284291918f68a6378972ff từ modernization đã push. Runtime AVDTBS5530_Runtime_API37/Android17/API37/x86_64/page4096; không tuner. WindowsPowerShell/SDKD:\Android\Sdk; toolchain không nâng.
+
+| Gate | Kết quả | Bằng chứng thực |
+|---|---|---|
+| Giữ Git/local changes khi tạo branch | PASS |2filelocal `.gitignore`/workspace giữ hash; branchmới cùng6da609b, không stash/reset/commit |
+| Environment build versions | PASS có lưu ý |wrapper--versionJDK25/Gradle9.8.2; scriptsAGP9.4.1/API37.2/NDK30/CMake4.1.2/BT37; processenvnạp riêng |
+| AVD/image có sẵn | PASS |TạoAVDriêngsauapproval; dùng37.0x86_64local, không tảiSDK/image |
+| Emulator firstboot/SystemUI | FAIL ban đầu, hồi phục |ANRcom.android.systemui overlay; chọnWait, hết overlay. Không quy cho app |
+| Cài APKdebug | PASS |adb explicitserialinstall-r Success cả baseline và bảnfix |
+| Cold launchWelcome | PASS |amstart-WStatusok/COLD,TotalTime6606ms; PID3840sống, không appfatal |
+| UI system bars trước fix | FAIL |Screenshot/hierarchy hàngtune y0,Closeđến2400 bị systembarsche |
+| UI system bars sau fix | PASS runtime37 |SystemBarInsetsAPI35+; tunetop63,buttonsmaxbottom2337 so screen2400; statusiconsdarkđọcđược |
+| Welcome/License/OK | PASS |Tap theo UIhierarchy, GplLicenseActivity rồi vềWelcome |
+| Diagnostic/Start không tuner | PASS |DialogNo devices found,handledDvbExceptionDeviceController:64,Hardwareunchecked,Tune/Recorddisabled; PIDsống |
+| Activity Home/resume/Back/Close/relaunch | PASS |Home→amstartđưa task vềDiagnostic;Back→Welcome;CloseraLauncher;warmrelaunch1796ms |
+| Entry dtvdriver chooser không tuner | PASS có giới hạn |ACTION_VIEWdtvdriver:// mởChooser rồi finishvềWelcome,không crash; không assertioncallerresultcode |
+| App crash/ANR/linker/security | PASS trong smoke window |PID6344filteredlog0fatal/linkage/security/appANR; exit-info chỉPACKAGEUPDATEDdo install-r |
+| Service foreground/streaming lifecycle | NOT RUN |Khôngdevice/fixture,không épstartService; không cóDvbServiceServiceRecord |
+| USB permission/transfer | NOT RUN |Emulator khôngusb.host,tunerkhônggắn; không fd giả/ioctl |
+| Storage permission no-tuner path | PASS có giới hạn |READ/WRITEexternal=false nhưng UI/chọnno-devicevẫnchạy; chưa testrecordTS |
+| libUsbXfer x86_64 trong APK | PASS |ZIPentrylib/x86_64/libUsbXfer.so7320bytes |
+| Native library runtime loading | PASS |NativeLibrarySmokeTestassertIS_PLATFORM_SUPPORTED+directSystem.loadLibrary;0USBrequests/ioctl |
+| Registry/XML instrumentation | PASS |DeviceFilterXmlEquivalenceTester.allDevicesAreInXml assertion giữ nguyên |
+| Full connectedDebugAndroidTest | PASS |1019exit0/49s,XMLtestsuites2tests0fail0error,cả2classname/testmethod |
+| Builddebug/testAPK và lint | PASS |1006exit0/2m4s;1016assembleDebug/lintDebugexit0/1m54s;lint0errors11warnings |
+| Unit regression sau thay đổi | PASS task validation |1028exit0/32s,39tasksUP-TO-DATE,không gọi31methodsđãchạylạimới |
+| RuntimeAPI21/arm64/16KiB | NOT RUN |ChỉAPI37x86_64page4KiB; không đánh đồng ELFalignvớiruntime16KiB |
+| Workspace/ignore/instructions | PASS config |Exceptionđúngđãcólocal;4relativepathsresolve;2instructions cập nhậtEnglish; khôngstage/commit |
+| References/hardware | PASS giữ nguyên/NOT RUN hardware |TBSindexthiếu81399Dsourcefilethiếu,SHAskhôngđổi,C/Go sạch; khôngsync/usbipd/firmware/vendorwrite |
+
+**Coverage trap đã xử lý:** lệnh Gradle filtered2classđầu1012exit0 nhưng XMLchỉ1registrytest; không gọi đó là nativePASS. Directam instrument trước installtestAPK lỗi componentmissing; sau install-r1018native1testPASS. Rerun task **không filter**1019XML2tests xác nhận đủ. Không bỏtest/assertion, không tạoPASS chỉ từexitcode.
+
+**Evidence:** screenshots before/after/no-tuner, XML2tests và logfiltered lưu ngoàiGit trong sessionfiles/phase-1-1. APK/hash và exactcommands ở WORKLOG/ENVIRONMENT. Emulator shutdown ghiWORKLOG; khôngxóadata.
+
 ## 2026-11-02 — Migration JDK25: kiểm chứng đã chạy
 
 Windows10.0.19045/PowerShell7.6.9, JDK25.0.5.0.3; nhánh chore/modernize-android-build trên nền e4c13a5b86ad5ef9be887df58226046dcb42dcd5, chưa commit. Gradle9.8.2/AGP9.4.1; NDK30/CMake4.1.2/BT37/API37.2; min21.

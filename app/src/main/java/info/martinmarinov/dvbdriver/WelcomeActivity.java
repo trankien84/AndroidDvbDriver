@@ -33,6 +33,7 @@ public class WelcomeActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_welcome);
+        SystemBarInsets.apply(this);
 
         findViewById(R.id.btn_close).setOnClickListener(v -> finish());
 

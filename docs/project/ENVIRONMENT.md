@@ -1,5 +1,35 @@
 # Environment inventory
 
+## 2026-11-02 — Phase1.1 runtime thực trên emulator, không tuner
+
+**Host/cwd:** Windows10.0.19045, PowerShell7.6.9, AndroidDvbDriver root. Baseline commit `6da609ba49dd9f1f4d284291918f68a6378972ff` đã push theo người dùng, local origin-tracking ref cùng SHA. Nhánh `test/android-runtime-smoke` được tạo từ modernization, bảo toàn2local changes `.gitignore`/workspace.
+
+### Environment build giữ nguyên
+
+- Process agent còn JAVA_HOME cũ `C:\Program Files\Java\jdk-25` không tồn tại và thiếu ANDROID_HOME/ANDROID_AVD_HOME; Machine JAVA_HOME đúng `C:\Program Files\Java\latest\jdk-25`, User SDK/AVD đúng D:\Android. Mỗi PowerShell command build/emulator đặt env **trong process đó**, không sửa global/restartVSCode.
+- `gradlew.bat --version` xác nhận Gradle9.8.2, LauncherJVM25.0.5.0.3, DaemonJVMresolvedjdk25.0.5.0.3. Build scripts plugin9.4.1, compile37.2/target37/min21; NDK30.0.16248370/CMake4.1.2/BT37.0.0 source.properties xác nhận. Không nâng versions/dependencies.
+- Android CLI `--help/info sdk/sdk list`, ADB37.0.1 và Emulator37.2.13 `-version` chạy được. Androiddocs search/fetch dùng KB hiện có cho instrumentation/insets; không càiSDK/image.
+
+### AVD thử nghiệm đã được phê duyệt
+
+| Thuộc tính | Kết quả thực |
+|---|---|
+| AVD |`TBS5530_Runtime_API37`, tạo riêng qua avdmanager từ image đã cài |
+| Đường dẫn |`D:\Android\AVD\TBS5530_Runtime_API37.avd`; không chạm AVD khác |
+| Image |`system-images;android-37.0;google_apis;x86_64`; source.properties revision7 tại kiểm tra (catalog CLI trước đó báo8, ưu tiên metadata local và runtime) |
+| Profile |`medium_phone`; không cấu hình lại OS/hypervisor |
+| Emulator runtime |Android17, SDK37, ABIx86_64, serial thử nghiệm emulator-5554 |
+| Page size |`adb ... shell getconf PAGE_SIZE` =4096, **không phải16KiB** |
+| USB Host |pm list features không có usb.host; không có tuner chuyển vào emulator |
+| Startup flags |`-avd TBS5530_Runtime_API37 -port 5554 -no-snapshot -no-boot-anim -no-audio -no-window -gpu swiftshader_indirect` |
+| UI automation |ADB MCP qua Proxy: list_avds/describe_ui/screenshot/tap; serial luôn explicit; direct ADB cho install/am/dumpsys/logcat và Gradle instrumentation |
+
+Ban đầu CLI/ADB/MCP đều không thấy AVD/device; sau user approval tạo AVD bằng avdmanager vì AndroidCLIcreate chỉ nhận profile, không có chọn chính xác image/path/name. `android emulator list` không in mục ở lần đầu nhưng emulator -list-avds và MCP sau đó thấy tên; không giả định output rỗng là image thiếu. Không download system image mới. AVDdata dùng mặc định profile, không wipe; sau test gửi `adb -s emulator-5554 emu kill` chỉ đúng AVD này, không xóa file/dữ liệu.
+
+**SystemUI caveat:** firstboot có hộp `System UI isn't responding`; screenshot/hierarchy xác định package com.android.systemui, chọn Wait, overlay biến mất và app test tiếp. Không gộp lỗi này thành app ANR hoặc bỏ qua trong báo cáo. Runtime app no-tuner không yêu cầu storage permissions; dumpsyspackage READ/WRITE_EXTERNAL_STORAGE=false nhưng Welcome/Diagnostic/chooser vẫn chạy; foregroundpermissions khai báo/granted, DvbService chưa active.
+
+**Evidence ngoài Git:** session files/phase-1-1 chứa before/after screenshots, no-tuner screenshot, instrumentation-results.xml và app-logcat-filtered.txt. Không commit raw Logcat/system UI/AVD state. APKdebug mới SHA2568B4E47A9E60D6153CC3B97F244C45771AD0108BA0C1CA785F72332DA31FE38F6; testAPK F85C7D2ADE771570018623D4BD9163AB358D9B4A2530697FEA2F8D484FAB9872.
+
 ## 2026-11-02 — Toolchain migration thực trên JDK25
 
 **Host:** Windows10.0.19045 / PowerShell7.6.9; nhánh `chore/modernize-android-build`, HEAD nền `e4c13a5b86ad5ef9be887df58226046dcb42dcd5`, thay đổi chưa commit. Người dùng cho nâng stable mới nhất nhưng xác nhận giữ minSdk21 và references read-only.

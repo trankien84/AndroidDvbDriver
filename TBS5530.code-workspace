@@ -1,0 +1,11 @@
+{
+  "folders": [
+    { "name": "AndroidDvbDriver (MAIN)", "path": "." },
+    { "name": "TBS Official Linux (READ-ONLY)", "path": "../references/tbs-linux_media" },
+    { "name": "CXD28xx (READ-ONLY)", "path": "../references/cxd28xx" },
+    { "name": "Coax userspace (READ-ONLY)", "path": "../references/coax" }
+  ],
+  "settings": {
+    "terminal.integrated.defaultProfile.windows": "PowerShell"
+  }
+}

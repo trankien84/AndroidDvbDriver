@@ -1,5 +1,17 @@
 # Architecture decision record (ADR)
 
+## ADR-008 — Phase1.1 runtime không tuner và sửa system-bar insets có giới hạn
+**Date:** 2026-11-02
+**Status:** Accepted trong phạm vi Phase1.1 đã yêu cầu; không phê duyệt portdriver/hardware.
+**Context:** Migration6da609bđãpush; chưa runtime. Không cóAVD/device, chỉimage37.0GoogleAPIsx86_64local. Người dùng xác nhận tạoAVDriêng; không tảiimage/SDKmới. ColdbootSystemUIANR có thể cheapp, cần phân biệt app/system. Target37 app UI vẽ dưới systembars checontrols.
+**Alternatives:** DùngimageTVx86khôngđúngưu tiên; tảiimage/thiếtbịmới; bỏ quaUIoverlap; hạtarget/opt-outedge-to-edge; ápInsetsvàtestlại.
+**Decision:** AVDTBS5530_Runtime_API37 riêng, headless,explicitserial; giữ4KiBpage mặc định, không quảng cáo16KiBruntime. TestregistryXMLhiệncóvà thêm NativeLibrarySmokeTestassertstaticload+directload, không giảfd/ioctl. Một androidTestImplementation project(:usbxfer) cho testcompile, không nâng externaldependencies. Chạy taskkhôngfilter và kiểm XML đủ2test thay chỉ dựaexit0.
+**UI decision:** HelperSystemBarInsets dùng AndroidXcoređãcó, chỉAPI35+, systemBars|displayCutout padding và darksystembaricons; gọi3ActivityWelcome/Diagnostic/License. Không thayUSB/serviceprotocol hoặcminSDK;khônghạtargetđểnéedge-to-edge. Bằng chứng before/after screenshot+UIbounds và build/lint đãPASS;API21path giữ behaviorcũnhưngruntimeAPI21chưa chạy.
+**Service/permission scope:** Không cóUSB/devicefixture nên DvbServiceforeground/streaming vàUSBpermission **NOTRUN**, không épstartService sai lifecycle. No-tunererrorlàhandledDvbException, không crash; storagepermissionsdeniedkhôngchặnuiđãtest.
+**Workspace:** `.gitignore` exception vàworkspacefileđúngđãcólocaltrướclượt, bảo toànhash/relative4roots. Khôngstage/commit hoặc đổi globalsettings. ToolchaininstructionsEnglish cập nhật đúngbaseline9.8.2/9.4.1/JDK25/SDK37.2/NDK30/CMake4.1.2/BT37, giữpolicies.
+**Tradeoffs:** EmulatorAPI37x86_64khôngxácnhậnUSBHost/tuner/arm64/16KiB/API21;SystemUIfirstbootANRghiFAILbanđầuvàhồiphụcWait,khônggiấukếtquả. Không thực hiện networkSDKdownload/hardwareownership/referencesrepair.
+**Revisit trigger:** ReviewPhase1.1diff trướccommit; bổsungruntimeAPI21/arm64/16KiBtheokếhoạchđượcduyệt nếu cần, không tựtiếnportdriver. Evidence/cmd ởTEST-MATRIX/WORKLOG.
+
 ## ADR-001 — Windows primary build, WSL2 diagnostics
 **Date:** 2026-11-01
 **Status:** Adopted working convention

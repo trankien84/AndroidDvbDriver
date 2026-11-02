@@ -1,5 +1,22 @@
 # TBS5530 Android port — current status
 
+## Phase 1.1 — Android runtime smoke, 2026-11-02 19:31–20:05 +07
+
+**Baseline đã commit/push:** `6da609ba49dd9f1f4d284291918f68a6378972ff` trên `chore/modernize-android-build`, origin fork `trankien84/AndroidDvbDriver`; remote-tracking ref local trùng HEAD và người dùng xác nhận đã push. **Nhánh làm việc hiện tại:** `test/android-runtime-smoke`, cùng HEAD, thay đổi Phase1.1 **chưa commit/push/merge**. Những đoạn “chưa commit” về migration bên dưới là lịch sử. Emulator thử nghiệm đã được tắt, dữ liệu AVD giữ lại để tái sử dụng.
+
+- **Runtime đã chạy:** AVD riêng `TBS5530_Runtime_API37`, Android17/API37, Google APIs x86_64, page size4096; dùng image37.0 đã cài, không tải SDK/image. Không phải runtime37.2 hoặc thiết bị Android thật. Có user approval tạo AVD riêng vì ban đầu chưa có AVD/device.
+- **PASS:** cài/mở APK, Welcome→License→OK, Diagnostic→Start→`No devices found`→OK, Home/resume, Back và Close/relaunch. PID sống, không app crash/ANR/linker/security failure trong log đã lọc; handled DvbException khi không tuner là kết quả mong đợi. `dtvdriver://` chooser kết thúc không có device, không khởi DvbService sai lifecycle.
+- **PASS thực instrumentation:** `:dvbservice:connectedDebugAndroidTest` không filter, XML **2tests/0fail/0error**: registry/XML equivalence và native library smoke. `UsbHiSpeedBulk.IS_PLATFORM_SUPPORTED=true`, direct `System.loadLibrary("UsbXfer")` thành công trên x86_64; không tạo USB requests hoặc ioctl. Runtime16KiB/arm64/USB thật chưa thử.
+- **Lỗi giao diện phát hiện và đã sửa:** target37 vẽ dưới system bars, che hàng tune/status text và Close sát gesture bar. Helper `SystemBarInsets` áp dụng insets systemBars/displayCutout cho3Activity, chỉ API35+; trước/sau có screenshot+UIbounds. Không đổi tuner/service/protocol, không tắt edge-to-edge bằng workaround targetSdk.
+- **Vấn đề môi trường:** firstboot có ANR `com.android.systemui` (không phải app); chọn Wait qua UI và overlay hết. App exit-history chỉ có PACKAGE UPDATED do cài APK sửa; chưa chứng minh emulator không có lỗi SystemUI trên mọi lần boot.
+- **Build/lint/regression:** debug+testAPK buildPASS; assembleDebug/lintDebug sau fixPASS, lint0error/11warnings; unit task validationPASS/32s,39UP-TO-DATE (không gọi là chạy lại31test). Toolchain giữ Gradle9.8.2/AGP9.4.1/JDK25/compile37.2/target37/min21/NDK30/CMake4.1.2/BT37.
+- **Workspace/instructions:** exception `!TBS5530.code-workspace` và file workspace đã có local trước Phase1.1, giữ nguyên byte/hash; resolve4relative roots đúng, file untracked được phép add (chưa stage). Cập nhật2instruction files bằng tiếng Anh để bỏ snapshottoolchaincũ; giữ chính sách Windows/WSL/usbipd/MCP.
+- **Reference recheck chỉ đọc:** SHA TBS2ce787de9f6e81b4294692a45de15596ae2e1322, Cc5fa27eecbe80633cbb365cc44656daea1c0e2e3, Go11228b05fb1626bf41c4e1879ace10cd0a8d575c không đổi. TBSindexvẫnthiếu/81399D,source3filebắtbuộcthiếu; C/Go sạch. Không sync/reset/restore hoặc hardwarecommands.
+
+**NOT RUN:** DvbService foreground/streaming (không tuner/fixture nên không vào luồng hợp lệ), USB permission dialog, USB bulk/I2C/firmware/lock/TS; runtime API21/arm64/16KiB. Phase1.1 không cho phép kết luận TBS5530 hoạt động.
+
+**Một bước an toàn tiếp theo:** review/commit có chọn lọc diff Phase1.1 khi người dùng cho phép; nếu cần tăng runtime coverage, lên kế hoạch test API21 hoặc arm64/16KiB riêng, không tải image/hardware ngoài phê duyệt. **Dừng Phase1.1, không tự port driver.** Kết quả/lệnh/hash ở [WORKLOG.md](WORKLOG.md), [TEST-MATRIX.md](TEST-MATRIX.md), môi trường ở [ENVIRONMENT.md](ENVIRONMENT.md), ADR-008 trong [DECISIONS.md](DECISIONS.md).
+
 ## Checkpoint Git — 2026-11-02 18:48 +07
 
 - Người dùng yêu cầu tạo commit cho các thay đổi nâng build và bộ hồ sơ/công cụ TBS5530. Message chọn: `chore: prepare TBS5530 development with JDK 25`.

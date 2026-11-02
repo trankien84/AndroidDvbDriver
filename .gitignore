@@ -74,6 +74,7 @@ dkms.conf
 !.vscode/launch.json
 !.vscode/extensions.json
 *.code-workspace
+!TBS5530.code-workspace
 .ninja_deps
 .ninja_log
 
