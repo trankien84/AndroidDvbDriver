@@ -1,5 +1,15 @@
 # TBS5530 Android port — current status
 
+## Tích hợp Phase1.1 — 2026-11-02 21:35 +07
+
+- Theo yêu cầu người dùng, đã commit 15 file Phase1.1: **`b51a77e18e363750692d83cc53974b64718e1f51`**, `fix: stabilize Android runtime after toolchain upgrade`.
+- Đã merge **fast-forward** từ `test/android-runtime-smoke` vào **`chore/modernize-android-build`**, push origin fork `trankien84/AndroidDvbDriver`; `git ls-remote` xác nhận target remote ở đúng `b51a77e` sau push.
+- Nhánh test local đã xóa an toàn bằng `git branch -d` sau khi xác nhận push. Không có nhánh test tương ứng trên origin tại kiểm tra, nên không có remote branch cần xóa. Không force-push, không đổi master/upstream hoặc repository tham khảo.
+- Hồ sơ cập nhật trạng thái tích hợp ở một commit tài liệu tiếp theo; dùng Git log/remote ref để lấy HEAD cuối. Các snapshot “chưa commit/push” bên dưới là lịch sử trước tích hợp, không phải hiện trạng.
+- Kiểm chứng trong tác vụ Git: staged diff/whitespace PASS, không artifacts/secrets theo mẫu rà, báo cáo instrumentation Phase1.1 vẫn2tests0fail0error và lint0error. Không chạy lại emulator/build/hardware trong tác vụ này.
+
+**Bước tiếp theo:** review mốc runtime đã tích hợp và chọn kế hoạch kiểm thử coverage còn thiếu khi được phê duyệt. Không tự chuyển sang port driver hoặc ghi phần cứng.
+
 ## Phase 1.1 — Android runtime smoke, 2026-11-02 19:31–20:05 +07
 
 **Baseline đã commit/push:** `6da609ba49dd9f1f4d284291918f68a6378972ff` trên `chore/modernize-android-build`, origin fork `trankien84/AndroidDvbDriver`; remote-tracking ref local trùng HEAD và người dùng xác nhận đã push. **Nhánh làm việc hiện tại:** `test/android-runtime-smoke`, cùng HEAD, thay đổi Phase1.1 **chưa commit/push/merge**. Những đoạn “chưa commit” về migration bên dưới là lịch sử. Emulator thử nghiệm đã được tắt, dữ liệu AVD giữ lại để tái sử dụng.

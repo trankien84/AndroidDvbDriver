@@ -162,3 +162,15 @@
 - Hash APKdebug đã runtime test sau fix: `8B4E47A9E60D6153CC3B97F244C45771AD0108BA0C1CA785F72332DA31FE38F6`; testAPK `F85C7D2ADE771570018623D4BD9163AB358D9B4A2530697FEA2F8D484FAB9872`.
 - SnapshotSTATUS/ENVIRONMENT/TEST-MATRIX và ADR-008 ghi PASS/FAIL/NOTRUN, không rewrite lịch sử. Chưa stage/commit/push; HEAD vẫn6da609b. Files cần review: 2instructions, local .gitignore/workspace,3Activity+SystemBarInsets, dvbservice/build.gradle+NativeLibrarySmokeTest,5projectrecords. Không sửa RESEARCH vì không phát sinh protocol findings.
 - **Điểm dừng:** Phase1.1 hoàn tất trong coverage Android17/API37/x86_64/4KiB. AndroidAPI21/arm64/16KiB runtime, foreground service streaming/USBpermission/TBS thật đều NOTRUN. Next: review và commit có chọn lọc khi được cho phép; không tự portdriver hoặc mở hardwaregate.
+
+## 2026-11-02 21:35 +07 — Commit, merge, push Phase1.1 và xóa nhánh test
+
+- **User approval:** add/commit toàn bộ thay đổi Phase1.1, merge vào chore/modernize-android-build, push origin branch này và xóa test branch. Windows PowerShell, cwd AndroidDvbDriver; không hardware/build/runtime mới.
+- **Trước:** test/android-runtime-smoke tại6da609b;15file candidate đúng scope gồm workspace/ignore,2instructions,3Activity+SystemBarInsets,testnative+testmodule dependency và5projectrecords. Index trống; không chạm refs repositories hoặc main master.
+- **Preflight:** status/branch-vv/remotes/log, staged diff --check với cr-at-eol, heuristic credential scan0match,0buildoutputs/firmware/captures/localproperties trong candidates. Không coi heuristic là security audit. Saved instrumentation XML2tests0fail0error và lintXML0errors; không khởi emulator để test lại code đã được kiểm chứng ở Phase1.1.
+- **Commit:** b51a77e18e363750692d83cc53974b64718e1f51, `fix: stabilize Android runtime after toolchain upgrade`,15files/271insertions/3deletions, kèm Co-authored-by trailer. Không squash hoặc amend commit cũ.
+- **Merge:** checkout chore/modernize-android-build khi working tree sạch; `git merge --ff-only test/android-runtime-smoke` thành công6da609b→b51a77e, không merge commit hoặc rewrite lịch sử.
+- **Push:** push origin theo upstream branch hiện tại. `git ls-remote --heads origin refs/heads/chore/modernize-android-build refs/heads/test/android-runtime-smoke` xác nhận remote modernization ở b51a77e và không có test branch remote. Không force-push/master/upstream changes.
+- **Delete:** chỉ sau remoteverify, `git branch -d test/android-runtime-smoke` thành công; local còn modernization/master. Không cần remote delete vì branch test chưa tồn tại trênorigin.
+- **Hồ sơ cuối:** STATUS/WORKLOG cập nhật trên modernization ở commit docs riêng để không giữ hiện trạng “chưa commit/push”; mã commit docs cuối tra gitlog. Kiểm lại remote sau push docs. Không đưa rawlog/screenshot/APK vàoGit.
+- **Next:** giữ dừng Phase1.1, review kế hoạch coverage API21/arm64/16KiB hoặc bước portdriver riêng theo yêu cầu mới; không tự triển khai/hardware.
