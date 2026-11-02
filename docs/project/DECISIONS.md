@@ -1,5 +1,18 @@
 # Architecture decision record (ADR)
 
+## ADR-009 — Phase 1.2: nâng riêng AGP 9.5.0 và kiểm kê không đổi hệ thống
+**Date:** 2026-11-02
+**Status:** Accepted theo yêu cầu Phase1.2; kết quả kiểm thử riêng ở TEST-MATRIX.
+**Context:** Baseline Phase1.1 đã tích hợp tại ace7e9f; người dùng chuẩn bị instruction/skill/scripts kiểm kê local và đã dọn SDK. API Google hiện xác nhận Current Release9.5.0, notes có mục final9.5.0 và POM exact9.5.0 tồn tại. Không dùng kết luận AGP còn RC từ lịch sử trước để chặn bản stable đã được xác minh mới.
+**Decision:** Chỉ đổi plugin application/library9.4.1→9.5.0. Giữ Gradle9.8.2/checksum, JDK25, compile37.2/target37/min21, BT37, NDK30.0.16248370, CMake4.1.2 và Java8. Không bật tính năng experimental backup/restore test hoặc nâng dependency khác.
+**Compatibility evidence:** Google notes9.5 yêu cầu Gradle>=9.6/JDK>=17/API37; Gradle9.8.2 matrix hỗ trợ JVM25. Default NDK/BT trong notes không phải yêu cầu phải downgrade. Published stable khác project-verified: chỉ xác nhận project-verified qua build/test outputs thực.
+**Audit decision:** Giữ audit chỉ đọc với metadata reports ngoài Git. AVD home resolve phải truyền vào emulator subprocess và restore; normalize directory suffix, tránh rỗng/trùng tên giả. Không đổi globalenv để làm audit xanh; báo Process/User/Machine/JDK candidate riêng. Một implementation dùng chung qua check-env entrypoint. Cleanup CMake scope sửa đúng pin, tuyệt đối không tự uninstall.
+**Execution-policy boundary:** Script bị policy chặn được hỏi trước; người dùng rõ ràng cho Bypass Scope Process. Chỉ dùng child Process scope rồi restore; không thay User/Machine, không mặc định tự bypass ở script/task. Đây không phải thay đổi security policy hệ thống.
+**Tradeoffs:** AVD metadata có tên không chứng minh boot/runtime; ma trận vendor không thay native ABI/16KiB/static/runtime tests. JDK25 vẫn cảnh báo Java8 obsolete; không ẩn hoặc đổi bytecode để né. Các thay đổi local trước phase được giữ, không reset/historyrewrite/commit.
+**Rollback/revisit:** Nếu AGP regression không sửa được trong phạm vi, hoàn nguyên chỉ root plugin pins về9.4.1 theo quyết định riêng và giữ local user work; không reset --hard/SDK rollback/xóaAVD. Dừng sauPhase1.2, chưa portdriver/USB hardware.
+
+**Nguồn chính thức (kiểm 2026-11-02):** [AGP Current Release](https://developer.android.com/reference/tools/gradle-api), [AGP9.5 notes/compatibility](https://developer.android.com/build/releases/agp-9-5-0-release-notes), [Google Maven exact9.5.0 POM](https://dl.google.com/dl/android/maven2/com/android/tools/build/gradle/9.5.0/gradle-9.5.0.pom), [Gradle9.8.2 Java matrix](https://docs.gradle.org/9.8.2/userguide/compatibility.html).
+
 ## ADR-008 — Phase1.1 runtime không tuner và sửa system-bar insets có giới hạn
 **Date:** 2026-11-02
 **Status:** Accepted trong phạm vi Phase1.1 đã yêu cầu; không phê duyệt portdriver/hardware.

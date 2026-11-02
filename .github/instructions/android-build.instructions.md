@@ -1,14 +1,15 @@
 ---
 name: Android Build and CLI
-description: Use for configuring, building, testing, or modernizing Android Gradle/AGP, Java, NDK/CMake, SDK or emulator tooling.
+description: Use for configuring, building, testing or modernizing Android Gradle Plugin, Gradle, SDK/NDK/CMake, Java and emulator tooling.
 applyTo: "**/*.gradle,**/*.gradle.kts,**/gradle.properties,**/settings.gradle,**/settings.gradle.kts,gradle/**,**/CMakeLists.txt,**/AndroidManifest.xml"
 ---
 # Android build and command execution
-- Build on Windows PowerShell using checked-in `.\gradlew.bat` at the `AndroidDvbDriver` root; use `-Version` or Gradle wrapper to inspect versions before changing them.
-- `android` is Google's official Android CLI. Use `android --help` and command-specific `--help` to confirm syntax. `android info sdk` and `android --sdk=D:\Android\Sdk sdk list` identify installed tools. Prefer Android CLI for SDK/AVD/device management when it has the needed operation; use Android SDK `adb.exe` and `sdkmanager.bat` only for operations not exposed or requiring exact commands.
-- Expected `ANDROID_HOME=D:\Android\Sdk`; `ANDROID_AVD_HOME=D:\Android\AVD`. Do not install Android SDK into WSL2 or change global SDK settings without approval.
-- Verified baseline (2026-11-02): JDK 25.0.5.0.3 runs Gradle Wrapper 9.8.2 and AGP 9.4.1. Keep Java source/target at 1.8 and minSdk 21; the build JVM version is not the Android bytecode level. AppCompat 1.7.1 and Material 1.13.0 are deliberate API-21-compatible pins.
-- Build scripts select compileSdk 37.2, targetSdk 37, Build-Tools 37.0.0, NDK 30.0.16248370 and CMake 4.1.2. Older installed packages are not the active build baseline. Verify selected versions and runtime image separately; do not upgrade AGP/Gradle/dependencies or install SDK packages during runtime smoke testing.
-- The agent process may inherit stale JAVA_HOME/SDK variables. Set JAVA_HOME from the verified Machine environment and ANDROID_HOME/ANDROID_AVD_HOME in the command process when needed; do not modify global environment settings or restart the IDE automatically.
-- `usbxfer` contains native USB/CMake code; include ABI-specific native builds in validation. Emulator tests do not prove TBS5530 device integration.
-- Prefer read-only environment probes before updates. Do not recreate the Android project with `android create`.
+- Windows PowerShell and the checked-in `.\gradlew.bat` are authoritative for the project. Check wrapper distributions/sha256 and plugin declarations before deciding an upgrade.
+- Determine active `compileSdk`, `targetSdk`, `minSdk`, `buildToolsVersion`, `ndkVersion`, externalNativeBuild CMake version and Java `sourceCompatibility`/`targetCompatibility` from **current source**, not instructions or old snapshots.
+- The expected SDK/AVD locations are `D:\Android\Sdk` and `D:\Android\AVD`; confirm local environment (`ANDROID_HOME`, `ANDROID_AVD_HOME`, `JAVA_HOME`) and `source.properties`. Reinitialize a child shell environment when needed, without silently changing machine-wide settings.
+- `android` is Google's official Android CLI. Check `android --help`/subcommand help first and use Android CLI for supported operations. Use SDK `sdkmanager.bat --sdk_root=...` when exact installed packages or package-specific uninstall/install are necessary.
+- Before any package change, run `tools/Inspect-TBS5530-Toolchain.ps1` and consult `toolchain-lifecycle.instructions.md`. Never update everything, never delete side-by-side packages based solely on their age, and never remove files manually from `Sdk` as a substitute for SDK package removal.
+- Use stable releases verified against official vendor release notes and compatibility matrices. Distinguish **published latest stable** from **project-tested baseline**. Avoid dynamic Gradle versions or preview SDKs unless explicitly approved.
+- Keep `minSdk 21` and Java 8 source/target compatibility unless explicit decisions justify changing them; JDK 25 as Gradle JVM does not imply Java 25 bytecode. Review AndroidX dependency minSdk constraints before bumping.
+- `usbxfer` has JNI/CMake and native ABIs. A toolchain migration must verify four ABI builds, static 16 KiB alignment for 64-bit ABIs, release/debug artifacts, local units, lint, and targeted instrumentation/native-load tests where a compatible device is available.
+- Do not automatically install new Android system images/AVDs, overwrite existing AVD data, force-stop hardware clients, or start a physical USB test to "validate" build tool changes.

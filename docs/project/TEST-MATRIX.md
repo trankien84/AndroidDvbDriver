@@ -1,5 +1,39 @@
 # TBS5530 test matrix
 
+## 2026-11-02 — Phase 1.2: AGP 9.5.0 và toolchain audit
+
+Windows10.0.19045/PowerShell7.6.9; branch chore/modernize-android-build, HEAD nền ace7e9f187d11a685975f707b6743d779fa847d9, diff chưacommit. AGP9.5.0, Gradle9.8.2/JDK25, compile37.2/target37/min21/Java8, NDK30/CMake4.1.2/BT37; khônghardware.
+
+| Gate | Trạng thái cuối | Bằng chứng |
+|---|---|---|
+| AGP9.5.0 stable/compatibility | PASS nguồn |GoogleCurrentRelease9.5.0, finalrelease notes, exactGoogleMavenPOM; Gradlemin9.6/JDKmin17; không dùngRC |
+| Giữ versions còn lại | PASS |Wrapper/checksum/modulepins không đổi; --versionJVM25/Gradle9.8.2 |
+| SDK inventory sau cleanup | PASS |AuditJSON/CLI/source.properties đối chiếu;34+37.2platform, BT37/NDK30/CMake4.1.2; khôngcài/gỡ |
+| Audit script chạy theo policy | BLOCKED ban đầu→PASS sau approval |RemoteSignedchặn; userchỉđịnh BypassScopeProcess; try/finallyrestoreUndefined,khôngUser/Machinepolicychange |
+| AVD discovery ban đầu | FAIL đã sửa |Emulator0names/disk2names; process không nhậnUserAVDhome, directorysuffixgâyphantomname |
+| AVD discovery sau sửa | PASS |Một TBS5530_Runtime_API37; emulator1/metadata1, envcallerrestored |
+| CMake parser/cleanup review | PASS |externalNativeBuildcmake=4.1.2, không BT37; reviewCSV chỉKEEP/REVIEW,0uninstall |
+| PowerShell regression suite | PASS thực |CMakewrong-scope, AVDdedupe, childenv, absent/presentenvrestore, metadatafallback; fixturetemp đãxóa |
+| JDK25 build environment | PASS child / FAIL stale parent |Machinevalid, Processoldinvalid; GradleLauncher/Daemon25xácnhận,khôngsửaglobal |
+| Debug/release APK | PASS sau retry |1048FAILunable-deletex86;1059exit0/9m12s,325tasks245executed,80UP-TO-DATE |
+| Unit tests chạy lại | PASS thực |Task --rerun từngmodule1059; XMLusbxfer1/drivers17/dvbservice13=31methods0fail (1utility) |
+| Lintdebug | PASS có warning |1059exit0; XML0Error/Fatal/11Warning,khôngbaseline/suppressgate |
+| Release AAB | PASS |1067bundleReleaseexit0/45s,157tasks18executed; warningsdeprecatedAPIvẫncó |
+| Native4ABI debug/release | PASS compile/link |APKentrylibUsbXferarm64-v8a/armeabi-v7a/x86/x86_64;ELFoutputtimestampsmớixácnhận |
+| ZIP16KiB | PASS static |zipalign37 -c -P16 4 debug/releaseexit0 |
+| ELF64bit alignment | PASS static |llvm-readelf NDK30 arm64/x86_64LOAD0x4000 debug/release;32bit0x1000riêng |
+| InstrumentationregistryXML/native-load | PASS thực |1055exit0/5m38s, XML2tests0fail0error; cả2classnames/methods |
+| Androidlaunch/no-tuner/insets regression | PASS trong smoke |InstallSuccess,COLDStatusok/10080ms,UIhierarchyinsettop63/bottom63,handledNoDevicesFound,BackvềWelcome |
+| Appcrash/linker/security | PASS trong cửa sổ test |Filtered appPID5345log0fatal/linkage/security; khônggộpANRlauncher/systemUIthànhappfailure |
+| AVD boot/host responsiveness | FAIL ban đầu→hồi phục |Timeout4phút, saugetpropboot1; launcher/SystemUIANRWaitrồihết; khôngwipe/reset |
+| AVDshutdown | PASS |Đúngavdname→emukill; emulatorprocess1051exit0,ADBlistcuốirỗng |
+| RuntimeAPI21/arm64/16KiB,USBHost/service | NOT RUN |ChỉAndroid17/API37/x86_64/page4096; khôngtuner/fixture |
+| TBS firmware/I2C/reset/LNB/TS | NOT RUN |Khôngcommandhardware/referencewrite |
+
+**Artifacts mới:** debugAPK SHA2566D6E1C4953F708CA04E9DC5AD223168514C3745F27106E3AF12033C884D44D53; releaseunsignedAPK7B126F04109EA1F9295336EF8615C8ACCC3743BE8488497BF8DE7EA40AAB52F3. InstrumentationXMLcopy ngoàiGit SHA25603269F9A8C91B106FF415A015756384CB0CA3EC4A0CDDE15AC0B3341534B02A6. Khôngdùngbáocáocũ làmPASSmới.
+
+**Giới hạn:** source/target8obsoletewarning và Configuration.setVisibledeprecation vẫn xuất hiện trênAGP9.5; không khẳng định đã hết warning vì release notes có fixedissue. Không gọiAABsigned/published. Khôngtựcommit/merge/push hoặcSDKcleanup.
+
 ## 2026-11-02 — Phase1.1 Android runtime, 19:31–20:05 +07
 
 Branch `test/android-runtime-smoke`, HEAD6da609ba49dd9f1f4d284291918f68a6378972ff từ modernization đã push. Runtime AVDTBS5530_Runtime_API37/Android17/API37/x86_64/page4096; không tuner. WindowsPowerShell/SDKD:\Android\Sdk; toolchain không nâng.

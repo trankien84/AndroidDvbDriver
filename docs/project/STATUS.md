@@ -1,5 +1,27 @@
 # TBS5530 Android port — current status
 
+## Checkpoint phát hành Phase 1.2 — 2026-11-02 23:39 +07
+
+- Người dùng yêu cầu add, commit và push toàn bộ thay đổi Phase1.2 lên `origin/chore/modernize-android-build` (fork `trankien84/AndroidDvbDriver`). Message chọn: `build: upgrade AGP to 9.5.0 and fix toolchain inventory`.
+- Phạm vi15file: root AGP pins, audit/review/check-env và regression tests, instructions/skill, README và5projectrecords; không outputs/cache/SDK/AVD/logs/firmware/reference code. Baseline trước checkpoint là `ace7e9f187d11a685975f707b6743d779fa847d9`.
+- Đã kiểm diff và evidence đã lưu: unit31methods0fail, instrumentation2tests0fail0error, lint0errors. Tác vụ Git này không chạy lại build/emulator/hardware. Các snapshot “chưa commit/push” bên dưới là trạng thái trước checkpoint; hash commit chứa mục này tra `git log -1`, trạng thái phát hành phải đối chiếu live origin ref.
+- Không merge, force-push, sửa master/upstream hoặc bật hardware gate. Bước tiếp theo là review mốc toolchain đã chốt và lập kế hoạch coverage còn thiếu theo yêu cầu mới, không tự portdriver.
+
+## Phase 1.2 — AGP 9.5.0 và kiểm kê toolchain, 2026-11-02 22:37–23:18 +07
+
+**Đã hoàn tất trong phạm vi phần mềm, chưa commit/merge/push.** Nhánh vẫn `chore/modernize-android-build`, HEAD `ace7e9f187d11a685975f707b6743d779fa847d9`. Bảo toàn sáu file hướng dẫn/công cụ local người dùng chuẩn bị trước phase; không đổi Git history hoặc reference repositories.
+
+- **Toolchain cuối:** AGP **9.5.0 stable** (Google Current Release + final notes + exact POM xác minh ngày kiểm); Gradle **9.8.2**, JDK **25.0.5.0.3**, compileSdk **37.2**, target **37**, min **21**, NDK **30.0.16248370**, CMake **4.1.2**, Build-Tools **37.0.0**, Java source/target **8** giữ nguyên. Chỉ đổi hai plugin pins trong root build.gradle, không nâng dependencies/SDK khác.
+- **PASS thực:** debug/release APK và release AAB; **31 unit methods/0failure** chạy lại với task --rerun (gồm một utility), lint **0errors/11warnings**; instrumentation **2tests/0fail/0error** trên AVD Android17/API37/x86_64/4KiB, gồm native-load và registry/XML. Debug/release đủ4ABI, ZIP16KiB PASS và ELF64bit LOAD0x4000. Không coi đây là runtime16KiB/arm64/AndroidAPI21 hoặc USB thật.
+- **Audit đã sửa:** resolved AVD home truyền vào emulator listing process rồi restore; bỏ tên trùng suffix `.avd`; kết quả một AVD thật `TBS5530_Runtime_API37`, emulator1/metadata1. Thêm structured -PassThru và JDK candidates, không tự đổi globalenv. CMake cleanup parser giới hạn đúng block. Check-env dùng chung audit, regression script tự chứa PASS, không cài thêm framework test.
+- **Inventory sau user cleanup:** platforms34/37.2, BT37, NDK30, CMake4.1.2, cmdline23, ADB37.0.1, emulator37.2.13, hai images34TVx86/37.0GoogleAPIsx86_64. Đã bỏ packages cũ khỏi snapshot hiện tại nhưng không sửa lịch sử. Phase này không uninstall/install/update SDK hoặc xóaAVD.
+- **JAVA_HOME:** Machine đúng, Process agent vẫn đường dẫn cũ; Gradle child nạp Machine và wrapper xác nhậnJDK25. Không thay registry/User/Machine env. Script ban đầu bị execution policy chặn; người dùng chỉ định Bypass ScopeProcess, đã làm đúng childscope và restore, không bật bypass mặc định trong script/task.
+- **Caveats đã ghi:** lần build đầu lỗi Windows unable-delete nativeoutputx86; rerun đúng task thành công, không xóa cache/kill processes. AVD boottimeout4phút ban đầu rồi responsive; launcher/SystemUI ANR hồi phục Wait, không appANR. App cài/mở/no-tuner/insets/Back smoke PASS, filteredlog0fatal/linker/security. Warning Java8obsolete và AGP Configuration.setVisible vẫn còn, không suppress để xanh.
+- **Instructions/toolchain docs:** giữ English guidance do người dùng chuẩn bị với bốn trạng thái declared/installed/publishedstable/projectverified; README ghi baseline có ngày, không gọi version mãi latest. `toolchain-audit` có trên đĩa và đã đọc trực tiếp dù skill dispatcher chưa discover; không tự sửa globalhost/plugin để ép nhận.
+- **Cleanup:** AVD đã được tắt đúng serial sau smoke; không wipe dữ liệu. Không TBS/usbipd/firmware/vendor/I2C writes, không chạm references. Không portdriver.
+
+**Bước an toàn tiếp theo:** review diff Phase1.2 và commit có chọn lọc nếu được yêu cầu. Vấn đề Processenvstale/Windowsnativefilelock/emulatorANR vẫn phải theo dõi; mở coverage API21/arm64/16KiB chỉ theo kế hoạch riêng. Dừng Phase1.2. Chi tiết [ENVIRONMENT.md](ENVIRONMENT.md), [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md), ADR-009 tại [DECISIONS.md](DECISIONS.md).
+
 ## Tích hợp Phase1.1 — 2026-11-02 21:35 +07
 
 - Theo yêu cầu người dùng, đã commit 15 file Phase1.1: **`b51a77e18e363750692d83cc53974b64718e1f51`**, `fix: stabilize Android runtime after toolchain upgrade`.

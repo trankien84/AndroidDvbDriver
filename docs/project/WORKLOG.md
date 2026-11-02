@@ -174,3 +174,56 @@
 - **Delete:** chỉ sau remoteverify, `git branch -d test/android-runtime-smoke` thành công; local còn modernization/master. Không cần remote delete vì branch test chưa tồn tại trênorigin.
 - **Hồ sơ cuối:** STATUS/WORKLOG cập nhật trên modernization ở commit docs riêng để không giữ hiện trạng “chưa commit/push”; mã commit docs cuối tra gitlog. Kiểm lại remote sau push docs. Không đưa rawlog/screenshot/APK vàoGit.
 - **Next:** giữ dừng Phase1.1, review kế hoạch coverage API21/arm64/16KiB hoặc bước portdriver riêng theo yêu cầu mới; không tự triển khai/hardware.
+
+## 2026-11-02 22:37–23:18 +07 — Phase 1.2: AGP9.5 và kiểm kê toolchain
+
+- **Scope:** người dùng cho nâng riêng AGP9.4.1→9.5.0, sửa kiểm kê/JDK/AVD, kiểm build/test và chuẩn hóa hồ sơ; giữ Gradle9.8.2/compile37.2/target37/min21/NDK30.0.16248370/CMake4.1.2/Java8. Không commit/merge/push, khôngSDKinstall/uninstall/cleanup, không thay references/hardware.
+- **Git/environment:** WindowsPowerShell7.6.9/Windows10.0.19045, cwd AndroidDvbDriver, nhánh chore/modernize-android-build, HEADace7e9f187d11a685975f707b6743d779fa847d9. Ban đầu có6localchanges của người dùng:2instructionsmodified + instructiontoolchain-lifecycle/skilltoolchain-audit/2scriptsinventory-reviewuntracked. Đã đọc và sửa bổ sung có mục tiêu, không overwrite toàn file hoặc reset/stash/historyrewrite.
+- **Skills/instructions:** skilltool dispatcher chưa nhận toolchain-audit (notfound), nhưng đã tìm đúng `.github/skills/toolchain-audit/SKILL.md` và đọc trực tiếp. Loadproject-handoff/android-cli/agent-customization, đọc7scopedinstructions,projectskills/latestdocs. GitNexus:list_repos vẫn khôngtargetindex, khôngrebuild; ADBMCPdùngProxyhiệncó,khôngnewconnection/config.
+
+### Preflight và bản stable
+
+- `web_fetch` Google AGPAPIreference CurrentRelease9.5.0, notes9.5cófinal9.5.0entry, exactGoogleMavenPOM9.5.0. Các URL ở ADR-009; kiểm ngày2026-11-02. CompatibilityGradle>=9.6/JDK>=17/API37; Gradle9.8.2JavamatrixchoJDK25từ9.1.0. Không suy DefaultNDK28/BT36làyêucầudowngrade projectpins30/37.
+- Android CLI --help/infoSDK/sdklist/docssearchAGP9.5 và source.properties đối chiếu: còn platform34/37.2,BT37,NDK30,CMake4.1.2,cmdline23,ADB37.0.1,emulator37.2.13;image34TVx86/37.0GoogleAPIsx86_64giữ. Usercleanupđãbỏplatform37.0/BT36/NDK28/CMake3.22.1; phasekhôngxóathêm. Imagerevisionlocal7kháccatalogin8,ghirõmetadatalocal,khôngupdatetoànSDK.
+- JAVA_HOMEProcesscũjdk-25khôngtồntại,Usertrống,MachineC:\Program Files\Java\latest\jdk-25hợplệ. BuildchildnạpMachineJAVA_HOME,ANDROID_HOME=D:\Android\Sdk/ANDROID_AVD_HOME=D:\Android\AVD; wrapper--versionxácnhậnLauncher25.0.5.0.3/daemonresolvedjdk25.0.5.0.3. Khôngđổiglobalenv/IDE.
+- Audit lần đầu1043bịRemoteSignedchặn. Đãhỏi,ngườidùngchỉđịnhrõ `Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process`. Các lệnhscript dùngtry/finallylưuvàrestorepolicycũ trongchildProcess,khôngUser/Machine. ProcesssauUndefined,CurrentUser/LocalMachineRemoteSigned. KhôngUnblockFilehoặcautobypassmặcđịnhscript/task.
+
+### Lỗi kiểm kê và sửa trực tiếp
+
+- Audit1044đọcCMakeđúng4.1.2nhưngAVDNamesra2tên(TBS5530_Runtime_API37vàTBS5530_Runtime_API37.avd),emulator0/metadatadisk2. NguyênnhânresolvedUserAVDhomechỉdùngđọcđĩakhôngtruyềnsubprocess;DirectoryInfo.BaseNamegiữnguyên.avdsuffix.
+- SửaGetAvdInventorytruyềnresolvedhomevàoemulator-list-avds,restorefinally;normalizeNamebỏ.avdsuffixrồidedupe. Lầntest1046pháthiệnrestore nullquaSetEnvironmentVariableđểlạiempty-stringvariable,assertionFAIL; sửaRemove-ItemEnvchoabsentoriginal,giữgiátrịkhác.1047/1050/1056/1068assertionsPASS,emulator1/metadata1/mộttênđúng,khôngròcaller env.
+- Thêm -PassThru choJSONobjectpipeline và JDKcandidates/effectivebuildcandidate;vẫnbáoProcessstale,khôngtựđổiJDK. CleanupreviewCMakeparsergiớihạnexternalNativeBuild.cmake,khôngmatchversioncủablockkhác. `scripts/check-env.ps1` dùngchungauditvới-NoReport,khônghaiimplementationlệch.
+- Thêm tools/tests/ToolchainInventory.Tests.ps1,khôngcàiframework:ASTchỉloadcácfunctionđãreview;fixturetempscript/listAVDtestCMakewrongscope,dedupe,childenv,absent/presentenvrestorevàmissingemulatormetadatafallback. Fixtuređượcdọntrongfinally. Parser0errors và suitePASSthực. Reviewcleanup1047chỉinKEEP/REVIEWvàCSVngoàiGit,khônguninstall.
+- InventoryJSONtrước/sauởparentlogs/toolchain,latesttoolchain-inventory-20261102-231414.jsonxácnhậnAGP9.5/AVD1/CMake4.1.2. Báocáochứađườngdẫn/hostmetadata,khôngcommit hoặcđăngartifactrawreport. Instructions/skillEnglishcậpnhậtbehavior/safetykhônghardcodeperpetuallatest;READMEghi datedbaseline9.5.
+
+### Nâng AGP và validation build
+
+- Rootbuild.gradle đổi đúngapplication/libraryplugin9.4.1→9.5.0. Giữnguyênwrapper/checksum,pins4modules/dependencies/CMakeLists/source/runtimehelpersPhase1.1. Không portdriver.
+- Lệnh1048: `gradlew.bat :app:assembleDebug :app:assembleRelease :usbxfer:testDebugUnitTest :drivers:testDebugUnitTest :dvbservice:testDebugUnitTest :app:lintDebug --console plain --no-daemon --max-workers=1` FAILsau12m9sởnativeDebugx86Unabletodeletedirectory. LỗiWindowsoutputlockđãquan sáttrước,khôngchứngminhAGPcompatibilityfailure;khôngxóacache/killprocesskhác/skipABI.
+- Rerun1059: `gradlew.bat :app:assembleDebug :app:assembleRelease :app:lintDebug :usbxfer:testDebugUnitTest --rerun :drivers:testDebugUnitTest --rerun :dvbservice:testDebugUnitTest --rerun --console plain --no-daemon --max-workers=1` **exit0/9m12s**,325tasks245executed/80UP-TO-DATE. UnitXMLmớiusbxfer1/drivers17/dvbservice13=31methods0failure(1ConvertCStringutility),khôngchỉcachedPASS. LintXML0errors11warnings,khôngdisabletest/assertion/lintgate.
+- AAB1067 `:app:bundleRelease --console plain --no-daemon --max-workers=1 --warning-mode all` **exit0/45s**,157tasks18executed139UP-TO-DATE. Configuration.setVisibledeprecatedwarningvẫncòntrênAGP9.5dùnotesđềcậpfix;Javac25Java8obsoletecũngvẫncó,khôngẩnhoặcđổibytecode.
+- Staticnativechecks1065/1066: zipalign37 -c -P16 4cảdebug/releaseexit0;APKlibUsbXfer.sođủarm64-v8a/armeabi-v7a/x86/x86_64;llvm-readelfNDK30mớicảDebug/RelWithDebInfo4ABI,64bitLOAD0x4000/32bit0x1000. MộtprobeELFregexsaiescape1065đãdừng,sửaquerylọcDirectory.Name1066PASS;khôngảnhhưởngsourcebinary.
+- DebugAPK SHA2566D6E1C4953F708CA04E9DC5AD223168514C3745F27106E3AF12033C884D44D53,releaseunsignedAPK7B126F04109EA1F9295336EF8615C8ACCC3743BE8488497BF8DE7EA40AAB52F3;khôngsign/upload.
+
+### AVD/instrumentation/UI regression
+
+- DùngAVDexistingTBS5530_Runtime_API37tạiD:\Android\AVD,khôngtạomới/wipe/download. Boot1051vớiflaggiốngPhase1.1: -port5554 -no-snapshot -no-boot-anim -no-audio -no-window -gpu swiftshader_indirect. Đợi1052timeout4phútFAILbanđầu,sau1054ADBdevice/getpropboot1;khôngreset/rútdata.
+- RuntimeAndroid17/API37/x86_64/page4096;emuavdnameexplicitđúng.1055:ANDROID_SERIAL=emulator-5554,`:dvbservice:connectedDebugAndroidTest --console plain --no-daemon --max-workers=1` **exit0/5m38s**,92tasks43executed49UP-TO-DATE. XML2tests0fail0error,gồmallDevicesAreInXmlvànativeloadwithoutUSB. CopyXMLngoàiGitphase-1-2/instrumentation-results.xmlSHA25603269F9A8C91B106FF415A015756384CB0CA3EC4A0CDDE15AC0B3341534B02A6.
+- InstallAPKdebugAGP9.5Success;amstartWelcomeCOLDStatusokTotalTime10080ms. UIbịANRlaunchercom.google.android.apps.nexuslauncher/SystemUIoverlayche,chọnWaittheohierarchyMCP,khôngforcekillđổisystemsettings. SaucùngWelcomefocusđúng,topinset63/bottom63nhưPhase1.1.
+- Diagnostic→Start→dialogNo devices foundvàhandledDvbException:64;PID5345sống,filteredlog0FATAL/UnsatisfiedLinkError/SecurityException/appANR;BackvềWelcome. Khôngserviceforeground/USBpermissionvìkhôngtuner. KhôngquyANRsystemthànhappcrashhoặctuyênbốemulatorổnđịnhtuyệtđối.
+- XácnhậnđúngAVDname,rồi1064`adb -s emulator-5554 emu kill`;emulator1051exit0,ADBdevices1066rỗng. KhôngxóaAVDdata,khôngdừngphysicaldevicekhác.
+
+### Bàn giao và điểm dừng
+
+- UpdaterecordsSTATUS/ENVIRONMENT/DECISIONS/TEST-MATRIX/WORKLOG;historicalresearchgiữnguyên,cácnguồnGooglemớiởADR-009. Githistory/branch/HEADgiữnguyênace7e9f,chưastage/commit/merge/push. Khôngđụngreferencecode/index,usbipd/TBSfirmware/I2C/reset/LNB/TSwrites.
+- BaselineAGP9.5chỉđượccoi projectverifiedởcácgateđãchạytrênmáynày;lateststablecóthểđổisaucheckdate. RuntimeAPI21/arm64/16KiB,USBhostthật/foregroundstreamingvàTBSdriver vẫnNOTRUN.
+- Next:reviewdiffPhase1.2vàcommitcó chọnlọckhiđượcphêduyệt;theodõiprocessenvstale/nativeoutputlock/emulatorANR,khôngtựportdriverhoặcSDKcleanup.
+
+## 2026-11-02 23:39 +07 — Checkpoint commit/push Phase1.2 theo yêu cầu
+
+- Người dùng yêu cầu add, commit và push; nhánh hiện tại chore/modernize-android-build, HEADtrướcace7e9f187d11a685975f707b6743d779fa847d9. OriginSSHtrankien84/AndroidDvbDriver, upstreamsignalwareltd không thay đổi.
+- PreflightGitstatus:15candidatefiles, indextrống; rootpluginsAGP9.5.0, scope audit/test/instructions/docs nhưPhase1.2. `git ls-remote --heads origin refs/heads/chore/modernize-android-build` xác nhận remote cũngace7e9f trước push. Không fetch/rebase/merge/reset.
+- Diff --checkcr-at-eolPASS;0candidatebuildoutputs/SDK/firmware/TS/localproperties;heuristicsecretpattern0match,khôngcoilàsecurityaudit. SavedXMLunit31methods0fail,instrumentation2tests0fail0error,lint0errors đãđọc lại. Không chạy test/build/AVD mới trong tác vụ Git này.
+- Chuẩn bị commit `build: upgrade AGP to 9.5.0 and fix toolchain inventory`, kèm Co-authored-by trailer. STATUS thêm checkpoint để phân biệt lịch sử chưacommit; hash chính commit đọc từGitlog sau tạo, không tự ghi SHA vònglặp vào commit.
+- Push được phê duyệt chỉ nhánh hiện tại lênorigin, không force/master/upstream/referencechanges; xác minh live remote SHA trùngHEAD vàworkingtreesạch sau thao tác. Kết quả publish báo trực tiếp sau xác minh, không ghi trước là thành công.
+- Next: dừngPhase1.2; coverageAndroidAPI21/arm64/16KiB/hardware vẫnNOTRUN,không tựportdriver hoặcSDKcleanup.

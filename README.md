@@ -12,7 +12,7 @@ with a small helper library that allows fast kernel controlled USB bulk transfer
 
 # Build fork TBS5530 trên Windows
 
-Toolchain của fork dùng JDK 25, Gradle Wrapper 9.8.2 và AGP 9.4.1. SDK duy nhất là `D:\Android\Sdk`; cần platform `android-37.2`, Build-Tools `37.0.0`, NDK `30.0.16248370` và CMake `4.1.2`. Build không tự cài package SDK còn thiếu.
+Baseline toolchain đã kiểm chứng ngày 2026-11-02 của fork dùng JDK 25, Gradle Wrapper 9.8.2 và AGP 9.5.0. Đây là phiên bản dự án đã chọn, không phải cam kết luôn là bản mới nhất. SDK duy nhất là `D:\Android\Sdk`; cần platform `android-37.2`, Build-Tools `37.0.0`, NDK `30.0.16248370` và CMake `4.1.2`. Build không tự cài package SDK còn thiếu.
 
 Ứng dụng vẫn giữ `minSdk 21` và Java source/target 8; JDK 25 chỉ là JVM chạy build và compiler. AppCompat 1.7.1 và Material 1.13.0 là ngoại lệ có chủ đích so với bản mới nhất để giữ hỗ trợ Android 5.0/5.1. Không nâng Java bytecode lên 25 cho Android.
 

@@ -1,5 +1,52 @@
 # Environment inventory
 
+## 2026-11-02 — Phase 1.2: kiểm kê sau dọn SDK và nâng riêng AGP
+
+**Nguồn:** Windows PowerShell 7.6.9 / Windows 10.0.19045; nhánh `chore/modernize-android-build`, HEAD nền `ace7e9f187d11a685975f707b6743d779fa847d9`. Có sáu thay đổi local do người dùng chuẩn bị trước phase (hai instructions sửa, instruction/skill kiểm kê mới và hai script mới); không reset hoặc commit chúng.
+
+### Packages thực còn lại
+
+`Inspect-TBS5530-Toolchain.ps1`, Android CLI `sdk list` và `source.properties` được đối chiếu, không suy từ inventory cũ:
+
+| Package | Phiên bản/revision local | Vai trò |
+|---|---|---|
+| platforms/android-34 | revision 3 | Còn trên máy; không chọn để compile hiện tại |
+| platforms/android-37.2 | revision 2, API 37.2, PreviewSdkInt 0 | Compile SDK dự án |
+| build-tools/37.0.0 | 37.0.0 | Pin dự án |
+| ndk/30.0.16248370 | r30 | Pin dự án |
+| cmake/4.1.2 | 4.1.2 | Pin dự án |
+| cmdline-tools/latest | 23.0 | SDK command-line tools |
+| platform-tools | ADB 37.0.1 | CLI device access |
+| emulator | 37.2.13 | Emulator binary |
+| system-images/android-34/google-tv/x86 | metadata revision 3 | Giữ nguyên; không dùng trong smoke này |
+| system-images/android-37.0/google_apis/x86_64 | metadata revision 7 | Image của AVD đã có; CLI catalog hiện in revision 8, không coi đó là package đã cập nhật |
+
+Không còn platform37.0, Build-Tools36, NDK28 hoặc CMake3.22.1 trong inventory local. Image37.0 vẫn còn và độc lập với SDK platform37.0. Không uninstall/cài/update/xóa AVD hoặc SDK trong phase này. Review cleanup chỉ tạo CSV, platform34 là REVIEW chứ không tự kết luận vô dụng cho dự án khác.
+
+### JDK và AVD discovery
+
+- Process agent: JAVA_HOME cũ `C:\Program Files\Java\jdk-25` không tồn tại; User JAVA_HOME trống; Machine đúng `C:\Program Files\Java\latest\jdk-25`. Build commands nạp Machine JAVA_HOME vào child PowerShell, Gradle xác nhận Launcher25.0.5.0.3/daemon resolvedjdk25.0.5.0.3. Không sửa User/Machine environment hoặc restart VS Code.
+- ANDROID_HOME/ANDROID_AVD_HOME process thiếu, User đúng D:\Android\Sdk / D:\Android\AVD. Audit resolve được User AVD home nhưng trước sửa **không truyền home này vào emulator subprocess**, nên emulator list rỗng giả. Thư mục `.avd` dùng DirectoryInfo.BaseName còn nguyên suffix, gây thêm tên giả `TBS5530_Runtime_API37.avd` bên cạnh tên đăng ký thật.
+- Đã sửa audit: truyền AVD home chỉ trong lúc chạy listing, khôi phục environment ban đầu trong finally; bỏ suffix `.avd` đúng cho tên directory; hợp nhất metadata/emulator. Kết quả thật: **một AVD `TBS5530_Runtime_API37`, emulator=1, metadata=1**. Có regression cho cả variable vắng/có sẵn và emulator không tồn tại. Không tự boot AVD từ audit.
+- Audit JSON bổ sung các JAVA_HOME candidates hợp lệ và executable build gợi ý; vẫn báo rõ process stale, **không tự đổi JAVA_HOME**. `scripts/check-env.ps1` chuyển thành entrypoint gọi audit chung để tránh hai cách kiểm kê lệch nhau. `-NoReport -PassThru` hỗ trợ assertions/automation.
+- Cleanup-review parser CMake được giới hạn trong externalNativeBuild.cmake; không nhầm buildToolsVersion là CMake. Tất cả báo cáo local ở parent logs/toolchain, không commit machine/host metadata.
+
+### Execution policy
+
+Lần đầu chạy script bị RemoteSigned chặn. Đã hỏi và người dùng **chỉ định rõ** `Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process`. Thực hiện đúng scope Process trong từng child, lưu policy cũ và restore trong finally; không `Unblock-File` hoặc đổi CurrentUser/LocalMachine. Kết quả sau lệnh Process=Undefined, User/Machine vẫn RemoteSigned. Không biến việc bỏ chặn được duyệt lần này thành mặc định tự bypass trong tooling.
+
+### Phân biệt bốn trạng thái phiên bản
+
+| Thành phần | Declared | Installed | Published stable đã tra | Project verified / hành động |
+|---|---|---|---|---|
+| AGP | 9.5.0 sau sửa root plugins | Resolve qua Gradle cache/build, không phải SDK package | Google Current Release 9.5.0 ngày kiểm 2026-11-02 | Chỉ nâng 9.4.1→9.5.0; kết quả gate cuối ở TEST-MATRIX |
+| Gradle/JDK | Wrapper9.8.2 / JVM25 | 9.8.2 / 25.0.5.0.3 | Không tái tìm mọi latest JDK/Gradle; ma trận9.8.2 xác nhận JVM25 được hỗ trợ | Giữ nguyên, wrapper checksum không đổi |
+| SDK/Build-Tools | 37.2 /37.0.0 | Đúng pins | Không có yêu cầu tìm/nâng toàn SDK | Giữ nguyên compile37.2/target37/min21 |
+| NDK/CMake |30.0.16248370 /4.1.2 | Đúng pins | Không dùng tuổi package để quyết định nâng/xóa | Giữ nguyên, kiểm ABI/native gates |
+| Android runtime | Không quyết định bởi compileSDK | AVDimage37.0 x86_64 | Không tra/tải image mới | API37/4KiB chỉ sau getprop/boot thật; không đại diện arm64/16KiB/API21 |
+
+Google AGP9.5 compatibility: Gradle min9.6.0, JDK min17, API max37; default NDK28.2/BT36 **không phải lệnh bắt buộc downgrade pins**. Gradle9.8.2 hỗ trợ JVM25 từ dòng9.1.0; vẫn cần thực thi regression của dự án. Nguồn chính thức được ghi trong WORKLOG/DECISIONS; versions không được coi là mãi latest.
+
 ## 2026-11-02 — Phase1.1 runtime thực trên emulator, không tuner
 
 **Host/cwd:** Windows10.0.19045, PowerShell7.6.9, AndroidDvbDriver root. Baseline commit `6da609ba49dd9f1f4d284291918f68a6378972ff` đã push theo người dùng, local origin-tracking ref cùng SHA. Nhánh `test/android-runtime-smoke` được tạo từ modernization, bảo toàn2local changes `.gitignore`/workspace.
