@@ -1,0 +1,36 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "TBS: Windows environment check",
+      "type": "process",
+      "command": "pwsh.exe",
+      "args": ["-NoProfile", "-File", "${workspaceFolder}/scripts/check-env.ps1"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "new" }
+    },
+    {
+      "label": "Android: assembleDebug (Windows Gradle Wrapper)",
+      "type": "process",
+      "command": "pwsh.exe",
+      "args": ["-NoProfile", "-Command", "$env:JAVA_HOME = [Environment]::GetEnvironmentVariable('JAVA_HOME', 'Machine'); $env:ANDROID_HOME = 'D:\\Android\\Sdk'; $env:ANDROID_AVD_HOME = 'D:\\Android\\AVD'; & .\\gradlew.bat :app:assembleDebug --console plain --no-daemon; exit $LASTEXITCODE"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Android CLI: SDK inventory",
+      "type": "shell",
+      "command": "android",
+      "args": ["--sdk=D:\\Android\\Sdk", "sdk", "list"],
+      "problemMatcher": []
+    },
+    {
+      "label": "TBS: lsusb in WSL2 (read-only)",
+      "type": "process",
+      "command": "wsl.exe",
+      "args": ["-d", "Ubuntu-22.04", "--", "lsusb", "-d", "734c:5530"],
+      "problemMatcher": []
+    }
+  ]
+}

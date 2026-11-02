@@ -22,13 +22,11 @@ package info.martinmarinov.dvbservice;
 
 import android.util.Log;
 
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
-import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.powermock.core.classloader.annotations.PowerMockIgnore;
-import org.powermock.core.classloader.annotations.PrepareForTest;
-import org.powermock.modules.junit4.PowerMockRunner;
+import org.mockito.MockedStatic;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -46,20 +44,29 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.mockito.Answers.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-import static org.mockito.MockitoAnnotations.initMocks;
-import static org.powermock.api.mockito.PowerMockito.mockStatic;
+import static org.mockito.MockitoAnnotations.openMocks;
+import static org.mockito.Mockito.mockStatic;
 
-@RunWith(PowerMockRunner.class)
-@PrepareForTest({Log.class})
-@PowerMockIgnore("jdk.internal.reflect.*")
 public class RequestTest {
     @Mock(answer = RETURNS_DEEP_STUBS)
     private DvbDevice dvbDevice;
 
+    private AutoCloseable mocks;
+    private MockedStatic<Log> logMock;
+
     @Before
     public void setUp() {
-        initMocks(this);
-        mockStatic(Log.class);
+        mocks = openMocks(this);
+        logMock = mockStatic(Log.class);
+    }
+
+    @After
+    public void tearDown() throws Exception {
+        try {
+            if (logMock != null) logMock.close();
+        } finally {
+            if (mocks != null) mocks.close();
+        }
     }
 
     @Test

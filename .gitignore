@@ -48,6 +48,9 @@ _deps
 *.ko
 *.elf
 *.ilk
+# Local firmware and captures
+*.fw
+*.ts
 *.map
 *.exp
 *.so.*

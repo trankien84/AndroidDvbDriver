@@ -24,13 +24,13 @@ import org.junit.Test;
 
 import java.io.IOException;
 
-import static junit.framework.Assert.assertTrue;
+import static org.junit.Assert.assertTrue;
 
 public class StackTraceSerializerTest {
     @Test
     public void testSerialize() throws Exception {
         String serialization = StackTraceSerializer.serialize(new IOException("Test message"));
-        assertTrue(serialization.startsWith("java.io.IOException: Test message\n" +
+        assertTrue(serialization.startsWith("java.io.IOException: Test message" + System.lineSeparator() +
                 "\tat "+StackTraceSerializerTest.class.getName()+"."));
     }
 

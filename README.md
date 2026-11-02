@@ -10,6 +10,26 @@ The driver is a simplified user space port of a subset of
 the V4L2 Linux kernel drivers. Under the hood it uses Android USB Host API
 with a small helper library that allows fast kernel controlled USB bulk transfers.
 
+# Build fork TBS5530 trên Windows
+
+Toolchain của fork dùng JDK 25, Gradle Wrapper 9.8.2 và AGP 9.4.1. SDK duy nhất là `D:\Android\Sdk`; cần platform `android-37.2`, Build-Tools `37.0.0`, NDK `30.0.16248370` và CMake `4.1.2`. Build không tự cài package SDK còn thiếu.
+
+Ứng dụng vẫn giữ `minSdk 21` và Java source/target 8; JDK 25 chỉ là JVM chạy build và compiler. AppCompat 1.7.1 và Material 1.13.0 là ngoại lệ có chủ đích so với bản mới nhất để giữ hỗ trợ Android 5.0/5.1. Không nâng Java bytecode lên 25 cho Android.
+
+```powershell
+$env:JAVA_HOME = [Environment]::GetEnvironmentVariable('JAVA_HOME', 'Machine')
+$env:ANDROID_HOME = 'D:\Android\Sdk'
+$env:ANDROID_AVD_HOME = 'D:\Android\AVD'
+.\gradlew.bat --version
+.\gradlew.bat :app:assembleDebug --console plain --no-daemon
+.\gradlew.bat :usbxfer:testDebugUnitTest :drivers:testDebugUnitTest :dvbservice:testDebugUnitTest --console plain --no-daemon
+.\gradlew.bat :app:lintDebug :app:assembleRelease :app:bundleRelease --console plain --no-daemon --max-workers=1
+```
+
+Lệnh release dùng một worker vì đã quan sát lỗi khóa thư mục native output trên Windows khi chạy nhiều worker. Đây là cấu hình lệnh đã kiểm chứng, không phải kết luận đã xác định nguyên nhân khóa. Release APK hiện chưa ký để phát hành.
+
+Các lệnh trên chỉ build/kiểm thử phần mềm, không tải firmware, không ghi USB hoặc kiểm chứng tuner thật. TBS5530 chưa được triển khai. Kết quả và giới hạn mới nhất nằm trong [STATUS.md](docs/project/STATUS.md) và [TEST-MATRIX.md](docs/project/TEST-MATRIX.md).
+
 # Download
 
 * [Download DVB-T Driver on Google Play](https://play.google.com/store/apps/details?id=info.martinmarinov.dvbdriver)

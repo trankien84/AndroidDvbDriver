@@ -22,6 +22,7 @@ package info.martinmarinov.dvbservice.tools;
 
 import android.content.Context;
 
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.mockito.Mock;
@@ -35,9 +36,9 @@ import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.CoreMatchers.nullValue;
 import static org.junit.Assert.assertThat;
-import static org.mockito.Matchers.anyString;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.when;
-import static org.mockito.MockitoAnnotations.initMocks;
+import static org.mockito.MockitoAnnotations.openMocks;
 
 public class TsDumpFileUtilsTest {
     private final static File ROOT = new File("/imaginary/root");
@@ -45,10 +46,17 @@ public class TsDumpFileUtilsTest {
     @Mock
     private Context context;
 
+    private AutoCloseable mocks;
+
     @Before
     public void setUp() {
-        initMocks(this);
-        when(context.getExternalFilesDir(anyString())).thenReturn(ROOT);
+        mocks = openMocks(this);
+        when(context.getExternalFilesDir(isNull())).thenReturn(ROOT);
+    }
+
+    @After
+    public void tearDown() throws Exception {
+        if (mocks != null) mocks.close();
     }
 
     @Test

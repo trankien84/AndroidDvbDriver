@@ -1,0 +1,153 @@
+# Environment inventory
+
+## 2026-11-02 — Toolchain migration thực trên JDK25
+
+**Host:** Windows10.0.19045 / PowerShell7.6.9; nhánh `chore/modernize-android-build`, HEAD nền `e4c13a5b86ad5ef9be887df58226046dcb42dcd5`, thay đổi chưa commit. Người dùng cho nâng stable mới nhất nhưng xác nhận giữ minSdk21 và references read-only.
+
+| Thành phần | Phiên bản cấu hình/kiểm chứng mới |
+|---|---|
+| JDK chạy wrapper/daemon/compiler | Oracle25.0.5.0.3; JAVA_HOME Machine hợp lệ `C:\Program Files\Java\latest\jdk-25`, resolved daemon `jdk-25.0.5.0.3` |
+| Gradle |9.8.2; wrapper --version PASS trên JVM25; regenerated scripts/JAR bằng wrapper task chính thức |
+| AGP |9.4.1, plugin resolve/configure và debug build đã chạy |
+| SDK |compile37.2 (`minorApiLevel=2`), target37, min21 |
+| Build-Tools |37.0.0, đọc source.properties xác nhận |
+| NDK |30.0.16248370 / r30; meta/platforms.json min21/max37; build debug4ABIs đã chạy |
+| CMake |4.1.2 từ Android SDK; CMakeLists minimum3.22.1 để không dùng policy cũ bị CMake4 bỏ |
+| Java source/target |1.8 (không25); javac25 báo obsolete warning, chưa ẩn warning |
+| AppCompat / Material |1.7.1 /1.13.0: giữ API21; latest1.8.0/1.14.0 yêu cầu23 nên không chọn |
+| Unit tests |JUnit4.13.2, Mockito5.24.0; bỏ Mockito1/mockito-all/PowerMock |
+| Instrumentation dependencies |AndroidX test-ext1.3.0 / Espresso3.7.0, latest stable còn API21 |
+| Broadcast dependency |localbroadcastmanager1.1.0 khai báo trực tiếp trong dvbservice thay dựa transitive |
+
+Lệnh nào chạy Gradle cũng set JAVA_HOME từ Machine và ANDROID_HOME=D:\Android\Sdk/ANDROID_AVD_HOME=D:\Android\AVD **trong process đó**, không thay registry/global PATH. VS Code task assembleDebug cập nhật cùng cơ chế; runTask không tìm thấy task trong host nên terminal chạy cùng command.
+
+**Cài package có giới hạn:** sau manifest build thay đổi và validation `gradlew help` FAIL vì NDK chưa cấu hình, chạy `android --sdk=D:\Android\Sdk sdk install <package>` cho đúng4package: ndk/30.0.16248370, cmake/4.1.2, build-tools/37.0.0, platforms/android-37.2; tất cả exit0 và source.properties được đọc lại. Không update toàn SDK, không tải emulator/system images/firmware, không tạo SDK thứ hai. `android.builder.sdkDownload=false` ngăn build tự cài SDK khác.
+
+**Wrapper integrity:** distributionSha256Sum9.8.2=`21bd5da2de49b642904077f38c0efdc7778e92b3ed0889392dca61b97e389607`, lấy từ official downloads.gradle.org. Cài binary-only distribution thay vì all. Không chép JDK path cá nhân vào build scripts. Package37.2 có metadata Platform.Version placeholder `${PLATFORM_VERSION}` nhưng AndroidVersion.ApiLevel37.2/PreviewSdkInt0; compile dùng được, không suy diễn tên Android từ placeholder.
+
+**Không đổi hardware/reference ownership:** không chạy script Apply khôi phục TBS, không tải572 ancestor objects. C/Go vẫn sạch, SHA cả3refs giữ nguyên, TBS vẫn81399D. Mọi USB/lock/TS thật và runtime Android/AVD vẫn NOT RUN. Kết quả build/test cuối xem TEST-MATRIX/WORKLOG, không dùng snapshot Phase0 bên dưới làm hiện trạng mới.
+
+## 2026-11-02 12:52 +07 — Kiểm tra lại JAVA_HOME sau khi người dùng sửa
+
+Windows PowerShell / main HEAD `e4c13a5b86ad5ef9be887df58226046dcb42dcd5`.
+
+- **Machine JAVA_HOME đã đúng:** `C:\Program Files\Java\latest\jdk-25`; `Test-Path` thư mục và `bin\java.exe` đều true; chạy executable này trả Java `25.0.5.0.3`, exit0.
+- **Process agent vẫn giữ giá trị cũ:** `C:\Program Files\Java\jdk-25`, không tồn tại; User JAVA_HOME không có. Đây là môi trường được tiến trình cha truyền lại, không phải người dùng sửa thất bại.
+- Đã kiểm tra trong một PowerShell child bằng `$env:JAVA_HOME=[Environment]::GetEnvironmentVariable('JAVA_HOME','Machine')`, rồi chạy `bin\java.exe -version`: PASS. Thay đổi chỉ tồn tại trong child đó, không sửa User/Machine hoặc tiến trình VS Code đang chạy.
+- Các lệnh sau nếu cần JDK này phải đọc lại Machine JAVA_HOME trong chính process chạy lệnh; hoặc người dùng khởi động lại VS Code để nhận environment mới. **Không tự restart VS Code hoặc thay global settings.**
+- ANDROID_HOME/ANDROID_AVD_HOME vẫn thiếu Process nhưng đúng ở User (`D:\Android\Sdk`, `D:\Android\AVD`). Chưa đổi biến.
+- **Giới hạn vẫn còn:** JDK25 hợp lệ không làm Gradle8.7 tương thích. Chưa chạy wrapper/build; đề xuất baseline JDK17 vẫn giữ nguyên.
+
+## 2026-11-02 — Kiểm chứng trực tiếp trong Phase 0
+
+**Môi trường chạy lệnh:** Windows PowerShell, cwd `D:\API\TBS5530-DVB-Android\AndroidDvbDriver`; thời gian local UTC+07. HEAD Android `e4c13a5b86ad5ef9be887df58226046dcb42dcd5`. Không chạy Gradle, cài SDK, khởi động AVD hoặc thao tác ghi USB.
+
+### Windows, Java và biến môi trường
+
+| Hạng mục | Kết quả thực đo | Ý nghĩa |
+|---|---|---|
+| Windows | `10.0.19045.0`; ADB cũng báo Windows 10.0.19045 | Xác nhận host, không đánh giá vòng đời hỗ trợ Windows |
+| PowerShell | `7.6.9` | Shell audit chính |
+| Git | `2.56.0.windows.3` | Không chạy sync script |
+| Java trên PATH | Oracle `25.0.5.0.3`, build `25.0.5.0.3+1-LTS-2` | `java -version` chạy được |
+| `JAVA_HOME`, Process/Machine | `C:\Program Files\Java\jdk-25`, **không tồn tại** | Chặn Gradle Wrapper trước cả vấn đề tương thích phiên bản |
+| JDK thực có | `C:\Program Files\Java\jdk-25.0.5.0.3\bin\java.exe` | Chưa thay `JAVA_HOME` |
+| `ANDROID_HOME`, Process | Không có | Tiến trình agent chưa nhận giá trị User |
+| `ANDROID_HOME`, User | `D:\Android\Sdk` | Không tự sửa biến global |
+| `ANDROID_AVD_HOME`, Process | Không có | MCP/CLI có thể nhìn nhầm thư mục AVD |
+| `ANDROID_AVD_HOME`, User | `D:\Android\AVD` | Thư mục tồn tại, hiện rỗng |
+| Android CLI | `1.1.16717390`, tìm được qua WinGet link | `--help`, `-V`, `info sdk`, `sdk list`, `docs search/fetch` chạy được |
+| `android info sdk` | `C:\Users\anhch\AppData\Local\Android\Sdk` | Default của process không trùng SDK dự kiến; chưa kết luận có SDK thứ hai đã cài |
+| `android --sdk=D:\Android\Sdk info sdk` | `D:\Android\Sdk` | Truy vấn rõ SDK hoạt động; không đổi cấu hình |
+
+Lệnh kiểm chứng: `Get-Command java,android,git,usbipd,wsl.exe`, `[Environment]::GetEnvironmentVariable(<name>,<Process/User/Machine>)`, `Test-Path $env:JAVA_HOME`, `Get-ChildItem 'C:\Program Files\Java'`, `java -version`. Đã phân biệt Java tìm qua PATH với `JAVA_HOME` mà wrapper sử dụng.
+
+### SDK tại D:\Android\Sdk
+
+Lệnh `android --sdk=D:\Android\Sdk sdk list` trả exit 0. Đọc thêm `source.properties` để không chỉ dựa vào tên thư mục.
+
+| Package | Phiên bản xác nhận |
+|---|---|
+| `platforms/android-34` | revision 3; API 34, Android 14 |
+| `platforms/android-37.0` | revision 2; metadata API `37.0`, Android 17, `PreviewSdkInt=0` |
+| `build-tools/36.0.0` | 36.0.0 |
+| `ndk/28.2.13676358` | r28c, 28.2.13676358 |
+| `cmake/3.22.1` | 3.22.1 |
+| `cmdline-tools/latest` | 23.0.0 |
+| `platform-tools` | 37.0.1; `adb.exe --version`: 1.0.41 / 37.0.1-15733141 |
+| `emulator` | 37.2.13.0, build 16740729; `emulator.exe -version` |
+| System images | API 34 Google TV x86 revision 3; API 37.0 Google APIs x86_64 revision 8 |
+| AVD | `D:\Android\AVD` rỗng; default `.android\avd` không tồn tại; MCP `list_avds`: không có AVD |
+
+Có system image **không** có nghĩa đã tạo/boot AVD. Lần thăm dò `emulator.exe --version` in phiên bản kèm lỗi `No AVD specified`; đã sửa thành truy vấn `-version`, không truyền tên AVD, không khởi chạy máy ảo. Android CLI in cảnh báo `UseAllWindowsProcessorGroups` không hỗ trợ trên Windows này nhưng các truy vấn trên vẫn hoàn tất. `android docs search` tự tải bộ chỉ mục Knowledge Base/cache; đây không phải cài/nâng SDK, không gửi mã dự án.
+
+### WSL2, usbipd và quyền sở hữu USB
+
+- `wsl.exe --list --verbose`: `Ubuntu-22.04`, **Running**, version **2**; không chạy lệnh bên trong WSL vì TBS không Attached.
+- `usbipd` không có trên PATH của process; đã dùng executable hiện có `C:\Program Files\usbipd-win\usbipd.exe`, không cài lại hoặc sửa PATH.
+- `usbipd.exe --version`: `5.3.0-54+Branch.master`, commit `aa3db8b82c4cb5071fd31bc54211606c70886912`.
+- `usbipd.exe list`: `734c:5530`, `TBS 5530 DVB BDA`, BUSID **6-2 tại thời điểm kiểm tra**, trạng thái **Shared**, không phải Attached. BUSID được đọc trực tiếp, không lấy từ lịch sử.
+- Quyền truy cập ở phía Windows, không chuyển cho WSL2; chưa xác minh ứng dụng Windows nào đang mở thiết bị. `Shared` không chứng minh BDA/tuner đang hoạt động.
+- `bind`: chia sẻ bền vững (Administrator); `attach --wsl`: giao tạm cho WSL; `detach`: trả Windows nhưng giữ Shared; `unbind`: bỏ chia sẻ. **Không thực hiện bốn lệnh này**, USB reset, firmware, vendor/I2C write hoặc LNB.
+- Kernel WSL và endpoint/claim PyUSB trong phần 2026-11-01 bên dưới là **bằng chứng lịch sử**, chưa đo lại.
+
+### Công cụ Copilot/MCP
+
+- Đã đọc `.github/copilot-instructions.md`, cả 6 scoped instructions, 2 SKILL.md, 6 hồ sơ dự án, workspace, script sync và script check-env (không chạy hai script).
+- Hai project skills `project-handoff`, `tbs-research` và skill user `android-cli` được tool `skill` tải thành công. Instructions áp dụng docs/build/sync xuất hiện trong context phiên; cả 6 file đã được chủ động đọc. Không có file yêu cầu nào bị thiếu. Không có API kiểm chứng việc VS Code tự động ghép *mọi* scoped instruction ở mỗi lượt; không tuyên bố auto-attach đã được kiểm thử toàn diện.
+- Chỉ qua MCP Proxy: `retrieve_tools` + `call_tool_read` hoạt động. `adb-mcp:list_avds` trả không có AVD; chưa kiểm thử UI, APK, Logcat hoặc thiết bị Android vật lý.
+- `gitnexus:list_repos` hoạt động nhưng **không có chỉ mục AndroidDvbDriver hoặc ba reference**. Không rebuild index; nghiên cứu dùng source trực tiếp.
+- `agentmemory:memory_recall`, query `TBS5530 AndroidDvbDriver`, compact/limit 3: `matched_count=0`; không suy ra server rỗng hoặc tìm kiếm đã cô lập project. Không lưu memory mới.
+- Truy vấn lịch sử phiên 7 ngày theo identity GitHub dự án không trả dòng nào. Tài liệu trên đĩa là nguồn lịch sử chính.
+- Chưa kiểm tra `chrome-devtools`: không cần browser/UI cho audit source. Không sửa MCP config hoặc global settings.
+
+## Historical inventory — observed 2026-11-01 (giữ nguyên)
+
+Phần dưới là ghi chép người dùng cung cấp trước Phase 0, không thay cho các kết quả kiểm chứng trực tiếp ở trên.
+
+## Windows / Android
+
+| Item | Observed |
+|---|---|
+| Windows host | Windows 10 `10.0.19045` (per ADB output; verify this remains current) |
+| Primary project root | `D:\API\TBS5530-DVB-Android\AndroidDvbDriver` (planned; check actual clone) |
+| SDK root | `D:\Android\Sdk` |
+| Android CLI | Official Google `android` CLI; version NOT captured (run `android -V`) |
+| Java | Oracle JDK `25.0.5` LTS; `JAVA_HOME=C:\Program Files\Java\jdk-25` |
+| Build-Tools | `36.0.0` |
+| SDK platforms | `android-34`, `android-37.0` |
+| NDK | `28.2.13676358` |
+| CMake | `3.22.1` |
+| Platform-Tools / ADB | `37.0.1` |
+| cmdline-tools | `23.0.0` (`latest`) |
+| Emulator | `37.2.13`; WHPX reported installed and usable; no actual AVD boot demonstrated |
+| Emulator images | `android-34/google-tv/x86`; `android-37.0/google_apis/x86_64` |
+
+Use `android --sdk=D:\Android\Sdk sdk list` for inventory; `android info sdk` and `android -V` for active SDK and CLI version. Do not assume packages are the latest based solely on folder names. SDK updates require approval.
+
+## WSL2 / USB
+
+| Item | Observed |
+|---|---|
+| Distro | `Ubuntu-22.04`, WSL2 |
+| Kernel | `6.18.54.1-microsoft-standard-WSL2` |
+| USB/IP | `usbipd-win`, TBS device BUSID `6-2` during test; BUSID may change |
+| USB ID | `734c:5530` |
+| Configuration / Interface | `1` / `0` |
+| Bulk input endpoints | `0x82`, `0x81`; each 512-byte max packet size |
+| Speed | USB 2.0 High Speed / 480 Mbps |
+| USB enumeration / interface claim | PASS on WSL2/PyUSB; no DVB driver attached |
+| `/dev/dvb` | Not present during WSL test, expected without DVB driver |
+
+The same project files are available via `/mnt/d/API/TBS5530-DVB-Android/AndroidDvbDriver`. The reference checkouts under sibling `references/` should remain read-only.
+
+## Tool boundaries
+
+- Windows PowerShell: Android builds with `gradlew.bat`, Android CLI, ADB, Git.
+- WSL2: `lsusb`, PyUSB, Linux-only diagnostics. Invoke from Windows with `wsl.exe -d Ubuntu-22.04 -- ...`.
+- No second Android SDK inside WSL2. No Linux kernel driver/firmware flash required for initial Android build.
+- Active TBS5530 USB passthrough prevents simultaneous use with Windows' BDA driver.
+
+## Baseline project (source inspection only, not local build verification)
+
+Original upstream AndroidDvbDriver uses AGP `8.5.2`, Gradle wrapper `8.7`, `compileSdk 34`; JDK 25 must not be assumed compatible with this old wrapper. Modernization is a separate tracked step after source baseline and dependency audit. Never claim `assembleDebug` passes without executing it locally.
