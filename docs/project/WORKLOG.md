@@ -227,3 +227,56 @@
 - Chuẩn bị commit `build: upgrade AGP to 9.5.0 and fix toolchain inventory`, kèm Co-authored-by trailer. STATUS thêm checkpoint để phân biệt lịch sử chưacommit; hash chính commit đọc từGitlog sau tạo, không tự ghi SHA vònglặp vào commit.
 - Push được phê duyệt chỉ nhánh hiện tại lênorigin, không force/master/upstream/referencechanges; xác minh live remote SHA trùngHEAD vàworkingtreesạch sau thao tác. Kết quả publish báo trực tiếp sau xác minh, không ghi trước là thành công.
 - Next: dừngPhase1.2; coverageAndroidAPI21/arm64/16KiB/hardware vẫnNOTRUN,không tựportdriver hoặcSDKcleanup.
+
+## 2026-11-03 00:02–00:18 +07 — Phase 2.0: source readiness và thiết kế driver
+
+- **Mục tiêu và giới hạn:** chỉ xác minh nguồn, hoàn thiện thiết kế và kế hoạch Phase 2.1. Không viết code production hoặc test implementation, không build, không gửi USB writes, không sửa reference repositories.
+- **Môi trường:** Windows PowerShell, cwd `D:\API\TBS5530-DVB-Android\AndroidDvbDriver`. Baseline main `chore/modernize-android-build` / `4cf1b64e03a563f66cfb2b2051fb6f4ed05eacbe`, working tree sạch. Đọc guidance và các phần hồ sơ mới nhất; load skills tbs-research/project-handoff.
+- **Nhánh:** sau kiểm status sạch, chạy `git switch -c docs/tbs5530-source-architecture` thành công, cùng HEAD baseline; không chạm nhánh modernization, không stage/commit/push/merge. Các file thay đổi chỉ là RESEARCH/DECISIONS/STATUS/TEST-MATRIX/WORKLOG.
+
+### Kiểm tra mới về repository và objects
+
+- Tất cả Git reads trên references dùng `--no-lazy-fetch`, `GIT_NO_LAZY_FETCH=1`, `GIT_OPTIONAL_LOCKS=0`. Không chạy sync script, fetch, restore, reset, clean, clone/reclone, config write hoặc tải objects.
+- `rev-parse --show-toplevel`, `rev-parse HEAD`, `branch --show-current`, `remote -v`, `status --porcelain=v1 -uall`: TBS latest/2ce787de9f6e81b4294692a45de15596ae2e1322 có 81.399 staged D; C main/c5fa27eecbe80633cbb365cc44656daea1c0e2e3 và Go main/11228b05fb1626bf41c4e1879ace10cd0a8d575c sạch. Origin cả ba đúng nguồn đã khóa.
+- `Test-Path .git/index/.git/index.lock`, `GIT_INDEX_FILE`, `ls-files`, `sparse-checkout list`, `config --get core.sparseCheckout/core.sparseCheckoutCone`: TBS thiếu index/lock, không override index, ls-files0, đủ sáu patterns và flags true. Đếm file đệ quy: cả sáu thư mục đều0file.
+- `ls-tree -r HEAD -- <six-paths>`, `cat-file --batch-check`:785paths/785unique blobs,0missing,15.372.887bytes uncompressed. Kiểm thêm các cone ancestor root/drivers/media/usb/include/uapi/linux:572paths/572blobs, **0missing hiện tại**. Không lặp lại kết luận cũ cần tải572blobs; chưa xác định ai bổ sung trước phase, tác vụ này không tải.
+- Tổng cone dự kiến1.357file, kiểm tên reserved Windows/ký tự không hợp lệ cơ bản0lỗi. AUX ngoài sparse vẫn có trong HEAD tree. `config --show-origin --get core.protectNTFS` không có override lưu, exit1.
+- `read-tree --dry-run -m -u HEAD` không ghi: exit128 `invalid path drivers/gpu/drm/nouveau/nvkm/subdev/i2c/aux.c`; sau đó index/lock vẫn vắng. Không chạy workaround protectNTFS=false hoặc recovery thực ở phase này.
+- Board tbs5530.c/.h, Sony cxd2878.c/.h/_priv.h, Montage m88rs6060.c/.h/_priv.h, dvb-usb common/init/firmware/usb-urb, media frontend/math và Linux headers trực tiếp: tree/blob local đọc được, disk thiếu. Makefile bindings kiểm đúng TBS/CXD/Montage. Không khẳng định full kernel build có đủ mọi dependency.
+- Source readiness phân đôi: **PASS cho đọc nguồn phục vụ nghiên cứu qua local blobs**, **BLOCKED cho checkout/index/materialized tree**. Kế hoạch backup/rollback và NTFS vs ext4 WSL nằm ở RESEARCH, cần phê duyệt riêng trước mọi ghi. Không tạo WSL checkout hoặc đổi SDK.
+
+### Nghiên cứu mở rộng và kiến trúc
+
+- Dùng kết quả Phase0 làm nền, đọc lại official bằng `git show HEAD:<path>`/`cat-file blob`; source C/Go đọc bằng view/grep trên đĩa. Ghi file/function/SHA và links cố định trong RESEARCH. Không đồng bộ upstream để thay mốc đang nghiên cứu.
+- Làm rõ generic Cypress hexline loader khác loader raw device-specific TBS; framework no_reconnect chỉ tiếp tục sau upload thành công, không bảo đảm Android identity/permission/fd ổn định. Firmware provenance/hash/license/address map vẫn chưa có bằng chứng.
+- Official/C manual PLP ghi bank23/AF/AD mỗi set_dvbt2. Go active-same-system retune chỉ đổi bandwidth; ghi nhận khác biệt nguồn, không claim đã tái hiện lỗi trên tuner thật. Internal manualPLP0 được đề xuất cho compatibility, không gọi là auto; public PLP API và TCP extension chưa chọn triển khai.
+- Chip dispatch official chỉ0x197Ascot3 và0x19c/0x39aFreia; community macros mở rộng ID; Go default còn lạiFreia. Thiết kế fail closed trên ID ngoài bảng được review, không mặc định thiết bị người dùng có Ascot3 chỉ từ tên board.
+- Đọc Android registry/Creator, DvbUsbDevice, DvbDevice/DataPump, Retry, I2cAdapter, UsbPermissionObtainer, UsbBulkSource/JNI và service/request enums. Phát hiện Retry.retry(4) là5attempts, không4; I2cAdapter có10iterations. Điều chỉnh adapter production tương lai thành extendsDvbDevice để tránh open/close final và replay sideeffects, compose phần đang có thay refactor toàn framework.
+- Phase2.1 đề xuất chỉ plain-Java core ControlIo/Bridge/FirmwarePlan/Session + scripted fakes/tests; chưa Android transport/registry/firmware executor/frontend production/JNI. Test matrix exact bytes, shorttransfer, conservative limits, firmwaretail/address policy, endpoint ordering, fault latch, late callbacks và cleanup; tất cả **PLANNED/NOT RUN**.
+- Native streamActive tách khỏi frontendLocked; stream-before-tune của app hiện hữu phải được tính đến. Cleanup không giữ control lock khi join, không fd giả/ioctl thật và không corrective vendor write tự động. API enums/Request ordinals của các driver hiện hữu giữ nguyên.
+
+### Công cụ, lỗi lệnh và bằng chứng
+
+- MCP Proxy GitNexus list_repos không có target index; AgentMemory lookup limit3/compact không có match; không save memory hoặc build index. Không dùng graph rỗng để khẳng định blast radius an toàn.
+- Hai lệnh PowerShell probe ban đầu lỗi parser (`$f:$s` và block ngoặc không khép) đã sửa thành `${f}`/loop đơn giản rồi chạy lại thành công; lỗi parser không gửi lệnh vào Git hoặc hardware. Một output source lớn được đọc lại bằng range/grep có giới hạn, không dump toàn bộ file.
+- Các đoạn bảng/timing/register trong RESEARCH là source facts hoặc proposed policy, không hardware results. Không tải firmware, không usbipd/lsusb/PyUSB/ADB/emulator, không thay environment/global settings.
+- ADR-010 ghi thiết kế đã chọn và phương án thay thế; lịch sử ADR-006/Phase0 vẫn giữ, lý do đổi hướng lifecycle nêu rõ. STATUS không gọi toolchain baseline cũ là chưa push; baseline4cf1b64 giữ nguyên.
+- **Next:** review và xin duyệt scope Phase2.1 offline foundation; nếu muốn materialize TBS checkout thì duyệt kế hoạch recovery riêng. Dừng Phase2.0, không tự viết driver production hoặc kiểm thử USB thật.
+
+- **Kiểm chứng tài liệu cuối Phase2.0 (00:21 +07):** diff --check PASS; cả năm hồ sơ UTF-8 hợp lệ,0 liên kết Markdown tương đối hỏng; VS Code problems không lỗi. Chỉ năm file docs được sửa,0staged/0untracked; HEAD nhánh tài liệu và modernization cùng4cf1b64. Reference SHA/status không đổi so đầu phase. Không chạy build/test mới vì chỉ sửa tài liệu.
+
+## 2026-11-03 00:54 +07 — Kiểm chứng người dùng phục hồi TBS checkout và dọn script tạm
+
+- Người dùng gửi ảnh terminal Apply PASS, backup tbs-sparse-before-20261103-004911-951. Agent không chạy recovery hoặc ghi reference; kiểm riêng bằng Git/filesystem chỉ đọc.
+- TBS HEAD2ce787de9f6e81b4294692a45de15596ae2e1322/latest, status0entries, index tồn tại8.822.766bytes, index.lock không có. Sáu sparse paths giữ nguyên, config protectNTFS không override lưu. C/Go status sạch.
+- Expected manifest từ ls-tree sáu paths và ancestor cone:1.357file; actual1.357file,0missing/extra. Batch hash-object --stdin-paths theo filters/EOL:0mismatch. TBS5530/Sony/Montage/frameworksource hiện diện; counts chi tiết trong RESEARCH. Không build fullkernel/hardware mới.
+- Backup/git giữ nguyên, after.json PASS/1357/đúngSHA. Theo yêu cầu trước của người dùng, đã xóa **chỉ** script tạm session Restore-TbsSparseCheckout-Reviewed.ps1 sau khi đủ gate, xác nhận file không còn; không xóa backup/logs/AVD/source khác.
+- Main vẫn docs/tbs5530-source-architecture/4cf1b64, không stage/commit/push. STATUS/RESEARCH/TEST-MATRIX/WORKLOG thêm kết quả mới, không xóa lịch sử lỗi. Next: xin duyệt Phase2.1 offline foundation, chưa tự viết driver production hoặc gửi USB writes.
+
+## 2026-11-03 00:58 +07 — Commit/push hồ sơ Phase2.0 theo yêu cầu
+
+- Scope: năm file STATUS/RESEARCH/DECISIONS/TEST-MATRIX/WORKLOG, gồm thiết kế Phase2.1 offline và xác minh1.357file checkoutNTFS. Không code production, reference sources, backup hoặc rawlogs.
+- Trước: nhánh docs/tbs5530-source-architecture tại4cf1b64e03a563f66cfb2b2051fb6f4ed05eacbe, năm tài liệu modified; index trống. Modernization giữ nguyên baseline. Origin đúng fork trankien84/AndroidDvbDriver; nhánh tài liệu chưa có trên origin tại preflight.
+- Validation: diff --check PASS, UTF8/relativeMarkdownlinks PASS, heuristicsecretpattern0match; không phải security audit. Không chạy build/unit/emulator/hardware trong tác vụ tài liệu.
+- Chuẩn bị commit `docs: finalize TBS5530 architecture and source readiness`, có Co-authored-by trailer, sau đó push explicit nhánh hiện tại với upstream tracking. Không merge, force-push hoặc thay nhánh modernization/master. Hash và kết quả push báo sau kiểm tra live remote; không ghi trước thành công.
+- Next: dừng trước Phase2.1, chỉ triển khai offline foundation khi được duyệt; không USB writes hoặc firmware.

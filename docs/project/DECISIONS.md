@@ -1,5 +1,19 @@
 # Architecture decision record (ADR)
 
+## ADR-010 — Phase 2.0: nền tảng TBS5530 offline trước production adapter
+**Date:** 2026-11-03
+**Status:** Accepted cho thiết kế và phạm vi đề xuất Phase 2.1; **chưa triển khai**. Không phê duyệt phục hồi reference hoặc ghi USB.
+**Context:** Baseline `4cf1b64` đã push; nhánh tài liệu `docs/tbs5530-source-architecture`. TBS index vẫn thiếu và có 81.399 staged deletions. Tuy nhiên, 785 blobs được chọn và 572 blobs ở các thư mục cha hiện đều có local: đủ nghiên cứu qua Git objects, chưa đủ một checkout sử dụng bình thường. Ba nguồn khác nhau ở cách chọn tuner, PLP retune, giới hạn và xử lý lỗi.
+**Decision — readiness:** Giữ references chỉ đọc. Ghi riêng PASS cho khả năng đọc nguồn đã kiểm và BLOCKED cho checkout. Không suy từ lịch sử 572 blobs thiếu rằng hiện vẫn phải tải. Phục hồi cần phê duyệt mới, backup và manifest thay đổi; NTFS và ext4 WSL có các đánh đổi ghi trong RESEARCH. Không tạo bản sao WSL hoặc đổi cấu hình Git trong phase này.
+**Decision — class boundary:** Phase 2.1 chỉ plain-Java8 core: `Tbs5530ControlIo`, `Tbs5530Bridge`, `Tbs5530FirmwarePlan`, `Tbs5530Session` và scripted fakes/tests. Không đăng ký Creator, không transport Android/JNI, firmware thật hoặc bảng thanh ghi production. Adapter production về sau dự kiến `Tbs5530DvbDevice extends DvbDevice`, kết hợp các abstractions hiện có.
+**Reason for lifecycle change:** Điều chỉnh đề xuất ADR-006/Phase 0 về `extends DvbUsbDevice`. `Retry.retry(4)` thực có tối đa năm attempts; `open/close` là final nên không override được để kiểm soát thất bại/cleanup. Firmware/reset không được tự lặp khi trạng thái không chắc chắn. Giữ nguyên các driver cũ, không refactor framework chung chỉ để thêm board.
+**I2C/retry:** Khóa cả cặp 0x90/0x91; kiểm địa chỉ 7-bit, flags và length trước IO. Giới hạn đầu write48/read50 bytes là guard phần mềm, không tuyên bố là hardware limit. Control error/short transfer đưa session vào FAULTED; các lần gọi lại không gửi IO, kể cả khi base adapter thử lại mười lần. Mặc định không retry thao tác chạm hardware. Cleanup host resources không cho phép gửi vendor writes để tự phục hồi tuner.
+**Firmware:** Chỉ dữ liệu giả và pure plan trong Phase 2.1. Ảnh thật cần nguồn gốc, giấy phép, hash, board và address map được duyệt riêng. Cap0xe200 của Go không đủ loại trừ reset register0x7f92. Chia khối cuối, thứ tự lệnh và lỗi giữa chừng chỉ kiểm bằng fake. `no_reconnect` là giả định source; Android identity/permission/fd phải được kiểm lại nếu detach/re-enumerate.
+**PLP/chip policy:** PLP nội bộ nhận int0..255, mặc định **manual PLP0**, không gọi auto. Giữ API tune/TCP/enum ordinals hiện có; mở rộng API PLP để sau. Official/C ghi PLP mỗi tune nhưng nhánh retune cùng chuẩn của Go chỉ đổi bandwidth: cần test riêng cho đổi PLP. Chọn tuner theo bảng explicit0x197 Ascot3,0x19c/0x39a Freia; từ chối ID chưa được review thay vì mặc định Freia. Silicon thật chưa xác minh.
+**Alternatives:** Refactor retry hooks chung để dùng DvbUsbDevice; port toàn Go/kernel stack; triển khai satellite/API extension ngay; tạo generic USB framework mới. Không chọn vì phạm vi và nguy cơ regression lớn hơn lợi ích. Chỉ thêm TBS-specific seams khi cần thay transport hoặc fake.
+**Consequences:** Có thể bắt đầu offline tests dù checkout TBS còn BLOCKED, nhưng chưa có hỗ trợ hardware. DVB-C/S/S2/S2X, ATSC3, UI chọn PLP, real streaming/native cancel và firmware redistribution để sau. Unit PASS không thay cho Android USB Host/lock/TS hoặc runtime coverage.
+**Verification/revisit:** File/hàm/SHA, sơ đồ, manifest dependency, mức rủi ro và tiêu chí ra Phase 2.1 ở RESEARCH; các tests mới đều NOT RUN. Production/hardware cần review kết quả offline và kế hoạch riêng. Khi đổi SHA upstream phải review diff, không tự sync giữa thí nghiệm.
+
 ## ADR-009 — Phase 1.2: nâng riêng AGP 9.5.0 và kiểm kê không đổi hệ thống
 **Date:** 2026-11-02
 **Status:** Accepted theo yêu cầu Phase1.2; kết quả kiểm thử riêng ở TEST-MATRIX.

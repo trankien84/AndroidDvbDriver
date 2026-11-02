@@ -1,5 +1,61 @@
 # TBS5530 test matrix
 
+## 2026-11-03 00:54 +07 — Xác minh sau phục hồi NTFS do người dùng thực hiện
+
+Windows PowerShell; TBS latest/2ce787de9f6e81b4294692a45de15596ae2e1322. Agent kiểm chỉ đọc với no-lazy-fetch/optional-locks0; không thực thi recovery.
+
+| Gate | Kết quả | Bằng chứng |
+|---|---|---|
+| HEAD/branch giữ nguyên | PASS | rev-parse/branch: đúng SHA đã khóa/latest |
+| Index và working tree | PASS | index có, status0entries, index.lock không có |
+| Sáu sparse paths | PASS | sparse-checkout list đúng phạm vi |
+| Manifest file thực | PASS |1.357expected/actual,0missing/extra |
+| Nội dung so HEAD | PASS |hash-object --stdin-paths:0mismatch trên1.357file |
+| Source TBS/Sony/Montage/helpers | PASS hiện diện |Test-Path và manifest xác nhận, không chỉ object local |
+| Persistent protectNTFS override | PASS không đổi |configqueryexit1, không override lưu |
+| Backup | PASS hiện diện |backup004911-951/git vàafter.json PASS/1357/đúngSHA; không xóa |
+| C/Go references | PASS sạch |status0entries |
+| Full kernel build / Android driver / USB hardware | NOT RUN |Phục hồi source không chứng minh firmware/tuner/TS hoạt động |
+
+Các trạng thái index/checkout BLOCKED trong snapshot trước được bảo toàn làm lịch sử, không còn là kết luận mới nhất.
+
+## 2026-11-03 — Phase2.0 source readiness và kế hoạch offline
+
+WindowsPowerShell, nhánh docs/tbs5530-source-architecture, baseline4cf1b64e03a563f66cfb2b2051fb6f4ed05eacbe. SourceSHA TBS2ce787de9f6e81b4294692a45de15596ae2e1322/Cc5fa27eecbe80633cbb365cc44656daea1c0e2e3/Go11228b05fb1626bf41c4e1879ace10cd0a8d575c. Khôngbuild/driver/hardwaretest trongphase này.
+
+| Kiểm tra thực | Trạng thái | Bằng chứng mới |
+|---|---|---|
+| Baseline main và tạo nhánh tài liệu | PASS |Statussạch,HEAD4cf1b64;git switch-c docs/tbs5530-source-architecture,modernizationkhôngđổi |
+| 3referenceidentities | PASS |rev-parse/branch/remotesđúngmốc;C/Go0changes |
+| TBS index/working tree | FAIL, checkoutBLOCKED |Index/lockkhôngcó,ls-files0,status81.399D,sáu thưmục đều0file |
+| TBS sparseconfiguration | PASS configonly |Sáupaths,cone/sparseflagtrue;khôngphảifilesPASS |
+| SelectedGitobjects nghiên cứu | PASS có phạm vi |785/785bloblocal,0missing,15.372.887bytes;no-lazy-fetch |
+| Coneancestorobjects | PASS hiện tại |572/572local,0missing;khác lịch sử572missing,khôngtảitrongphase |
+| 1.357cone filenamebasiccheck | PASS có giới hạn |0reservedWindowsnamestrongtậpmaterialize;khôngchứngnhậnfilesystem/fulltree |
+| Board/Sony/Montage/frameworkdeps | PASS sourceobjects/FAIL disk |Tbs5530/cxd2878/m88rs6060headers+helpers/directLinuxheaderscótree/blob,khôngdisk;khôngfullkernelbuildgate |
+| Windowsdefaultindexdry-run | FAIL tái hiện an toàn |read-tree --dry-run -m -u HEAD exit128 invalidpathAUX,nằmngoàisparse;index/lockvẫnkhôngcó |
+| Recovery/fetch/WSLcopy | NOT RUN |Kếhoạchbackup/rollback/gateschờphêduyệt;khôngconfigoverridehoặcreset |
+| Protocol/PLP/chip/retrydesign | PASS sourceinspection |Exactfile/functions/SHA và khácbiệt ghiRESEARCH;khônghardwareproof |
+| Toolchain build/unit/lint/runtime | NOT RUN mới |KếtquảPhase1.2làlịchsử;khôngrerunđểgọiPASSmới |
+| Firmware/chipID/USBpermission/lock/TSthật | NOT RUN |KhônghardwareIO,cóchặnfirmwarelicense/provenance/addressmap |
+
+### Phase2.1 planned assertions — tất cả NOT RUN
+
+| Nhóm | GatePASS dự kiến | GateFAIL dự kiến |
+|---|---|---|
+| Controlencoding |Exactrequesttype/request/value/index/length/timeoutvàorderedpayloadbytes |Saihoặcthiếuassertion,silentshorttransfer |
+| I2Cwrite/read |7bitaddress,write48/read50guard,90+91atomic,invalidinput0IO |Bare-read/TEN/multipointer/mismatchedaddr/overflowbịgửi |
+| Firmwarebinaryplan |Syntheticdata/hash/allowedranges/chunks1/63/64/65/128/partialtailđúng;reservedaddressreject |Binarythậtkhôngapproved,overread,capđơnlẻcheoverlap |
+| Firmwarefakefailure |Failuremỗistep→FAULTED,khôngREADY/automaticreset/reupload |RetrysideeffecthoặcrestartCPUsaulỗi |
+| Endpointmapping |Permuteddescriptorsluônchọninterface0/BULKIN0x82,ambiguityreject |Chọnfirst-IN0x81hoặcđòiOUT0x01 |
+| Timeout/retry |Errorcausegiữ,physicalIOcountkhônglặp;faultlatchchặnbase10retryIO |Ignoredtimeout/nestedretryreplay |
+| Session/generation |Permissiondeny/detach/latecallback0writes,oldfdinvalidated |Oldsessioncallbackmởdevice/tảifirmware |
+| Cleanup |Cancel→release→closeexactlyonce,từngfailacquire/close2lầnkhôngleak |Fdclosewhileworkersactive,double-release,cleanupvendorwrites |
+| PLP/chip/valuepolicy |Manual0rõràng,0..255validate,IDmapexplicit,PLPchangecầnewrites |“Auto”claimkhôngbằngchứng,Goactiveretuneno-op,otherIDFreiafallback |
+| TSfake/compatibility |188bytefixtureorder/partialreads/oldpacketdrain,wireenumunchanged |Compiles-onlytest,streamingcoilàlock,protocolordinalđổi |
+
+Các plannedcases chỉ ra yêu cầu cho fake/core, không viết productionCXDtables/JNI hoặc testUSBthật. Fixtures/filelist/commands và Phase2.1exitcriteria xemRESEARCH. Documentationvalidation(diff/UTF8/links)ghiWORKLOGsaukhibổsungxong;khôngbiếnbảnthiếtkếthànhtestPASS.
+
 ## 2026-11-02 — Phase 1.2: AGP 9.5.0 và toolchain audit
 
 Windows10.0.19045/PowerShell7.6.9; branch chore/modernize-android-build, HEAD nền ace7e9f187d11a685975f707b6743d779fa847d9, diff chưacommit. AGP9.5.0, Gradle9.8.2/JDK25, compile37.2/target37/min21/Java8, NDK30/CMake4.1.2/BT37; khônghardware.

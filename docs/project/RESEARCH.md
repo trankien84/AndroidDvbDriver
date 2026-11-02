@@ -1,5 +1,219 @@
 # Research log (append-only)
 
+## 2026-11-03 00:54 +07 — Xác nhận checkout TBS phục hồi bởi người dùng
+
+Windows PowerShell tại main repo, nhánh tài liệu `docs/tbs5530-source-architecture`, nền4cf1b64. Người dùng gửi screenshot script Apply PASS và yêu cầu kiểm lại. Đã kiểm source thực, không chỉ dựa screenshot.
+
+- TBS `latest` / `2ce787de9f6e81b4294692a45de15596ae2e1322` không đổi. `status --porcelain=v1 -uall` không có dòng, index tồn tại (8.822.766 bytes tại kiểm tra), index.lock không có; sáu sparse paths giữ nguyên.
+- Tạo expected manifest từ `ls-tree` sáu thư mục cộng cone ancestor files; so filesystem: **1.357 expected /1.357 actual,0missing/extra**. `hash-object --stdin-paths` kiểm nội dung theo Git filters/EOL: **0 hash mismatch**. Không dùng checkout sạch thay cho kiểm file thực.
+- File counts sáu trees: dvb-usb100, dvb-frontends438, dvb-core11, tuners114, include/media114, include/uapi/linux/dvb8. Phần còn lại là cone ancestor files, không tải toàn kernel. Board tbs5530.c/.h, Sony cxd2878.c/.h/_priv.h, Montage m88rs6060.c và framework init/firmware source đều hiện diện.
+- `config --show-origin --get core.protectNTFS` exit1/không override lưu. Backup `../logs/tbs-sparse-before-20261103-004911-951/git` tồn tại, after.json ghi PASS/1357file/đúngSHA. Không xóa backup, không khẳng định có thể build full kernel từ sáu sparse paths.
+- C/Go status sạch. Không fetch, index repair hoặc config write do agent; người dùng đã phục hồi trước lượt kiểm. Theo yêu cầu dọn tạm trước đó, script session `Restore-TbsSparseCheckout-Reviewed.ps1` chỉ được xóa sau gate trên đạt; source/backup không bị dọn.
+
+**Kết luận hiện tại:** checkout-readiness PASS trong phạm vi sparse dùng nghiên cứu; các BLOCKED index/disk trong Phase2.0 dưới đây là lịch sử đã được giải quyết. Firmware provenance/rights, silicon identity và mọi test USB thật vẫn chưa xác minh.
+
+## 2026-11-03 — Phase 2.0: source readiness, thiết kế và kế hoạch offline
+
+### Phạm vi, phiên bản và loại bằng chứng
+
+Windows PowerShell, cwd `D:\API\TBS5530-DVB-Android\AndroidDvbDriver`, baseline đã push `4cf1b64e03a563f66cfb2b2051fb6f4ed05eacbe`. Main sạch trước tác vụ; tạo nhánh **`docs/tbs5530-source-architecture`** từ đúng baseline để không chỉnh nhánh modernization. Chỉ thay năm hồ sơ, không viết driver/test implementation, không build hoặc chạy phần cứng.
+
+- **Đo trực tiếp trong phase:** Git metadata/tree/object/file existence; đọc source local tại SHA khóa, dry-run không ghi index; kiểm diff tài liệu.
+- **Được source xác nhận:** những requests, thứ tự register, API/state bên dưới. Đây không phải bằng chứng silicon/timing hoặc Android USB hoạt động.
+- **Đề xuất:** class boundaries, giới hạn payload, policy retry/firmware/PLP và test cases. Chưa triển khai/chạy, có thể điều chỉnh trước Phase2.1 sau review.
+- **Chưa có bằng chứng:** firmware provenance/hash/quyền phân phối, chip ID của thiết bị thật, warm/cold/reconnect thực, lock và TS continuity.
+
+| Nguồn | SHA khóa, nhánh | Trạng thái mới đo |
+|---|---|---|
+| Android fork trankien84/AndroidDvbDriver | `4cf1b64e03a563f66cfb2b2051fb6f4ed05eacbe`, baseline modernization | Sạch trước tạo nhánh tài liệu; toolchain không thay |
+| tbsdtv/linux_media | `2ce787de9f6e81b4294692a45de15596ae2e1322`, latest | Index thiếu, 81.399 staged D, sáu thư mục tồn tại nhưng đều 0 file |
+| koreapyj/cxd28xx | `c5fa27eecbe80633cbb365cc44656daea1c0e2e3`, main | Sạch, source thực có trên đĩa |
+| Till0196/coax | `11228b05fb1626bf41c4e1879ace10cd0a8d575c`, main | Sạch, source thực có trên đĩa |
+
+Mỗi câu dẫn file/hàm trong các mục TBS/C/Go dùng đúng SHA ở bảng này; links khóa commit, không dùng tên nhánh động làm chứng cứ. Không fetch/sync/index/analyze. GitNexus không có project index; AgentMemory narrow lookup không có match, source/hồ sơ local là chính.
+
+### Source readiness mới: object nghiên cứu đủ, checkout vẫn BLOCKED
+
+Lệnh TBS dùng `git --no-lazy-fetch`, `GIT_NO_LAZY_FETCH=1`, `GIT_OPTIONAL_LOCKS=0`; không sửa config, không dùng recovery script.
+
+| Kiểm tra | Quan sát 2026-11-03 | Kết luận |
+|---|---|---|
+| HEAD/remote/branch | Đúng SHA và origin official, latest | Mốc nghiên cứu xác định |
+| `.git/index`, `index.lock`, `GIT_INDEX_FILE` | Index không có, lock không có, không override index | `ls-files=0`; không phải sparse sạch |
+| Status | 81.399 `D` ở index | Giữ nguyên, không stage/commit reference |
+| Sparse flags/list | core.sparseCheckout=true, cone=true; đủ sáu patterns | Configuration đúng không chứng minh file được materialize |
+| Sáu thư mục thực | Tất cả hiện hữu, 0 file mỗi thư mục | Checkout FAIL/BLOCKED |
+| Sáu selected trees | 785 paths/785 unique blobs, **0 missing**, 15.372.887 bytes uncompressed | Đọc protocol/frontend offline được |
+| Cone ancestor files | 572 paths/572 blobs, **0 missing hiện tại** | Khác lịch sử 572 missing; không biết tác nhân đã bổ sung, phase này không tải |
+| Toàn cone materialize dự kiến | 1.357 paths, kiểm tên Windows cơ bản 0 unsafe | Chưa là bảo đảm checkout thực hoặc toàn filesystem semantics |
+| Default read-tree dry-run | exit128 `invalid path drivers/gpu/drm/nouveau/nvkm/subdev/i2c/aux.c` | Lỗi Windows vẫn tái hiện; index/lock vẫn không được tạo |
+| core.protectNTFS config query | Không có override lưu, exit1 | Không đổi bảo vệ hệ thống/repository |
+
+**Phân biệt rõ:** `tbs5530.c/.h`, `cxd2878.c/.h/_priv.h`, `m88rs6060.c/.h/_priv.h` và framework helpers đều có trong Git tree và **blob local**, nhưng không có trên đĩa/index. Chúng không nằm ngoài sáu patterns nên không được giải thích là “sparse cố ý bỏ qua”. `aux.c` có trong full HEAD tree ngoài sparse, không materialize nhưng Git Windows vẫn validate tên khi dựng full index. Không kết luận đây chắc chắn là nguyên nhân index mất lúc clone đầu vì thiếu log gốc.
+
+**Dependency inventory đã đối chiếu tree + cat-file:**
+- Board: `drivers/media/usb/dvb-usb/tbs5530.c/.h`; blob C `a1afafb96e952f07c399d1325a774e6f37974017` (10.257 bytes), header `7197e6013437a021255c335f1e1b64c1a44c2108`.
+- Sony: `drivers/media/dvb-frontends/cxd2878.c/.h/cxd2878_priv.h`; C blob `c432fe5e6b8d35b8e21a532b1d36bd4a2471ba5a` (132.388 bytes), header915db9a02612bfff40632c8bd123c868e600b03a, privde0326ee8743a294ba728b4ed003839472baf1b4. Ascot3/Freia code nằm trong C này, không giả định cần một ascot3.c riêng.
+- Satellite để tra phụ thuộc tương lai: `m88rs6060.c/.h/_priv.h` local blobs có; không đưa vào scope triển khai T2 đầu.
+- Framework: `dvb-usb.h`, `dvb-usb-common.h`, `dvb-usb-init.c`, `dvb-usb-firmware.c`, `usb-urb.c`; `dvb_frontend.c`, `include/media/dvb_frontend.h`, `dvb_math.h`, `include/uapi/linux/dvb/frontend.h`: tree/blob có, disk thiếu. Makefile map CONFIG_DVB_USB_TBS5530→tbs5530.o, CONFIG_DVB_CXD2878→cxd2878.o, CONFIG_DVB_M88RS6060→m88rs6060.o.
+- Headers Linux trực tiếp cần diễn giải `include/linux/delay.h`, `i2c.h`, `usb.h`, `firmware.h`, `regmap.h`, `math64.h`: tree/blob local đều có, disk thiếu. Đây là inventory dependency phục vụ nghiên cứu userspace, **không** chứng nhận có toàn bộ transitive headers/build config để build kernel Linux.
+
+### Kế hoạch phục hồi cần phê duyệt riêng — không thực thi
+
+1. Dừng/điều phối mọi tác vụ Git khác trên reference. Khóa SHA, remote, refs, sparse rules và kiểm lại counts/blob availability; không giả định 572 ancestor vẫn thiếu hoặc sẽ luôn đủ.
+2. Backup metadata `.git` và inventory working-tree hiện tại ở thư mục ngoài Git, giữ timestamp/hash/permissions và ghi index vốn không có. Backup phải private/local, không commit credentials/config. Kiểm metadata yên trước và trong backup; nếu đổi thì dừng.
+3. **Phương án A — giữ NTFS, ít thay đổi:** sau phê duyệt riêng, xem xét command-scoped `-c core.protectNTFS=false` chỉ cho dựng index/working tree tại SHA khóa, cùng no-lazy-fetch và sáu cone rules không đổi. Có thể không cần tải object nữa vì 1.357 blob hiện đều local. Không lưu config, không reset/clean/reclone, không disable sparse hoặc materialize AUX ngoài patterns. Đây là phương án đề xuất, không cấp quyền gửi lệnh ngay.
+4. **Phương án B — source trong filesystem ext4 của WSL2:** tạo bản tham khảo riêng tại đường dẫn ext4 được người dùng xác nhận, giữ repository NTFS nguyên trạng. ext4 xử lý AUX/case/symlink như Linux, nhưng Git Windows vẫn không phù hợp để thao tác index có tên reserved trên share WSL; phải dùng Linux Git. Cần phê duyệt riêng việc tạo bản sao, dung lượng metadata/objects và sửa workspace nếu muốn; không cài SDK trong WSL, không chuyển USB. Có thể tận dụng local objects sau khi kiểm tra closure, không hứa bundle/clone offline sẽ thành công nếu full tree còn promisor objects thiếu. Không clone toàn kernel để giải quyết một file board.
+5. **Gate phục hồi:** HEAD/branch/remote không đổi; sáu rules giữ nguyên; index có; status sạch; 1.357 expected cone files (hoặc manifest phạm vi mới được duyệt) khớp tree/hash sau EOL normalization; đủ board/Sony/helper deps; không download ngoài kế hoạch/không file AUX ngoài scope.
+6. **Rollback:** nếu thất bại, giữ cả trạng thái lỗi và backup, ngừng dùng checkout đó; chỉ hoàn nguyên các đường dẫn/metadata đã thay theo manifest sau review. Không đưa lệnh xóa hàng loạt, không hứa có index cũ để copy lại. Bản WSL mới nếu có sẽ được cô lập, không xóa tự động.
+
+**Lựa chọn hiện tại:** giữ NTFS reference chỉ đọc, nghiên cứu blobs local; **research-readiness PASS có phạm vi, checkout-readiness BLOCKED**. Phê duyệt phục hồi phải là yêu cầu mới, không suy từ Phase2.0. Full kernel build/driver installation không nằm trong kế hoạch.
+
+### Mở rộng đối chiếu protocol và firmware
+
+Nguồn official [tbs5530.c](https://github.com/tbsdtv/linux_media/blob/2ce787de9f6e81b4294692a45de15596ae2e1322/drivers/media/usb/dvb-usb/tbs5530.c), funcs `tbs5530_op_rw`, `tbs5530_i2c_transfer`, `tbs5530_load_firmware`, `tbs5530_properties`; C cộng đồng [tbs5530.c](https://github.com/koreapyj/cxd28xx/blob/c5fa27eecbe80633cbb365cc44656daea1c0e2e3/tbs5530.c); Go [bridge/tbs5530](https://github.com/Till0196/coax/blob/11228b05fb1626bf41c4e1879ace10cd0a8d575c/internal/coaxd/usb/bridge/tbs5530/tbs5530.go) và [bridge/tbs](https://github.com/Till0196/coax/blob/11228b05fb1626bf41c4e1879ace10cd0a8d575c/internal/coaxd/usb/bridge/tbs/tbs.go).
+
+| Chức năng | Byte/request được source xác nhận | Thiết kế an toàn đề xuất |
+|---|---|---|
+| EP0 control | Request type0x40 OUT/0xc0 IN, value/index tùy request, timeout2000ms | Giữ request/value/index/buffer offset/length rõ ràng, kiểm return==length; negative/short/zero là lỗi, không loop nối phần thiếu của vendor transaction |
+| I2C write |0x80, value/index0, payload `[n+1,addr7<<1,data...]` |addr0..127, chỉ write flags cho phép, chưa dùng helper send/recv gắn TEN; reject bare read |
+| I2C register read |0x90 OUT `[readLen,addr7<<1,register]`, sau đó0x91 IN |Một byte pointer, cùng address write/read, khóa cả cặp; nếu0x90fail không0x91 |
+| Giới hạn |Official/C buffer50; Go write max62 |Khởi đầu conservative write data1..48bytes/read1..50bytes để không vượt C buffers; là policy phần mềm, không claim hardwarelimit; reject trướcIO. Liftinglimit cần source/test riêng |
+| TS route |0x8a OUT `[0x0a,0]` T/C hoặc `[0x0a,1]` satellite |T2 chỉ terrestrial; không coi selector là stop/gate |
+| Endpoints |EP0 cho vendor;0x82 bulk TS;0x81 generic_bulk_ctrl_endpoint config |Chọn interface ID0/alternate mô tả phù hợp, endpointaddress0x82+IN+BULK; không endpoint(0)/first-IN hoặc yêu cầu OUT0x01 |
+| Firmware |0xa0, resetregs0x7f92/0xe600, stop1 → data offsets từng64 → restart0 →100ms |Chỉ planner/fake ở2.1. Binary cuối không overread; không retry upload/CPUwrite tự động sau lỗi hoặc interrupt |
+
+Official `dvb-usb-firmware.c::usb_cypress_load_firmware` là loader generic parse hexline khác **device-specific raw contiguous image** trong `tbs5530_load_firmware`; không reuse IntelHEX parser chỉ vì đều gọiA0. TBS no_reconnect=1 và [dvb-usb-init.c](https://github.com/tbsdtv/linux_media/blob/2ce787de9f6e81b4294692a45de15596ae2e1322/drivers/media/usb/dvb-usb/dvb-usb-init.c)::dvb_usb_device_init cold branch tiếp tục khi upload trả0, không chờ enumerate; đó là assumption framework, **không đảm bảo** Android connection/permission/fd vẫn dùng được. Go board.open reload mỗiopen cũng là policy Go, không là hardware warm/cold detector.
+
+Firmware candidate phải được caller cung cấp có source/license/hash/board-image-format/allowed-address-map đã duyệt trước khi có production upload. Go cap0xe200 là một implementation limit, không xác nhận layout mọi blob. Đặc biệt reset address0x7f92 nằm dưới cap0xe200; vì vậy cap đơn lẻ không chứng minh image không chồng control register. Phase2.1 synthetic fixtures phải có explicit allowed range/reserved addresses và reject overlap; chưa chọn real-image cap/hash khi chưa có blob được duyệt. Không bundle/download firmware, không coi tên file hoặc VID/PID là bằng chứng firmware đúng.
+
+Lỗi giữa upload: vào **FAULTED/UNCERTAIN**, không chuyểnREADY, không tự restartCPU/reset hoặc tìm đường phục hồi hardware ngoài kế hoạch. Cleanup chỉ hủy nguồn TS/cancel workers/release interface/close host connection hợp lệ; nó không phải permission để gửi corrective vendor writes. Upload thành công vẫn cần settle/probe/identity mới, chưa tự động reload khi fd cũ chết.
+
+### Frontend, chip dispatch, tuning và PLP: điểm mới cần giữ
+
+Official [cxd2878.c](https://github.com/tbsdtv/linux_media/blob/2ce787de9f6e81b4294692a45de15596ae2e1322/drivers/media/dvb-frontends/cxd2878.c): `cxd2878_attach` L3997 lấy SLVT0x64/SLVX0x66, tuner0x60 theo board; `cxd2878_init` L3171 clear SLVX0x02, đợi4ms, crystal/clock, đợi2/2/21ms, tuner bridge/repeater, tuner init, TS pins; `ascot3_init` L807 đọc tuner0x7f và chọn crystal24MHz code0x18; `ascot3_tune` L560 nhận kHz; `set_frontend` L3699 chuyểnHz→kHz, gate-on/tune/gate-off/tuneEnd. Không rút ngắn sleep/tự đổi register table vì userspace nhanh hơn.
+
+**Khác biệt chip-ID thực trong code, chưa phải kết quả phần cứng:**
+- Official `cxd2878_init/set_frontend`: Ascot3 cho **0x197/CXD6802**; Freia cho **0x19c/CXD6822** và **0x39a/CXD2878A**. Các enums0x396/0x297 có trong header nhưng không tự đồng nghĩa đường tunerinit đã được board này hỗ trợ.
+- C [cxd2878.h](https://github.com/koreapyj/cxd28xx/blob/c5fa27eecbe80633cbb365cc44656daea1c0e2e3/cxd2878.h) macro SONY_TUNER_IS_ASCOT3 mở thêm0x396/0x297, Freia0x19c/0x39a và Helene họ khác. Đây là mở rộng implementation, không tự chọn cho Android trước khi có fixture/hardware.
+- Go `cxd2878.go::usesASCOT3` chỉ0x197, còn lại chọnFreia, trong khi `sony/chip.go::ReadChipID` nhận nhiềuID hơn. Do đó không port rule “mọi ID khác làFreia”; **unknown/out-of-scope ID phải fail closed**, chỉ bảng explicitly reviewed cho0x197/0x19c/0x39a lúc mở rộng production. Phase2.1 chỉ test classifier giả, chưa quảng cáo supportchip.
+
+**PLP (luồng con trong một kênh DVB-T2):** official `cxd2878_set_dvbt2` L2457 và Ccommunity L3300 đều ghi bank0x23/register0xaf=`stream_id&0xff`,0xad=1 **trước** rẽ nhánh active/sleep; manual selection, không specialcase NO_STREAM_ID_FILTER. Vì vậy không gọi default0xff hay zero là auto theo chứng cứ này. Go `sony/terrestrial.go::PLPOrZero` map negative→0; `WakeupDVBT2` manual0xaf/0xad. Comment “chip has no automatic path” chỉ là claim Go, chưa chứng minh khả năng silicon.
+
+**Khác biệt retune quan trọng:** Go `cxd2878.go::Wakeup` active cùngsystem chạy `retuneBand`; nhánhT2 chỉSetBandwidth, không cập nhậtPLP. Official ghiPLP lại mỗiset_dvbt2 kể cả cùngsystem. Thiết kế Android phải test đổiPLP cùngfrequency/bandwidth thật sự phát lệnhPLP+reacquire, không copy shortcutGo. Đây là phát hiện logic source; không gọi đã tái hiện lỗi tunerGo trênhardware.
+
+Public Android `DvbFrontend.setParams`, `DvbDevice.tune` và `dvbservice/Request.REQ_TUNE` hiện chỉfreq/bandwidth/system; DeliverySystem ordinalDVBT,DVBT2,DVBC là wire API. **Chốt đề xuất2.1:** có giá trịPLP int0..255 ở core/internal tune config, reject -1/256; default compatibility **manualPLP0**, ghi rõ không auto/không scanmọiPLP. Chưa thêm TCP request hoặc UI PLP trong2.1; một extension API tương thích phải là nhiệm vụ sau được duyệt. Giữ bandwidth ở Hz đủ1_700_000, không `/1_000_000` truncate thành1MHz rồi suy băngtần khác. Phaseđầuưu tiên6/7/8MHz;5/1.7chỉsau bảng/fixture đượcreview.
+
+### Tích hợp Android: lựa chọn ít thay đổi và trạng thái
+
+Các path Android bên dưới dùng baseline4cf1b64. Kết quả Phase0 vẫn hữu ích; Phase2.0 chỉ chốt phần retry/lifecycle chưa đủ rõ.
+
+- `drivers/.../usb/DvbUsbDeviceRegistry.java::Creator` trả **DvbDevice**, không bắt buộc subclassDvbUsbDevice. Registry construction chỉ match descriptors, không được upload/probe I2C trongconstructor/listDevices.
+- `DvbUsbDevice.open/close` làfinal, tựretry power/readConfig/attach/init; tune/status cũngretry. **Hiệu chỉnh nghiên cứu cũ:** `Retry.retry(4)` thực chạy **tối đa5attempts** (mộtlầnđầu+4retry), không4attempts; I2cAdapter có10iterations. Do đó outerretry có thể lặp sideeffects và cleanupfailedopen không cófinally đầyđủ. Không sửa chung Retry/framework trongphase này.
+- **Đề xuất productionadapter sau2.1:** `Tbs5530DvbDevice extends DvbDevice` để owns open/failure/close với exactly-once sideeffects; tái dùng Creator, UsbPermissionObtainer, DvbDemux, DvbFrontend/DvbTuner, ByteSource/UsbBulkSource. Đây là điều chỉnh có lý do so với đề xuấtPhase0 extendsDvbUsbDevice; không thiết kế lạiframework hoặc ép cácdriver cũ đổi lifecycle.
+- `Tbs5530I2cAdapter extends I2cAdapter` dùng bridgecore khóa/singleattempt. Do baseI2cAdapter tự10iterations không phânloạilỗi, core phải latch **FAULTED sau bất kỳIO thấtbại**: lần gọi lại chỉ throw, **khôngIO tiếp**. Sau này có thể xem protectedretrypolicyhook trongtask riêng nếu cần;2.1khôngsửa baseI2cAdapter hoặc dùng retry10làm recoveryhardware.
+- TS productionwrapper `Tbs5530TsSource implements ByteSource` composeUsbBulkSource, chọnrouteT2 trước queue, cancel/release theo thứtự,khôngcoialternate0làTBSgate. `DvbDevice.DataPump` startstreamtrướctune trongluồngapphiệncó, nên choqueue chờdữliệukhi bridge/frontendready màchưaLOCKED; stateSTREAMING không khẳngđịnhFE_HAS_LOCK. Retune phải ngăn oldchanneldata qua demuxreset/drain strategy đượctest.
+- Close tránh giữcontrol/sessionlock khi joinDataPump đểkhôngdeadlock; cancelread trước đóngfd; cleanup từng resource trongfinally,khôngcloseconnđangđượcJNI dùng. `DvbDevice.close` hiện join khôngtimeout và nativecancel/free phụthuộclifecycle; đây là gateproduction cầntest,khôngđược fakePASS bằngloadlibrarysmoke.
+- `dvbservice` giữ loopbackcontrol/TSsockets vàmediaPlaybacklifecycle; `app` giữchẩnđoán vàkhôngtunerflow, không điềukhiểnfakeUSB đểmởservice. Khôngthêm satellite enums/lệnhwire trong2.1.
+
+```mermaid
+flowchart TD
+  App[app: diagnostic UI] --> Registry[Existing registry / Creator]
+  Service[dvbservice: control and TS sockets] --> Registry
+  Registry --> Device[Tbs5530DvbDevice - future adapter]
+  Device --> Session[Tbs5530Session - bounded state and ownership]
+  Session --> Bridge[Tbs5530Bridge - EP0 and I2C protocol]
+  Session --> Frontend[Cxd2878Frontend - future DVB-T2 registers]
+  Frontend --> Tuner[Ascot3 or Freia: explicit chip map]
+  Tuner --> I2C[Existing I2cAdapter contract]
+  Frontend --> I2C
+  I2C --> Bridge
+  Bridge --> Control[Tbs5530ControlIo - narrow transport seam]
+  Control --> Fake[Phase2.1 ScriptedFakeControlIo only]
+  Control --> Android[Future UsbDeviceConnection adapter]
+  Session --> Plan[Tbs5530FirmwarePlan - synthetic fixtures only]
+  Device --> TS[Tbs5530TsSource - future ByteSource wrapper]
+  TS --> Bulk[Existing UsbBulkSource / native UsbXfer]
+  Bulk --> Demux[Existing DvbDemux / InputStream]
+  Demux --> Service
+  Demux --> App
+```
+
+State model gồm session identity/generation, frontendstate và streamflag riêng (không gộp thành enum “streaming=locked”):
+
+| Event | State/result đề xuất | IO/retry/ownership |
+|---|---|---|
+| Discover/create | DETECTED | Chỉdescriptors,0USBwrites |
+| open→permission | WAIT_PERMISSION | Khônglock/chờFuture trênUIthread;deny/timeout/cancel→CLOSED,0firmwareIO |
+| permission→connection | HOST_OPEN | Xácnhậndescriptors/interface/EP0x82,claimkiểmreturn;khôngwarm=enumerated |
+| Approved firmware process | FW_TRANSITION | Syntheticplanở2.1;productionexecutioncầnapproval/license/hash/addressmap |
+| writefail/detach/unknownpostupload | FAULTED hoặc DISCONNECTED | Invalidategeneration/fd,cancelreads;0autoretry/reset/reupload |
+| settle/probe success | BRIDGE_READY | Probechínhthứcchưađượctest;permission/deviceidentitymớiđượccheck |
+| Sony init→tunerinit/TS pins | FRONTEND_READY | ExplicitIDmap,failclosedonunknown;gatefinally;0satelliteGPIO |
+| tune(validT2) | ACQUIRING→LOCKED hoặc NO_LOCK | TimeoutkhônglàIOreplay;tune/statusbound,PLP/manual0rõràng |
+| streamopen | streamActive=true độc lậpLOCKED | RouteT20x8a,queue0x82;khôngcho2frontendstreamsong song |
+| close/failure | CLOSED/FAULTED | Exactly-oncecancel/release/close;khôngvendorcleanupwrites |
+
+**Reconnect:** detachevent làm mọi callback cũ mang generationN vô hiệu; thiếtbịre-enumerate generationN+1 phảiđượcmatchVID/PID+descriptor/identityvàxinpermissionmới nếu cần. Khôngtựopen/upload từbroadcast hoặc coi samePID/path là samefirmwaresession. Bounded wait/probe dùng fakeclock; actualI2Cprobe cũnglàvendorOUTwrite nên khôngđượcthực hiệnởPhase2.0/2.1offline.
+
+### Class/component và danh sách Phase2.1
+
+**Phase2.1 được đề xuất là offline protocol foundation, KHÔNG hoàn tất productiondriver.** Toàn bộ core dùng plainJava8, không UsbDeviceConnection/Androidcontext/JNI để puretests; khôngCreatorregistration, khôngUSBpermissionrequest, khôngrealfirmwareexecutor. Chỉthêmabstraction cócầncho dependency injection,khôngframeworktransporttoàncục.
+
+Basepath main: `drivers/src/main/java/info/martinmarinov/drivers/usb/tbs5530/` (chưa tạo):
+
+| File dự kiến | Trách nhiệm và scope2.1 |
+|---|---|
+| `Tbs5530ControlIo.java` | Mộtmethod control(type,request,value,index,buffer,offset,length,timeout), trả count hoặc typedfailure; fake-only implementation trongtest |
+| `Tbs5530Bridge.java` | Encode/validateEP0/I2C, atomicpair,returncount/errorpolicy;innerSessionState/endpointchoicevalueobject nếu đủgọn |
+| `Tbs5530FirmwarePlan.java` | Purevalidatebytes+approvedpolicy/allowedranges,immutablechunkplan;khôngđọcresourceblobthật hoặc uploadAPIproduction |
+| `Tbs5530Session.java` | State/generation/ownership và guardfailedsession; nested injectedclock/sleeper/lifecycleports tối thiểu chỉkhinécesstest;khôngfakephysicaldevice |
+
+Basepath test: `drivers/src/test/java/info/martinmarinov/drivers/usb/tbs5530/` (chưa tạo):
+- `ScriptedFakeControlIo.java`: scriptedreturns,copybuffertrước/sau,exactorderedcalls;unexpectedcall làmtestfailngay.
+- `Tbs5530BridgeTest.java`, `Tbs5530FirmwarePlanTest.java`, `Tbs5530SessionTest.java`: cases và assertions bên dưới; fakebyte-source/lifecycle/clock nested trongtestkhi chưa cầnreuse.
+
+Chỉnhsửa2.1: chỉcác hồ sơSTATUS/RESEARCH/DECISIONS/WORKLOG/TEST-MATRIX theo kết quả; **không cần sửa build.gradle/dependency** vìJUnit/Mockitođãsẵn. Nếu cósource khác phải sửađểtest,reviewscopetrước. Deferredproductionfiles (không2.1): `Tbs5530DvbDevice`, `Tbs5530DvbDeviceCreator`, `AndroidTbs5530ControlIo`, `Tbs5530I2cAdapter`, `Cxd2878Frontend`, `Ascot3Tuner`/`FreiaTuner`, `Tbs5530TsSource`. Registry/javaIDs/XMLfilter chỉthêm cùngđợt productionadapterđượcduyệt; devservice/app khôngđổiprotocol,usbxfer/JNI khôngsửa trongofflinefoundation.
+
+### Offline test strategy: assertions và tiêu chí
+
+Tất cả hàng dưới **NOT RUN / PLANNED** ởPhase2.0. Firmware fixtures được sinh từbytesgiả,khôngcopyblob/licensechưađượcduyệt. Fake khôngcallUSB/ADB/WSL/native.
+
+| Nhóm test | Assertions bắt buộc / PASS | FAIL nếu |
+|---|---|---|
+| EP0 encoding |types0x40/c0,requests80/90/91/8a,expectedvalue/index/offset/length/timeouts,mảngreadcopyđúng | Sai byte/order/length,returnshort bịcoilàsuccess |
+| I2Cwrite |1byte→`[2,addr<<1,data]`;bound48đúng;7bitaddr/flags;0/49/invalidaddrreject0IO | Shift2lần,bare-read/TEN bịgửi,overflowbuffer |
+| I2Cread |0x90baobytesrồi0x91,lockpairkhônginterleave,read1/50bound,51/multipointer/mismatchaddrreject0IO |0x91sau0x90fail,concurrentbankreadmix,responsezero-fillcheerror |
+| Controlshort/timeout/error |Count-1/0/short đưaFAULTED;giữnguyêncause/requestcontext;subsequentcall0extraIO | Autoloopresendvendorwrite,ignoredexception |
+| Firmwarevalidation |Empty/wrongdigest/boardpolicy/address-overlap/overflowrejecttrướcmọiIO;fixtures1/63/64/65/128planexactchunks,tail1không64 | Assumevalidtừfilename,copyleft=firmwareright,tailoverread |
+| Firmwaresequence fake |Stop1bothregs,orderedA0offsetchunks,restart0bothregs,wait100mschỉsaukếtquảđủ;errorởmỗistep→UNCERTAINkhôngauto-replay | Restart/READYsaulỗi,reuploadkhôngapproval,newcallbackdùngfdcũ |
+| Endpointselection |FakeimmutabledescriptorlistpermutationsluônchọnID0/IN+BULK0x82;rejectmissing/ambiguous/wrongtype | Chọn0x81/endpointindex0/đòiOUT0x01 |
+| State/generation |Permissiondeny/detach/reconnect/cancel/latecallbackkhôngwrites;readyonlysauprereqs;no-lockkhácIOerror | Callbackgenerationcũmở lại/disconnectedstreamtiếptục |
+| Retries |Exactly1physicalfakecallchosideeffect;max2attemptschỉlogicalread-onlyoperationđãreviewtrướckhôngfaillatch,default0retry | CPU/I2Cwrite/TuneEndbịretry,nestedbasewrappersgửilại |
+| Resourcecleanup |Injectfailởtừngacquire,assertcancel→release→closeexactlyonce;close2lầnnoextraIO;fakeworkersjoinkhôngdeadlock | fdclosedtrướccancel,leak,double-release,cleanupvendorwrites |
+| Frontend policy fixtures | Bảng ID explicit0x197/0x19c/0x39a; PLP0/255 hợp lệ, -1/256 bị từ chối; đổi PLP cùng mode phải tạo yêu cầu retune mới; giữ đúng Hz/kHz và1.7MHz | Mặc định ID khác là Freia, gọi manual0 là auto, bỏ qua thay đổi PLP |
+| TS/demuxfake |Synthetic188packetbịsplitởreadboundarieskhôiphụcthứtự/PIDs,stopreopenkhôngleakoldpackets;streamflagkháclock | Count-basedtestkhôngassertpayload,streamingđồngnghĩalock |
+
+Retry read-only có nghĩa **logicaloperation không hardware mutation**; registerreadTBSthực hiện0x90OUT nêndefault **không tự retry** khi busstateuncertain. Nhómfrontend/TSfixture ở2.1 chỉvalidatepolicy/valuecontracts/fakesession,khôngdựngregistertablesCXDhoặcthưviệnMPEGparsermới. Nếu cầntestDvbDemuxthậtAndroidNativePipe, đểinstrumentation/offlinerecordedfixturephase riêng, không dùngplainJVMpasslàmchứngminh.
+
+### Risk ranking và kế hoạch2.1 có thứ tự
+
+| Mức ảnh hưởng | Rủi ro | Khả năng kiểm thử / xử lý |
+|---|---|---|
+| Critical | Firmware/reset lặp khiretry hoặcdeviceidentitysai | Exactorderedfake/failedlatchkiểmoffline;realreconnectcầnapprovalhardware |
+| High | TBScheckoutindexlỗi/AUX,sourceprovenance | Tree/blobmanifestđãđo;recoveryBLOCKEDchờphêduyệt,khôngchặnplaincorevớilocalblobs |
+| High | PLPmanualkhácauto,GoactiveretunebỏPLP | Goldenfixtureofficial0xaf/0xad;publicwireextensiondeferred |
+| High | ChipIDdispatchconflict/unknownsilicon | Failclosedexplicitmap;hardwarechipID/tunergatechưarun |
+| High | Nativecancel/fdlifetime/demuxthreaddeadlock | Fakescancheckorder;JNIstress/AndroidUSBthậtlàgateproductionchưađạt |
+| High | Androidpermission/detach/re-enumeration | Generation+futuretimeoutfake;dialog/receiver/AndroidHosttestriêng |
+| Medium–High | EP0/0x81/0x82confusion,bytecounts/timeouts | Permuteddescriptors/exactrequests/shortreadfaultoffline |
+| Medium | Service/appstreamtrướctune,publicAPIordinal | PreserveRequest/DeliverySystem,nativewrapperstateorthogonal,existingregressiongates |
+| High | Firmware provenance/giấy phép và khả năng phân phối APK | Giữ notices và kiểm giấy phép từng file; firmware hash/nguồn gốc/quyền phân phối vẫn BLOCKED |
+
+**Thứ tự Phase2.1 đề xuất:** (1) review ADR-010 và scopeoffline; (2) khóafixture-sourceSHA/boundarycontracts; (3) viết ScriptedFakeControlIo cùngfailingtestsexactbytes; (4) implement bridge/payload+endpointselectorfakeonly; (5) firmwarevalidation/chunkplan/addresspolicy vàerrorsequencefake; (6) sessionstates/generation/cleanup/retrypolicyfake; (7) chạyfocusedJUnitnhómTBS,rồiallunitdrivers/usbxfer/dvbservicevàdebug/lintnếutouchedmain; (8) cậpnhậtmatrix/cmd/fixtures/provenancevàdừng,khôngregisterboard hoặcopenrealUSB. Khôngcầnnângtoolchain/càidependency/images,khôngcầnphục hồifullkernelđểbắtđầuofflinecore.
+
+**Tiêu chí raPhase2.1:** mọicaseđãcamkếtcóassertionthậtvàđượcchạy;0IOngoàifake,0regressiondrivercũ,registry/XML/Requestordinalsunchanged;firmwarekhôngđượcbundlehaygửi;state/failuretestđủtrướcconsiderproductionadapter. Gatehardwarechỉmởởkếhoạchđượcthôngquariêng,khônghứaDVB-T2locktừunitPASS.
+
 ## 2026-11-02 — Migration stable mới trên JDK25 và ngoại lệ API21
 
 **Scope approval:** người dùng13:06+07 cho nâng build/dependencies và sửa code tương thích; ask_user xác nhận giữ Android minSdk21 và references local read-only. Nhánh mới `chore/modernize-android-build`, nền SHA `e4c13a5b86ad5ef9be887df58226046dcb42dcd5`; không commit/push. Không triển khai TBS driver/hardware.

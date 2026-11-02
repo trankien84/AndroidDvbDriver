@@ -1,5 +1,43 @@
 # TBS5530 Android port — current status
 
+## Checkpoint Phase 2.0 — 2026-11-03 00:58 +07
+
+- Người dùng yêu cầu commit và push năm hồ sơ nghiên cứu/thiết kế cùng kết quả xác minh checkout NTFS đã phục hồi. Nhánh phát hành là `docs/tbs5530-source-architecture`, không merge vào modernization.
+- Message: `docs: finalize TBS5530 architecture and source readiness`. Hash của checkpoint tra `git log -1`; trạng thái push phải đối chiếu origin sau thao tác. Những mục “chưa commit” bên dưới là lịch sử trước checkpoint.
+- Đã kiểm diff, UTF-8 và liên kết tương đối; không chạy lại build/hardware vì chỉ sửa tài liệu. Không đưa source tham khảo, backup hoặc script tạm đã xóa vào commit. Bước tiếp theo vẫn là phê duyệt Phase 2.1 offline foundation.
+
+## TBS checkout đã phục hồi trên NTFS — 2026-11-03 00:54 +07
+
+**Đã kiểm chứng trực tiếp sau khi người dùng tự chạy script phục hồi:** TBS vẫn ở nhánh `latest`, SHA `2ce787de9f6e81b4294692a45de15596ae2e1322`; Git index tồn tại, working tree sạch, không còn 81.399 staged deletions. Sáu sparse paths giữ nguyên.
+
+- Đủ **1.357 file** theo cone manifest tại HEAD, **0 file thiếu/thừa, 0 hash khác**. Các source TBS5530/CXD2878/M88RS6060 và helpers đã có trên đĩa. Không còn blocker checkout đã mô tả trong snapshot Phase2.0 bên dưới.
+- Không có index.lock; không lưu override `core.protectNTFS`. Backup thành công còn nguyên tại parent `logs/tbs-sparse-before-20261103-004911-951`, có after.json PASS. Giữ backup; chỉ dọn script tạm theo yêu cầu trước của người dùng sau khi xác minh.
+- C/Go working tree sạch. Agent chỉ kiểm đọc reference; phục hồi do người dùng thực hiện. Không build kernel hoặc kiểm thử phần cứng, không thay toolchain.
+- Main vẫn nhánh `docs/tbs5530-source-architecture`, HEAD4cf1b64, các hồ sơ chưa commit. **Bước tiếp theo:** review và phê duyệt Phase2.1 offline foundation; không tự bắt đầu driver production/USB writes.
+
+
+## Phase 2.0 — Source readiness và kiến trúc, 2026-11-03
+
+**Baseline ổn định:** `chore/modernize-android-build` tại **`4cf1b64e03a563f66cfb2b2051fb6f4ed05eacbe`**, đã push ở Phase 1.2. Working tree sạch khi bắt đầu. **Nhánh làm việc:** `docs/tbs5530-source-architecture`, cùng HEAD, chỉ thay năm hồ sơ; chưa stage/commit/push. Không đổi toolchain, code production hoặc repository tham khảo.
+
+### Mức sẵn sàng đã kiểm lại
+
+- **Checkout TBS vẫn BLOCKED:** SHA `2ce787de9f6e81b4294692a45de15596ae2e1322`, nhánh latest. Git index bị thiếu; status có 81.399 staged deletions. Sáu thư mục sparse đã cấu hình nhưng đều có 0 file. `read-tree --dry-run` vẫn trả exit128 do tên AUX trong phần cây ngoài sparse; index và lock không thay đổi.
+- **Đủ đọc nguồn qua Git objects trong phạm vi nghiên cứu:** 785 blobs ở sáu thư mục và **572 blobs ở các thư mục cha đều có local**, tổng cộng 1.357 file dự kiến khi materialize. **572 blobs thiếu là kết quả lịch sử, không còn đúng ở lần kiểm này.** Không tải objects trong phase; chưa biết tác nhân đã bổ sung trước đó. Source board/Sony/Montage, helpers và Linux headers trực tiếp đọc được nhưng chưa có file trên đĩa. Không chứng nhận có thể build toàn kernel.
+- **C/Go sạch:** C `c5fa27eecbe80633cbb365cc44656daea1c0e2e3`, Go `11228b05fb1626bf41c4e1879ace10cd0a8d575c`. Không fetch/sync/reset/repair hoặc đổi config. Kế hoạch backup, rollback, tiêu chí phục hồi và so sánh NTFS với ext4 WSL ở RESEARCH; mọi phục hồi cần phê duyệt riêng.
+
+### Kết luận thiết kế mới
+
+- USB control/I2C đi qua **EP0**; MPEG-TS dùng một bulk endpoint **0x82**. Không nhầm với 0x81 hoặc cơ chế bulk-control của CxUsb. Firmware TBS dùng ảnh nhị phân raw, không dùng loader Intel HEX generic.
+- **PLP là luồng con của kênh DVB-T2.** Official ghi lại lựa chọn PLP mỗi lần tune; nhánh retune cùng chuẩn trong Go chỉ đổi bandwidth. Đề xuất mặc định **manual PLP0**, không gọi là auto. API/TCP cho người dùng chọn PLP để sau.
+- **Chip dispatch khác nhau giữa các nguồn:** official chọn Ascot3 cho 0x197, Freia cho 0x19c/0x39a; community mở thêm ID. Không dùng fallback mọi ID khác là Freia. Chip chưa biết phải bị từ chối an toàn; silicon thực tế vẫn chưa đo.
+- **Retry/lifecycle:** `Retry.retry(4)` thực có tối đa năm attempts. `DvbUsbDevice.open/close` là final và tự retry, có nguy cơ lặp firmware/reset. Adapter production tương lai dự kiến extends **DvbDevice**, kết hợp permission/I2C/frontend/native TS/demux hiện có, không refactor các driver cũ. Sau lỗi làm trạng thái thiết bị không chắc chắn, không gửi IO tiếp hoặc tự phục hồi phần cứng.
+- **Phase 2.1 đề xuất chỉ làm nền tảng offline:** ControlIo/Bridge/FirmwarePlan/Session và scripted fakes với assertions. Chưa đăng ký VID/PID, chưa viết adapter USB thật, uploader hay frontend production. Danh sách file, thứ tự công việc, rủi ro và test cases nằm ở RESEARCH/ADR-010. Toàn bộ tests mới **NOT RUN**.
+
+**Điểm dừng:** hoàn tất nghiên cứu và thiết kế Phase 2.0; chưa phục hồi checkout. Không firmware/I2C/vendor writes/reset/usbipd hoặc test phần cứng. Không build/regression mới vì chỉ sửa tài liệu. **Một bước an toàn kế tiếp:** xin duyệt Phase 2.1 offline foundation theo ADR-010; tách việc phục hồi checkout TBS thành phê duyệt riêng.
+
+Nguồn khóa SHA, sơ đồ, phương án phục hồi, file list và tiêu chí PASS/FAIL: [RESEARCH.md](RESEARCH.md). Quyết định: [DECISIONS.md](DECISIONS.md). Readiness và tests dự kiến: [TEST-MATRIX.md](TEST-MATRIX.md).
+
 ## Checkpoint phát hành Phase 1.2 — 2026-11-02 23:39 +07
 
 - Người dùng yêu cầu add, commit và push toàn bộ thay đổi Phase1.2 lên `origin/chore/modernize-android-build` (fork `trankien84/AndroidDvbDriver`). Message chọn: `build: upgrade AGP to 9.5.0 and fix toolchain inventory`.
