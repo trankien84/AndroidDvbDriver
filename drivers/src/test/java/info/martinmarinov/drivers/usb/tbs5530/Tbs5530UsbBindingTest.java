@@ -38,6 +38,9 @@ public class Tbs5530UsbBindingTest {
             if (claimed != null) claimed.run();
             if (claimFails) throw new IOException("claim failure");
         }
+        public int controlTransfer(int type,int request,int value,int index,byte[] buffer,int offset,int length,int timeout) {
+            calls.add("control"); return length;
+        }
         public void cancel() { calls.add("cancel"); }
         public void release() throws IOException { calls.add("release"); if (releaseFails) throw new IOException("release failure"); }
         public void close() throws IOException { calls.add("close"); if (closeFails) throw new IOException("close failure"); }
@@ -93,6 +96,17 @@ public class Tbs5530UsbBindingTest {
             f.worker.drain(); assertEquals(1, f.usb.opens); assertEquals(Tbs5530Session.State.CONNECTED, f.session.getState());
             assertTrue(f.session.isInterfaceClaimed()); assertFalse(f.session.isStreaming()); assertFalse(f.session.isFrontendInitialized());
             assertEquals(1, f.usb.receiverCloses); assertTrue(f.errors.isEmpty());
+        }
+    }
+    @Test public void bindingPublishesOnlyManagedClaimedCapabilityAndKeepsSingleOpen() throws Exception {
+        try(Fixture f=new Fixture()) {
+            assertThrows(IOException.class,f.binding::controlIo);
+            f.request(); assertThrows(IOException.class,f.binding::controlIo);
+            f.usb.grant(); f.worker.drain(); Tbs5530ControlIo control=f.binding.controlIo();
+            control.controlTransfer(0x40,0x8a,0,0,new byte[]{10,0},0,2,2000);
+            assertEquals(1,f.usb.opens); assertEquals(Arrays.asList("claim","control"),f.usb.connections.get(0).calls);
+            f.binding.cancel(); assertThrows(IOException.class,()->control.controlTransfer(0x40,0x8a,0,0,new byte[]{10,0},0,2,2000));
+            f.worker.drain(); assertEquals(Arrays.asList("claim","control","release","close"),f.usb.connections.get(0).calls);
         }
     }
     @Test public void alreadyGrantedStillAcquiresOffCallerThreadWithoutDialog() throws Exception {

@@ -8,6 +8,7 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
+import android.hardware.usb.UsbEndpoint;
 import android.hardware.usb.UsbInterface;
 import android.hardware.usb.UsbManager;
 import android.net.Uri;
@@ -53,6 +54,25 @@ public final class Tbs5530AndroidUsbFacade implements Tbs5530UsbBinding.Facade {
         int interfaceCount() throws IOException;
         int interfaceId(int index) throws IOException;
         int alternateSetting(int index) throws IOException;
+        default int endpointCount(int interfaceIndex) throws IOException {
+            throw new IOException("Endpoint descriptors are unavailable");
+        }
+        default int endpointAddress(int interfaceIndex, int endpointIndex) throws IOException {
+            throw new IOException("Endpoint address is unavailable");
+        }
+        default int endpointDirection(int interfaceIndex, int endpointIndex) throws IOException {
+            throw new IOException("Endpoint direction is unavailable");
+        }
+        default int endpointType(int interfaceIndex, int endpointIndex) throws IOException {
+            throw new IOException("Endpoint type is unavailable");
+        }
+        default int endpointMaxPacketSize(int interfaceIndex, int endpointIndex) throws IOException {
+            throw new IOException("Endpoint packet size is unavailable");
+        }
+        default int controlTransfer(int requestType, int request, int value, int index,
+                                    byte[] buffer, int offset, int length, int timeoutMillis) throws IOException {
+            throw new IOException("Control transfer is unavailable");
+        }
         boolean claim(int index, boolean force) throws IOException;
         boolean release(int index) throws IOException;
         void close() throws IOException;
@@ -73,7 +93,7 @@ public final class Tbs5530AndroidUsbFacade implements Tbs5530UsbBinding.Facade {
     public Tbs5530AndroidUsbFacade(Context context, Manager manager, int alternateSetting) {
         this.application = application(context);
         this.manager = Objects.requireNonNull(manager, "manager");
-        if (alternateSetting < 0) throw new IllegalArgumentException("Invalid alternate setting");
+        if (alternateSetting < 0 || alternateSetting > 255) throw new IllegalArgumentException("Invalid alternate setting");
         this.alternateSetting = alternateSetting;
     }
 
@@ -242,7 +262,16 @@ public final class Tbs5530AndroidUsbFacade implements Tbs5530UsbBinding.Facade {
                 }
             }
             if (selected < 0) throw new IOException("USB interface 0 alternate setting unavailable");
-            return new OwnedConnection(raw, selected, device);
+            List<Tbs5530Descriptors.Endpoint> endpoints = new ArrayList<>();
+            int count = raw.endpointCount(selected);
+            if (count < 0 || count > 30) throw new IOException("Invalid USB endpoint count");
+            for (int endpoint = 0; endpoint < count; endpoint++) {
+                endpoints.add(new Tbs5530Descriptors.Endpoint(0, alternateSetting,
+                        raw.endpointAddress(selected, endpoint), raw.endpointDirection(selected, endpoint),
+                        raw.endpointType(selected, endpoint), raw.endpointMaxPacketSize(selected, endpoint)));
+            }
+            Tbs5530Descriptors.Endpoint stream = Tbs5530Descriptors.selectBulkEndpoint(endpoints, alternateSetting);
+            return new OwnedConnection(raw, selected, device, stream);
         } catch (IOException | RuntimeException failure) {
             try { raw.close(); } catch (IOException | RuntimeException cleanup) { failure.addSuppressed(cleanup); }
             throw io("Cannot acquire USB interface", failure);
@@ -253,12 +282,46 @@ public final class Tbs5530AndroidUsbFacade implements Tbs5530UsbBinding.Facade {
         private final RawConnection raw;
         private final int index;
         private final Device device;
+        private final Tbs5530Descriptors.Endpoint stream;
         private boolean claimed, releaseAttempted, closed;
 
-        OwnedConnection(RawConnection raw, int index, Device device) {
+        OwnedConnection(RawConnection raw, int index, Device device, Tbs5530Descriptors.Endpoint stream) {
             this.raw = raw;
             this.index = index;
             this.device = device;
+            this.stream = stream;
+        }
+
+        private void requireClaimed() throws IOException {
+            if (!claimed || closed || releaseAttempted) throw new IOException("USB connection is not claimed and active");
+        }
+
+        @Override public Tbs5530Descriptors.Endpoint streamEndpoint() throws IOException {
+            requireWorker();
+            synchronized (this) {
+                requireClaimed();
+                return stream;
+            }
+        }
+
+        @Override public void requireControlWorker() throws IOException { requireWorker(); }
+
+        @Override public int controlTransfer(int requestType, int request, int value, int index,
+                                             byte[] buffer, int offset, int length,
+                                             int timeoutMillis) throws IOException {
+            // Reject main-thread calls before acquiring a lock that a native transfer may hold.
+            requireControlWorker();
+            synchronized (this) {
+                requireClaimed();
+                if (requestType < 0 || requestType > 255 || request < 0 || request > 255
+                        || value < 0 || value > 65535 || index < 0 || index > 65535
+                        || offset < 0 || length < 0 || length > 65535 || timeoutMillis <= 0
+                        || (buffer == null ? offset != 0 || length != 0
+                        : offset > buffer.length || length > buffer.length - offset)) {
+                    throw new IllegalArgumentException("Invalid USB control-transfer parameters");
+                }
+                return raw.controlTransfer(requestType, request, value, index, buffer, offset, length, timeoutMillis);
+            }
         }
 
         @Override public synchronized void claim(Tbs5530LifecycleCoordinator.Claim receipt) throws IOException {
@@ -330,6 +393,27 @@ public final class Tbs5530AndroidUsbFacade implements Tbs5530UsbBinding.Facade {
                 @Override public int interfaceCount() { return selected.getInterfaceCount(); }
                 @Override public int interfaceId(int index) { return descriptor(index).getId(); }
                 @Override public int alternateSetting(int index) { return descriptor(index).getAlternateSetting(); }
+                private UsbEndpoint endpoint(int interfaceIndex, int endpointIndex) {
+                    return descriptor(interfaceIndex).getEndpoint(endpointIndex);
+                }
+                @Override public int endpointCount(int interfaceIndex) { return descriptor(interfaceIndex).getEndpointCount(); }
+                @Override public int endpointAddress(int interfaceIndex, int endpointIndex) {
+                    return endpoint(interfaceIndex, endpointIndex).getAddress();
+                }
+                @Override public int endpointDirection(int interfaceIndex, int endpointIndex) {
+                    return endpoint(interfaceIndex, endpointIndex).getDirection();
+                }
+                @Override public int endpointType(int interfaceIndex, int endpointIndex) {
+                    return endpoint(interfaceIndex, endpointIndex).getType();
+                }
+                @Override public int endpointMaxPacketSize(int interfaceIndex, int endpointIndex) {
+                    return endpoint(interfaceIndex, endpointIndex).getMaxPacketSize();
+                }
+                @Override public int controlTransfer(int requestType, int request, int value, int index,
+                                                     byte[] buffer, int offset, int length, int timeoutMillis) {
+                    return connection.controlTransfer(requestType, request, value, index,
+                            buffer, offset, length, timeoutMillis);
+                }
                 @Override public boolean claim(int index, boolean force) {
                     return connection.claimInterface(descriptor(index), force);
                 }

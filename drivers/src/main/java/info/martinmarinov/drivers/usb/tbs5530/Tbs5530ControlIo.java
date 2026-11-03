@@ -3,7 +3,7 @@ package info.martinmarinov.drivers.usb.tbs5530;
 
 import java.io.IOException;
 
-/** Injected control-transfer boundary. No Android or native implementation is supplied. */
+/** Injected control-transfer boundary; managed Android connections supply the production adapter. */
 public interface Tbs5530ControlIo {
     int controlTransfer(int requestType, int request, int value, int index,
                         byte[] buffer, int offset, int length, int timeoutMillis) throws IOException;

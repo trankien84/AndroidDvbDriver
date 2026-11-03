@@ -103,9 +103,39 @@ public class Tbs5530AndroidUsbFacadeTest {
         CountDownLatch allowClaim;
         Runnable afterClaim;
         Thread claimThread;
+        int[] addresses = {0x81, 0x82};
+        int direction = 0x80, type = 2, packetSize = 512;
+        boolean unsupportedDescriptors;
+        final List<Integer> descriptorInterfaces = new ArrayList<>();
+        final AtomicInteger controls = new AtomicInteger();
+        final CountDownLatch enteredControl = new CountDownLatch(1);
+        CountDownLatch allowControl;
+        int requestType, request, value, controlIndex, offset, length, timeout;
+        int result = Integer.MIN_VALUE;
+        byte[] controlBuffer, payload;
         @Override public int interfaceCount() { return ids.length; }
         @Override public int interfaceId(int index) { return ids[index]; }
         @Override public int alternateSetting(int index) { return alternates[index]; }
+        @Override public int endpointCount(int interfaceIndex) throws IOException {
+            descriptorInterfaces.add(interfaceIndex);
+            if (unsupportedDescriptors) return Tbs5530AndroidUsbFacade.RawConnection.super.endpointCount(interfaceIndex);
+            return addresses.length;
+        }
+        @Override public int endpointAddress(int interfaceIndex, int endpointIndex) { return addresses[endpointIndex]; }
+        @Override public int endpointDirection(int interfaceIndex, int endpointIndex) { return direction; }
+        @Override public int endpointType(int interfaceIndex, int endpointIndex) { return type; }
+        @Override public int endpointMaxPacketSize(int interfaceIndex, int endpointIndex) { return packetSize; }
+        @Override public int controlTransfer(int requestType, int request, int value, int index,
+                                             byte[] buffer, int offset, int length, int timeoutMillis) throws IOException {
+            controls.incrementAndGet();
+            this.requestType = requestType; this.request = request; this.value = value; this.controlIndex = index;
+            this.controlBuffer = buffer; this.offset = offset; this.length = length; this.timeout = timeoutMillis;
+            payload = buffer == null ? null : Arrays.copyOfRange(buffer, offset, offset + length);
+            enteredControl.countDown();
+            awaitGate(allowControl);
+            if ((requestType & 0x80) != 0 && length > 0) Arrays.fill(buffer, offset, offset + length, (byte) 0x5a);
+            return result == Integer.MIN_VALUE ? length : result;
+        }
         @Override public boolean claim(int index, boolean force) throws IOException {
             claimThread = Thread.currentThread();
             claims.incrementAndGet();
@@ -351,10 +381,11 @@ public class Tbs5530AndroidUsbFacadeTest {
         return new Tbs5530LifecycleCoordinator(session, request -> { }, identity -> facade.open(DEVICE));
     }
 
-    private static void acquire(Tbs5530LifecycleCoordinator coordinator) throws IOException {
+    private static Tbs5530LifecycleCoordinator.Request acquire(Tbs5530LifecycleCoordinator coordinator) throws IOException {
         Tbs5530LifecycleCoordinator.Request request = coordinator.requestPermission(
                 new Tbs5530LifecycleCoordinator.AttachmentIdentity(DEVICE.path, DEVICE.id, DEVICE.vendorId, DEVICE.productId, 1));
         coordinator.permissionResult(request, request.getIdentity(), true);
+        return request;
     }
 
     @Test public void interfaceSelectedByIdAndAlternateNotArrayPosition() throws Exception {
@@ -365,6 +396,7 @@ public class Tbs5530AndroidUsbFacadeTest {
             try {
                 acquire(coordinator(session, facade));
                 assertEquals(alternate == 0 ? 1 : 2, manager.raw.claimedIndex);
+                assertEquals(Collections.singletonList(manager.raw.claimedIndex), manager.raw.descriptorInterfaces);
                 assertFalse(manager.raw.forced);
                 assertEquals(Tbs5530Session.State.CONNECTED, session.getState());
             } finally { session.close(); }
@@ -453,6 +485,295 @@ public class Tbs5530AndroidUsbFacadeTest {
             assertEquals(0, manager.opens.get());
         } finally { runtime.close(); }
         assertTrue(runtime.awaitTermination(3, TimeUnit.SECONDS));
+    }
+
+    private static Tbs5530LifecycleCoordinator.Connection claimedConnection(Tbs5530Session session,
+                                                                           FakeManager manager) throws IOException {
+        Tbs5530AndroidUsbFacade facade = new Tbs5530AndroidUsbFacade(new RecordingContext(), manager);
+        AtomicReference<Tbs5530LifecycleCoordinator.Connection> owned = new AtomicReference<>();
+        Tbs5530LifecycleCoordinator coordinator = new Tbs5530LifecycleCoordinator(session, request -> { }, identity -> {
+            Tbs5530LifecycleCoordinator.Connection connection = facade.open(DEVICE);
+            owned.set(connection);
+            return connection;
+        });
+        acquire(coordinator);
+        return owned.get();
+    }
+
+    @Test public void invalidOrMissingEndpointMetadataFailsClosedBeforeClaim() throws Exception {
+        for (int fault = 0; fault < 6; fault++) {
+            FakeManager manager = new FakeManager();
+            switch (fault) {
+                case 0: manager.raw.addresses = new int[] {0x81}; break;
+                case 1: manager.raw.addresses = new int[] {0x82, 0x82}; break;
+                case 2: manager.raw.direction = 0; break;
+                case 3: manager.raw.type = 3; break;
+                case 4: manager.raw.packetSize = 32; break;
+                default: manager.raw.unsupportedDescriptors = true;
+            }
+            try { new Tbs5530AndroidUsbFacade(new RecordingContext(), manager).open(DEVICE); fail("Invalid endpoint accepted"); }
+            catch (IOException expected) { }
+            assertEquals(0, manager.raw.claims.get());
+            assertEquals(0, manager.raw.controls.get());
+            assertEquals(1, manager.raw.closes.get());
+        }
+    }
+
+    @Test public void claimedConnectionExposesImmutableValidatedEndpointSnapshot() throws Exception {
+        FakeManager manager = new FakeManager();
+        Tbs5530Session session = new Tbs5530Session();
+        Tbs5530LifecycleCoordinator.Connection connection = claimedConnection(session, manager);
+        try {
+            Tbs5530Descriptors.Endpoint endpoint = connection.streamEndpoint();
+            assertEquals(0x82, endpoint.address);
+            assertEquals(0x80, endpoint.direction);
+            assertEquals(2, endpoint.transferType);
+            assertEquals(512, endpoint.maxPacketSize);
+            manager.raw.packetSize = 0;
+            manager.raw.addresses[1] = 3;
+            assertSame(endpoint, connection.streamEndpoint());
+            assertEquals(512, endpoint.maxPacketSize);
+        } finally { session.close(); }
+        try { connection.streamEndpoint(); fail("Closed connection exposed active metadata"); }
+        catch (IOException expected) { }
+    }
+
+    @Test public void rawControlUsesOriginalConnectionAndExactFullParametersForInAndOut() throws Exception {
+        FakeManager manager = new FakeManager();
+        Tbs5530Session session = new Tbs5530Session();
+        Tbs5530LifecycleCoordinator.Connection connection = claimedConnection(session, manager);
+        try {
+            byte[] buffer = {9, 10, 11, 12, 13, 14};
+            assertEquals(3, connection.controlTransfer(0x40, 0x90, 0x1234, 0xabcd, buffer, 2, 3, 731));
+            assertSame(buffer, manager.raw.controlBuffer);
+            assertArrayEquals(new byte[] {11, 12, 13}, manager.raw.payload);
+            assertEquals(0x40, manager.raw.requestType);
+            assertEquals(0x90, manager.raw.request);
+            assertEquals(0x1234, manager.raw.value);
+            assertEquals(0xabcd, manager.raw.controlIndex);
+            assertEquals(2, manager.raw.offset);
+            assertEquals(3, manager.raw.length);
+            assertEquals(731, manager.raw.timeout);
+            assertEquals(2, connection.controlTransfer(0xc0, 0x91, 65535, 0, buffer, 1, 2, 1));
+            assertArrayEquals(new byte[] {9, 0x5a, 0x5a, 12, 13, 14}, buffer);
+            assertEquals(0xc0, manager.raw.requestType);
+            assertEquals(0x91, manager.raw.request);
+            assertEquals(65535, manager.raw.value);
+            assertEquals(0, manager.raw.controlIndex);
+            assertEquals(1, manager.raw.offset);
+            assertEquals(2, manager.raw.length);
+            assertEquals(1, manager.raw.timeout);
+            assertEquals(1, manager.opens.get());
+            assertEquals(1, manager.raw.claims.get());
+            assertEquals(0, manager.raw.releases.get());
+            assertEquals(0, manager.raw.closes.get());
+        } finally { session.close(); }
+        assertEquals(1, manager.raw.releases.get());
+        assertEquals(1, manager.raw.closes.get());
+    }
+
+    @Test public void rawShortAndNegativeResultsAreReturnedOnceWithoutRetry() throws Exception {
+        FakeManager manager = new FakeManager();
+        Tbs5530Session session = new Tbs5530Session();
+        Tbs5530LifecycleCoordinator.Connection connection = claimedConnection(session, manager);
+        try {
+            for (int result : new int[] {0, 1, -1, -110}) {
+                manager.raw.result = result;
+                assertEquals(result, connection.controlTransfer(0xc0, 0x91, 0, 0, new byte[4], 1, 2, 500));
+            }
+            assertEquals(4, manager.raw.controls.get());
+            assertEquals(1, manager.opens.get());
+            assertEquals(0, manager.raw.closes.get());
+        } finally { session.close(); }
+    }
+
+    @Test public void rawControlRejectsUnclaimedReleasedClosedAndMainThreadCalls() throws Exception {
+        FakeManager manager = new FakeManager();
+        Tbs5530AndroidUsbFacade facade = new Tbs5530AndroidUsbFacade(new RecordingContext(), manager);
+        Tbs5530LifecycleCoordinator.Connection unclaimed = facade.open(DEVICE);
+        try {
+            try { unclaimed.controlTransfer(0x40, 0x90, 0, 0, new byte[0], 0, 0, 500); fail("Unclaimed transfer"); }
+            catch (IOException expected) { }
+            try { unclaimed.streamEndpoint(); fail("Unclaimed metadata"); }
+            catch (IOException expected) { }
+        } finally { unclaimed.close(); }
+        manager = new FakeManager();
+        Tbs5530Session session = new Tbs5530Session();
+        Tbs5530LifecycleCoordinator.Connection connection = claimedConnection(session, manager);
+        try {
+            AtomicInteger rejected = new AtomicInteger();
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                try { connection.controlTransfer(0x40, 0x90, 0, 0, new byte[0], 0, 0, 500); fail("Main-thread control"); }
+                catch (IOException expected) { rejected.incrementAndGet(); }
+            });
+            assertEquals(1, rejected.get());
+            connection.release();
+            try { connection.controlTransfer(0x40, 0x90, 0, 0, new byte[0], 0, 0, 500); fail("Released transfer"); }
+            catch (IOException expected) { }
+            connection.close();
+            try { connection.controlTransfer(0x40, 0x90, 0, 0, new byte[0], 0, 0, 500); fail("Closed transfer"); }
+            catch (IOException expected) { }
+            assertEquals(0, manager.raw.controls.get());
+        } finally { session.close(); }
+        assertEquals(1, manager.raw.releases.get());
+        assertEquals(1, manager.raw.closes.get());
+    }
+
+    @Test public void rawControlRejectsInvalidFieldsBuffersAndUnboundedTimeoutBeforeIo() throws Exception {
+        FakeManager manager = new FakeManager();
+        Tbs5530Session session = new Tbs5530Session();
+        Tbs5530LifecycleCoordinator.Connection connection = claimedConnection(session, manager);
+        int[][] invalid = {
+                {-1, 1, 0, 0, 0, 1, 1}, {256, 1, 0, 0, 0, 1, 1},
+                {0x40, -1, 0, 0, 0, 1, 1}, {0x40, 256, 0, 0, 0, 1, 1},
+                {0x40, 1, -1, 0, 0, 1, 1}, {0x40, 1, 65536, 0, 0, 1, 1},
+                {0x40, 1, 0, -1, 0, 1, 1}, {0x40, 1, 0, 65536, 0, 1, 1},
+                {0x40, 1, 0, 0, -1, 1, 1}, {0x40, 1, 0, 0, 0, -1, 1},
+                {0x40, 1, 0, 0, 0, 65536, 1}, {0x40, 1, 0, 0, 5, 0, 1},
+                {0x40, 1, 0, 0, 3, 2, 1}, {0x40, 1, 0, 0, Integer.MAX_VALUE, 1, 1},
+                {0x40, 1, 0, 0, 0, 1, 0}, {0x40, 1, 0, 0, 0, 1, -1}
+        };
+        try {
+            for (int[] p : invalid) {
+                try { connection.controlTransfer(p[0], p[1], p[2], p[3], new byte[4], p[4], p[5], p[6]); fail("Invalid call accepted"); }
+                catch (IllegalArgumentException expected) { }
+            }
+            try { connection.controlTransfer(0x40, 1, 0, 0, null, 0, 1, 1); fail("Null payload buffer accepted"); }
+            catch (IllegalArgumentException expected) { }
+            try { connection.controlTransfer(0x40, 1, 0, 0, null, 1, 0, 1); fail("Null buffer offset accepted"); }
+            catch (IllegalArgumentException expected) { }
+            assertEquals(0, manager.raw.controls.get());
+            assertEquals(0, connection.controlTransfer(0x40, 1, 0, 0, null, 0, 0, 1));
+            assertNull(manager.raw.controlBuffer);
+            assertEquals(1, manager.raw.controls.get());
+        } finally { session.close(); }
+    }
+
+    @Test public void managedControlFactoryReachesSameClaimedRawAndRejectsMainOrStaleCalls() throws Exception {
+        FakeManager manager = new FakeManager();
+        Tbs5530Session session = new Tbs5530Session();
+        Tbs5530LifecycleCoordinator coordinator = coordinator(session,
+                new Tbs5530AndroidUsbFacade(new RecordingContext(), manager));
+        Tbs5530LifecycleCoordinator.Request request = acquire(coordinator);
+        Tbs5530ControlIo control = coordinator.controlIo(request);
+        try {
+            assertEquals(0x82, coordinator.streamEndpoint(request).address);
+            byte[] out = {1, 2, 3, 4, 5};
+            assertEquals(2, control.controlTransfer(0x40, 0x90, 0x5678, 0x4321, out, 2, 2, 903));
+            assertNotSame(out, manager.raw.controlBuffer);
+            assertArrayEquals(new byte[] {1, 2, 3, 4, 5}, out);
+            assertArrayEquals(new byte[] {3, 4}, manager.raw.payload);
+            assertEquals(0x40, manager.raw.requestType);
+            assertEquals(0x90, manager.raw.request);
+            assertEquals(0x5678, manager.raw.value);
+            assertEquals(0x4321, manager.raw.controlIndex);
+            assertEquals(2, manager.raw.offset);
+            assertEquals(2, manager.raw.length);
+            assertEquals(903, manager.raw.timeout);
+            byte[] in = {1, 2, 3, 4, 5};
+            assertEquals(2, control.controlTransfer(0xc0, 0x91, 0x1357, 0x2468, in, 1, 2, 700));
+            assertNotSame(in, manager.raw.controlBuffer);
+            assertEquals(0xc0, manager.raw.requestType);
+            assertEquals(0x91, manager.raw.request);
+            assertEquals(0x1357, manager.raw.value);
+            assertEquals(0x2468, manager.raw.controlIndex);
+            assertEquals(1, manager.raw.offset);
+            assertEquals(2, manager.raw.length);
+            assertEquals(700, manager.raw.timeout);
+            assertArrayEquals(new byte[] {1, 0x5a, 0x5a, 4, 5}, in);
+            assertEquals(2, manager.raw.controls.get());
+            assertEquals(1, manager.opens.get());
+            assertEquals(1, manager.raw.claims.get());
+            assertEquals(0, manager.raw.releases.get());
+            assertEquals(0, manager.raw.closes.get());
+            assertEquals(Tbs5530Session.State.CONNECTED, session.getState());
+            AtomicInteger rejected = new AtomicInteger();
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                try { control.controlTransfer(0xc0, 0x91, 0, 0, new byte[1], 0, 1, 1); fail("Managed main-thread transfer"); }
+                catch (IOException expected) { rejected.incrementAndGet(); }
+            });
+            assertEquals(1, rejected.get());
+            assertEquals(2, manager.raw.controls.get());
+        } finally { session.close(); }
+        assertEquals(1, manager.raw.releases.get());
+        assertEquals(1, manager.raw.closes.get());
+        try { control.controlTransfer(0xc0, 0x91, 0, 0, new byte[1], 0, 1, 1); fail("Stale managed capability"); }
+        catch (IOException expected) { }
+        assertEquals(2, manager.raw.controls.get());
+    }
+
+    @Test public void managedShortNegativeAndOverlongInResultsNeverPublishPayloadOrRetry() throws Exception {
+        for (int result : new int[] {0, 1, -1, -110, 3}) {
+            FakeManager manager = new FakeManager();
+            manager.raw.result = result;
+            Tbs5530Session session = new Tbs5530Session();
+            Tbs5530LifecycleCoordinator coordinator = coordinator(session,
+                    new Tbs5530AndroidUsbFacade(new RecordingContext(), manager));
+            Tbs5530ControlIo control = coordinator.controlIo(acquire(coordinator));
+            try {
+                byte[] unchanged = {1, 2, 3, 4};
+                try { control.controlTransfer(0xc0, 0x91, 0, 0, unchanged, 1, 2, 700); fail("Failed transfer accepted"); }
+                catch (Tbs5530ControlIo.TransferException expected) {
+                    assertEquals(result >= 0 && result < 2 ? Tbs5530ControlIo.FailureKind.SHORT_TRANSFER
+                            : Tbs5530ControlIo.FailureKind.IO_FAILURE, expected.getKind());
+                }
+                assertArrayEquals(new byte[] {1, 2, 3, 4}, unchanged);
+                assertEquals(Tbs5530Session.State.FAULTED, session.getState());
+                assertEquals(1, manager.raw.controls.get());
+                assertEquals(1, manager.opens.get());
+                try { control.controlTransfer(0xc0, 0x91, 0, 0, unchanged, 1, 2, 700); fail("Failed session retried"); }
+                catch (IOException expected) { }
+                assertEquals(1, manager.raw.controls.get());
+            } finally { session.close(); }
+            assertEquals(1, manager.raw.releases.get());
+            assertEquals(1, manager.raw.closes.get());
+        }
+    }
+
+    @Test public void directControlSerializesCloseAndMainRejectionDoesNotWaitForBlockedRaw() throws Exception {
+        FakeManager manager = new FakeManager();
+        manager.raw.allowControl = new CountDownLatch(1);
+        Tbs5530Session session = new Tbs5530Session();
+        Tbs5530LifecycleCoordinator.Connection connection = claimedConnection(session, manager);
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        CountDownLatch closed = new CountDownLatch(1), closing = new CountDownLatch(1);
+        Thread transfer = new Thread(() -> {
+            try { connection.controlTransfer(0xc0, 0x91, 0, 0, new byte[1], 0, 1, 500); }
+            catch (Throwable problem) { failure.set(problem); }
+        });
+        Thread closer = new Thread(() -> {
+            closing.countDown();
+            try { session.close(); }
+            catch (Throwable problem) { failure.set(problem); }
+            finally { closed.countDown(); }
+        });
+        try {
+            transfer.start();
+            assertTrue(manager.raw.enteredControl.await(3, TimeUnit.SECONDS));
+            closer.start();
+            assertTrue(closing.await(3, TimeUnit.SECONDS));
+            assertFalse("Close raced active raw control", closed.await(100, TimeUnit.MILLISECONDS));
+            assertEquals(0, manager.raw.closes.get());
+            AtomicInteger rejected = new AtomicInteger();
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                try { connection.controlTransfer(0xc0, 0x91, 0, 0, new byte[1], 0, 1, 500); fail("Blocked main control"); }
+                catch (IOException expected) { rejected.incrementAndGet(); }
+                try { connection.streamEndpoint(); fail("Main metadata read blocked behind control"); }
+                catch (IOException expected) { rejected.incrementAndGet(); }
+            });
+            assertEquals(2, rejected.get());
+            assertEquals(1, manager.raw.controls.get());
+        } finally {
+            manager.raw.allowControl.countDown();
+            transfer.join(3000);
+            closer.join(3000);
+            session.close();
+        }
+        assertFalse(transfer.isAlive());
+        assertFalse(closer.isAlive());
+        assertNull(failure.get());
+        assertEquals(1, manager.raw.releases.get());
+        assertEquals(1, manager.raw.closes.get());
     }
 
     @Test public void runtimeShutdownDrainsWorkerAndRejectsNewWorkWithoutWaitingForLongDeadline() throws Exception {

@@ -1,5 +1,40 @@
 # TBS5530 test matrix
 
+## 2026-11-03 13:38 +07 — Phase 2.4A: managed control transport, fake-only
+
+Windows PowerShell; chore/modernize-android-build/8a004a3cc94d8c736da84cad1908b6a270b789a0 +workingchanges. AGP9.5.0/Gradle9.8.2/JDK25/compile37.2/target37/min21/Java8 giữnguyên. Emulator-5554/TBS5530_Runtime_API37 API37/x86_64; productionwrappercompiled nhưng Manager/RawConnection của tấtcả tests fake. Phase2.3/ADR013 đãpush;152unit/21instrumentation cũ làlịchsử, khôngcountmặcđịnh.
+
+| Gate | Kết quả thực | Bằng chứng |
+|---|---|---|
+| Control transport mới | PASS14methods | Exact type/request/value/index/payload/offset/length/timeout; INpublishfullslice/OUTimmutable; short/negative/zero/overlong; exceptioncause; invalidbounds/fields; no retry; guardworker/interrupt |
+| Ownership/generation | PASS trongtransport/binding | Onlyclaimedmanagedowner, nosecondopen, stalehandle/FAULTED/UNCERTAIN/closed/unclaimed0IO; capability reuse khôngdoubleclaim; oldhandlekhôngđóngnewconnection |
+| Late completion | PASS trongtransport | Detach/logicaltimeout/concurrentclose khi fakeblock: pending,0prematureclose, outputkhôngđổi, cleanup1lần saucompletion |
+| Binding regression | PASS27methods |26cũ+managedcapabilityfactory/cùng1connection vàcleanup assertions |
+| Descriptor metadata | PASS10methods | Permutationselect82, notfirst81; rejectmissing/duplicate/wrongdirection/type/address/interfacealternate/maxpacket; immutablemetadata |
+| Toàn unit ba module | PASS177methods,0failure/error | drivers163/usbxfer1/dvbservice13, từngtask --rerun;25methods thêm so baseline152 |
+| Android facade/control instrumentation | PASS28tests,0failure/error/skipped |19baseline+9control/metadata/managedendtoend; fakeRawexactIN/OUT vàresultmapping, mainthreadguard, unclaimed/closed, invalidparams,1open/claim/cleanup |
+| Native smoke | PASS1test | UsbXferlibraryloads withoutopeningUSB trênx86_64, khôngJNIioctl |
+| Devicefilter equivalence | PASS1test | JavaRegistry↔XMLmatch, khôngđăngkýTBS |
+| Debug/lint | PASS | Combinedexit0/8m8s/241tasks50executed191up-to-date; lint0Error/0Fatal/11Warning, khôngsuppress |
+| Java8/purecorestress | PASS5lượt×24tests | javac --release8 khôngAndroidclasspath, bytecode52; transport14+concurrency10, gồm200latch-controlled iterations qua5lượt; outputtạmđãdọn |
+| Android physicalspeed/identity/USBHost | NOT RUN | VID/interface0/81/82/512/HighSpeed WindowsWSL làlịchsử, LinuxTS82sourcefact; khôngAndroidhardwareproof |
+| API21/23/31/33/34runtime/nonzeroalternateactivation | NOT RUN | KhôngOSimagesmới, khôngsetInterface; metadatafakekhôngchứngminhactivation |
+| ProductionvendorUSB/firmware/frontend/lock/TS | NOT RUN | Khôngphysicalcontrolcall/uploader/frontendorstreamreader |
+
+### Phase 2.4B — toàn bộ NOT RUN, chưa được duyệt thực thi
+
+| Gate physical | Trạng thái | Điều kiện để chạy sau |
+|---|---|---|
+| Androidversion/USBHost/OTG/nguồn/ADB | NOT RUN | ChọnAndroidthật vàxácnhậnnguồn/cáp/hub; approvalmetadata |
+| UsbManagerenumeration/descriptors | NOT RUN | Debug/testdiagnosticdefaultinactive, người dùngchủđộng; ghiVIDPID/interface/endpoint/mps, khôngserialsensitive |
+| Attach/detach/sessionepoch | NOT RUN | Kếhoạchcắmrútđượcduyệt, khôngWSLtransfer/reconnectloop |
+| Permissiondeny/grant/callback | NOT RUN | Approvalriêng; người dùngtựchọndialog, kiểmcorrelation/state/livepermission |
+| Open/claimforcefalse | NOT RUN | Approvalriêng, iface0/alt0, backgroundthread, khôngvendorrequests |
+| Release/close/detachcleanup | NOT RUN | Chỉcleanupownershipđãacquire; khôngforcecloseinflight |
+| Vendorcontrol/firmware/frontend/TS | NOT RUN, ngoài2.4B | Cầnphase/phêduyệtriêng, khôngmởgate từenumerationPASS |
+
+Evidence fields, stopconditions/rollback vàchecklist chi tiết ở [RESEARCH.md](RESEARCH.md); exactcommands/results ở [WORKLOG.md](WORKLOG.md). Không hardwaretestnào được ghiPASS trongphase này.
+
 ## 2026-11-03 12:39 +07 — Phase 2.3: Android framework binding, không tuner
 
 Windows PowerShell; `chore/modernize-android-build`/`635ee4a57267de6055126efcfee6121b30701433` cộng working changes. AGP9.5.0/Gradle9.8.2/JDK25.0.5.0.3/compile37.2/target37/min21/Java8 giữ nguyên. AVD TBS5530_Runtime_API37, emulator-5554, API37/x86_64; không physical Android/tuner. Mọi open/claim/request trong binding tests dùng fake Manager/RawConnection, không USB thật.

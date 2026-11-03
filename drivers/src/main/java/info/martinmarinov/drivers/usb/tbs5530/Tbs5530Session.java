@@ -153,6 +153,13 @@ public final class Tbs5530Session implements AutoCloseable {
         }
     }
 
+    synchronized void requireOwned(long token, Resources owner) throws TransferException {
+        requireUsable(token);
+        if (resources != owner || !claimed) {
+            throw new TransferException(SESSION_UNAVAILABLE, "Connection is not the claimed session owner");
+        }
+    }
+
     public synchronized boolean failed(long token, Throwable cause) {
         if (token != generation || !(state == State.WAIT_PERMISSION || state == State.PERMISSION_GRANTED
                 || state == State.CONNECTED || state == State.FIRMWARE_TRANSITION || state == State.READY)) return false;

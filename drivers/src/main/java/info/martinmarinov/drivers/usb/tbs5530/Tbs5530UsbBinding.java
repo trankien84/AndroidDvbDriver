@@ -178,6 +178,12 @@ public final class Tbs5530UsbBinding implements AutoCloseable {
                 connection.claim(receipt);
                 ensureCurrent(attempt);
             }
+            public void requireControlWorker() throws IOException { connection.requireControlWorker(); }
+            public int controlTransfer(int type, int request, int value, int index, byte[] buffer,
+                                       int offset, int length, int timeout) throws IOException {
+                return connection.controlTransfer(type, request, value, index, buffer, offset, length, timeout);
+            }
+            public Tbs5530Descriptors.Endpoint streamEndpoint() throws IOException { return connection.streamEndpoint(); }
             public void cancel() throws IOException { connection.cancel(); }
             public void release() throws IOException { connection.release(); }
             public void close() throws IOException { connection.close(); }
@@ -287,6 +293,25 @@ public final class Tbs5530UsbBinding implements AutoCloseable {
     public synchronized boolean isPending() {
         return jobs != 0 || coordinator.isAcquiring() || session.isCleanupPending()
                 || current != null && !current.invalid && session.getState() == Tbs5530Session.State.WAIT_PERMISSION;
+    }
+
+    public Tbs5530ControlIo controlIo() throws IOException {
+        synchronized (this) {
+            if (!active(current) || current.request == null || current.acquiring) {
+                throw new Tbs5530ControlIo.TransferException(Tbs5530ControlIo.FailureKind.SESSION_UNAVAILABLE,
+                        "No claimed connection for this attachment");
+            }
+            return coordinator.controlIo(current.request);
+        }
+    }
+
+    public Tbs5530Descriptors.Endpoint streamEndpoint() throws IOException {
+        Tbs5530LifecycleCoordinator.Request request;
+        synchronized (this) {
+            if (!active(current) || current.request == null || current.acquiring) throw new IOException("No claimed attachment");
+            request = current.request;
+        }
+        return coordinator.streamEndpoint(request);
     }
 
     public void cancel() {

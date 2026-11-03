@@ -1,5 +1,51 @@
 # Research log (append-only)
 
+## 2026-11-03 — Phase 2.4A: managed control transport; kế hoạch 2.4B chưa thực thi
+
+### Baseline, nguồn và loại bằng chứng
+
+Nhánh chore/modernize-android-build, baseline `8a004a3cc94d8c736da84cad1908b6a270b789a0`; local/liveorigin cùngSHA, sạch lúc bắt đầu. Phase2.3/ADR-013 đã commit/push tại SHA này, các snapshots pending trước đó giữ làm lịch sử. References chỉ đọc/no-lazy-fetch/optional-locks0: official `2ce787de9f6e81b4294692a45de15596ae2e1322`, C `c5fa27eecbe80633cbb365cc44656daea1c0e2e3`, Go `11228b05fb1626bf41c4e1879ace10cd0a8d575c`; không sync/config/index changes.
+
+Source official [tbs5530.c](https://github.com/tbsdtv/linux_media/blob/2ce787de9f6e81b4294692a45de15596ae2e1322/drivers/media/usb/dvb-usb/tbs5530.c) `tbs5530_op_rw` L35: EP0 vendor0x40/0xc0, đủ request/value/index/length, timeout2000ms; `tbs5530_i2c_transfer` L60:0x80write/0x90pointer/0x91read, buffer50, mutexcảpair; propertiesL328/342:genericbulk81 vàTSbulk82. Đối chiếu [communityC](https://github.com/koreapyj/cxd28xx/blob/c5fa27eecbe80633cbb365cc44656daea1c0e2e3/tbs5530.c) cùng op_rw/I²Cshape và [Go bridge](https://github.com/Till0196/coax/blob/11228b05fb1626bf41c4e1879ace10cd0a8d575c/internal/coaxd/usb/bridge/tbs/tbs.go) ControlWrite/ControlRead kiểm fullcount; Go giới hạn62 khác guard48/50 Android hiện tại. Không nâng guard hoặc copy generic0x93 vào TBS5530 read. Official copyINbuffer bất kể return là code nguồn, không phải hành vi nên giữ: adapter mới không publishIN khi lỗi.
+
+Nguồn [UsbDeviceConnection](https://developer.android.com/reference/android/hardware/usb/UsbDeviceConnection) tra2026-11-03: offset overload controlTransfer từAPI18, min21phùhợp; hướng từ requestType, count>=0hoặcnegativefailure, không errnoAPI để suy mọi negative=-timeout. claimforce=true cóthểdisconnectkerneldriver; giữfalse. close xong không dùnglại connection. [UsbEndpoint](https://developer.android.com/reference/android/hardware/usb/UsbEndpoint) cho metadata address/direction/type/maxpacket; EP0specialcontrol không cần bulkendpointcho vendorrequests.
+
+VID734c:5530 là sourceUSBID. Interface0, bulkIN81/82/maxpacket512/USB2HighSpeed là quan sát Windows/WSL trước, **không phải enumeration Android mới**. LinuxTS82 là sourcefact; không xác nhận deviceAndroid sẽkhớp. Maxpacketkhông đủ chứngnhận negotiatedspeed, fullspeed/highspeed, boardvariant hoặc firmwarestate.
+
+### Thiết kế transport và owner
+
+Tbs5530ControlTransport implements ControlIo là capability chỉ Coordinator cấp sau connected+claimed; Binding.controlIo() lấy current request. Không mở connection thứhai: facadeOwnedConnection/rawUsbDeviceConnection hiện có được lease delegate. Constructor package-private, kiểm `Session.requireOwned(token,lease)` mỗi transaction; oldhandle/token/FAULTED/UNCERTAIN/closed/unclaimed bị từchối trướcIO. Connectiondefaultcontrol/metadata methods failclosed giữ compatibility fakeports cũ, không đổi legacydrivers.
+
+Adapter validate byte/ushortfields, length0..65535, offset/bounds/timeoutpositive; scratchcopy giữ nguyên shapeparameters, IN chỉ copyrequested slice sau fullsuccess+statecheck, OUTkhôngmutate callerdata. Short vànegative/overlong kháckind, explicitexceptioncause giữ, không retry. NestedSessiontransaction tái sửdụngkhóa0x90/91 để I²Cpair vẫnatomic; invalidation tức thời nhưng release/close chờactivecalltrả. Không stream, không firmwareexecutor, khôngautoREADY/reset.
+
+RawConnection được nối thật với `UsbDeviceConnection.controlTransfer` ở AndroidManager, nhưng mọi test dùng fakeManager/RawConnection. OwnedConnection.requireControlWorker chặnmain trước lock; claimed/open check chặn rawcapability dùngsai state. Không publicrawgetterFD/UsbDeviceConnection. Descriptor metadata chọn interfaceID0/alternate đãchọn, rejectduplicate/contradiction vàreuseBridge.selectBulkEndpoint82. TSmaxpacket64/512 là guardboardprofilethậntrọng, không toànUSBspec; không đòi81 hiệndiện để dùngEP0. Metadata không kích hoạt TSreader. Facade chọn descriptor alternate nhưng không tự gọi UsbDeviceConnection.setInterface; activation alternate khác0 chưa được chứng minh. Physicalpreflight chỉ alternate0 tới khi có review/phêduyệt riêng.
+
+Owner tương lai nên là một DvbDevice/diagnosticowner theo session, giữ binding/runtime/capability, dùng appContext, không staticUSBsingleton. UsbDelegate chỉ chuyểnintent, registryconstructor khôngautoopen/probe. Serviceworker lifecycle hiện hữu được audit nhưng không sửa hoặc thêmservice; deferredcleanup phải offmain, invalidatebinding trước runtime.shutdown, chờpending ở background. Dynamicreceiver không giữprocess sống: owner/service lifetime và OSbackgroundrestrictions phải được thiết kế khi tích hợp thật. Activitychỉgửi yêu cầu, không sởhữurawconnection xuyên recreation. Diagnosticentrypoint debug/test mặcđịnh tắt là phương án cho 2.4B; **chưa thêm entrypoint vật lý** trong phase này.
+
+### Phase 2.4B — Checklist phê duyệt riêng, toàn bộ NOT RUN
+
+Không có approvalhardware trong Phase2.4. Kế hoạch này không phải quyền thực thi; không chạy permissiondialog/open/claim hoặc USBvendorrequests. Khi xin duyệt phải ghi rõ thiết bị Android, phiênbảnOS, phạmvi và từnggate. Không mặc định cần WSL/usbipd; tuner nối trực tiếp AndroidUSBHost/OTG, không đồng thời thuộcWindows/WSL.
+
+1. **Môi trường:** kiểm Androidversion/API, USBHostfeature; xác nhận nguồn/cápOTG/poweredhub đápứng tài liệu thiếtbị, ADBquan sát explicitserial (ưu tiên wirelessADB nếu cổngUSB dùngOTG). Chưa rõ nguồn/cáp thìdừng, không tự thay điệnáp/LNB/driver. Chuẩn bị debug/testharness chủđộng, defaultinactive, metadata-only; không dùng registryproduction để mởTBS tựđộng.
+2. **Enumeration:** sauapproval metadata, chụp UsbManager.getDeviceList/VIDPID/pathid/interfaceID/alternate/endpoints/address/direction/type/maxpacket, thread/time/sessionstate. Không đọcserialbắtbuộc, không logđịnhdanhcánhân raGit. So với734c:5530/interface0/TS82 và lịch sử81/512 nhưng giữ khácbiệt, không forceboardmatch. Chưa có speedmeasurement thìghiUNKNOWN.
+3. **Attach/detach:** captureepoch vàevents quanh một lần cắm/rút do người dùng chủđộng; kiểmlateevent/reusedpath, không tự reconnectloop. OSmetadata không bảođảmphysicalidentity nếu missed events; ghi giới hạn rõ.
+4. **Permission:** approval riêng chophép hiệndialog; người dùng tự chọndeny/grant, khôngagentautoaccept. Ghicorrelation đãẩn/state/generation, livehasPermission vàcallbackdelivery trênOSthật; deny/timeout/stalecallback phải0open. Callbackkhôngđến→dừng, không tự nới export/mutability để épPASS.
+5. **Connection:** approval riêng cho openDevice→claimInterface(force=false)→release→close; chỉ interface0/alternate0 theo profile hiện tại, không tựsetInterface hoặc épforce. Kiểm đúng1owner/1open/1claim/1release/1close, threadbackground, pending/cleanup; testdetachkhiđangmở saukhiđượcduyệt. Không vendorcontrol, khôngI²C, khôngfirmware, khôngTS.
+6. **Stop/rollback:** nullopen/claimfalse/permissionidentitythayđổi/blockedcall/timeout/cleanupfailure hoặcdescriptorunexpected→dừngởgateđó, giữlogđãlọc; invalidate/cleanup tài nguyên đãhoàn tấtacquire, khôngforcecloseinflight. Nếuoperationkhôngtrả, ghiPENDING vàkhôngopenmới; khôngreset/rebind/reload/reconnectlặp. Tháocáp/nguồn chỉtheochỉdẫnđượcngườidùngphêduyệt, khôngtựgọiusbipd.
+7. **Evidence:** khôngđánhPASS khi chỉ bắtđầuoperation; cầnactualreturn/state/cleanup. Chỉsauđó mới review phasecontrol riêng, tuyệtđốikhông xemgateenumeration/permissionPASS là cho phépvendorwrite/firmware.
+
+| Thao tác 2.4B | Kết quả | Android/API, VIDPID/descriptors | Thread, thời gian, code/exception | Connection/session | Thay đổi phần cứng |
+|---|---|---|---|---|---|
+| Kiểm môi trường/nguồn/OTG | NOT RUN | Chưa chọn Android thật | Chưa đo | Không acquire | Chưa thực hiện |
+| Enumeration/descriptors | NOT RUN | Chưa có bằng chứngAndroid | Chưa đo | Không acquire | Chưa thao tác; OSenumeration có thể có standardUSBrequests, khôngvendorwrites |
+| Attach/detach | NOT RUN | Chưa quan sát | Chưa đo | Không sessionthật | Chưa cắm/rút trongphase |
+| Permission deny/grant/correlation | NOT RUN | Chưa có dialogthật | Chưa đo | Không open | Chưa requestpermission |
+| Open/claimforcefalse | NOT RUN | Chưa claim | Chưa đo | Không connectionthật | Chưa đổi hostownership |
+| Release/close/detachcleanup | NOT RUN | Chưa acquire | Chưa đo | Không resourceđểcleanup | Chưa thực hiện |
+| Vendortransfer/firmware/frontend/lock/TS | NOT RUN, ngoài2.4B | Không thuộcapprovalchecklist | Không lệnh | Không thực hiện | Cấm trongpreflight |
+
+Kết quả 2.4A thực ở TEST-MATRIX/WORKLOG; fake/instrumentation chỉ chứng minh phần mềm, không RealUSB enumeration hoặc connectionlifecycle. Giữ nguyên toànbộ snapshotlịchsử phía dưới.
+
 ## 2026-11-03 12:39 +07 — Phase 2.3: Android USB framework binding và instrumentation
 
 ### Checkpoint, audit nguồn và phạm vi

@@ -78,6 +78,14 @@ public final class Tbs5530LifecycleCoordinator implements AutoCloseable {
     public interface Connection extends Tbs5530Session.Resources {
         /** Mark ownership immediately after a successful claim, including before later failures. */
         void claim(Claim claim) throws IOException;
+        default Tbs5530Descriptors.Endpoint streamEndpoint() throws IOException {
+            throw new IOException("Stream endpoint metadata is unavailable");
+        }
+        default void requireControlWorker() throws IOException { }
+        default int controlTransfer(int requestType, int request, int value, int index,
+                                    byte[] buffer, int offset, int length, int timeoutMillis) throws IOException {
+            throw new IOException("Control transfer is not implemented by this connection");
+        }
     }
 
     /** A synchronous ownership receipt; a port must not retain it after claim returns. */
@@ -93,6 +101,7 @@ public final class Tbs5530LifecycleCoordinator implements AutoCloseable {
     // These fields and Request.pending use the session's monitor for pure state changes only.
     private Request current;
     private int acquiring;
+    private Lease owned;
 
     public Tbs5530LifecycleCoordinator(Tbs5530Session session, PermissionPort permissions,
                                       ConnectionPort connections) {
@@ -156,6 +165,7 @@ public final class Tbs5530LifecycleCoordinator implements AutoCloseable {
             if (!local.claim.claimed.get()) throw new IOException("Claim did not confirm ownership");
             synchronized (session) {
                 if (canConnect(request) && session.connected(request.token, local)) {
+                    owned = local;
                     local = null;
                     session.interfaceClaimed(request.token);
                 }
@@ -179,6 +189,29 @@ public final class Tbs5530LifecycleCoordinator implements AutoCloseable {
             if (failure instanceof IOException) throw (IOException) failure;
             if (failure instanceof Error) throw (Error) failure;
         }
+    }
+
+    public Tbs5530ControlIo controlIo(Request request) throws IOException {
+        synchronized (session) {
+            if (!matches(request) || owned == null) {
+                throw new Tbs5530ControlIo.TransferException(Tbs5530ControlIo.FailureKind.SESSION_UNAVAILABLE,
+                        "No managed connection for request");
+            }
+            session.requireOwned(request.token, owned);
+            return new Tbs5530ControlTransport(session, request.token, owned);
+        }
+    }
+
+    public Tbs5530Descriptors.Endpoint streamEndpoint(Request request) throws IOException {
+        Lease lease;
+        synchronized (session) {
+            if (!matches(request) || owned == null) throw new IOException("No current claimed connection");
+            lease = owned;
+            session.requireOwned(request.token, lease);
+        }
+        Tbs5530Descriptors.Endpoint metadata = lease.connection.streamEndpoint();
+        synchronized (session) { session.requireOwned(request.token, lease); }
+        return metadata;
     }
 
     public boolean permissionTimedOut(Request request) throws IOException {
@@ -236,7 +269,13 @@ public final class Tbs5530LifecycleCoordinator implements AutoCloseable {
         return failure instanceof IOException ? (IOException) failure : new IOException(message, failure);
     }
 
-    private static final class Lease implements Tbs5530Session.Resources {
+    private static final class Lease implements Tbs5530Session.Resources, Tbs5530ControlTransport.Connection {
+        @Override public void requireControlWorker() throws IOException { connection.requireControlWorker(); }
+        @Override public int controlTransfer(int requestType, int request, int value, int index,
+                                             byte[] buffer, int offset, int length, int timeoutMillis) throws IOException {
+            if (closed.get() || !claim.claimed.get()) throw new IOException("Managed connection is closed or unclaimed");
+            return connection.controlTransfer(requestType, request, value, index, buffer, offset, length, timeoutMillis);
+        }
         final Connection connection;
         final Claim claim = new Claim();
         final AtomicBoolean closed = new AtomicBoolean();

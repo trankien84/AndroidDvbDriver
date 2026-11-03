@@ -1,5 +1,25 @@
 # TBS5530 Android port — current status
 
+## Checkpoint phát hành Phase 2.4A — 2026-11-03 15:05 +07
+
+- Người dùng yêu cầu commit và push 16 file Phase2.4A trên `chore/modernize-android-build`. Preflight: local/live origin cùng `8a004a3cc94d8c736da84cad1908b6a270b789a0`, staged diff rỗng; đúng 11 file Java và 5 hồ sơ.
+- Message: `feat: add managed USB control transport and descriptor validation`. Hash và kết quả push phải xác minh từ Git sau thao tác. Những mục “chưa commit/push” bên dưới là snapshot trước checkpoint.
+- Không chạy lại tests trong tác vụ Git; bằng chứng gần nhất là 177 unit methods, 30 instrumentation tests, debug/lint và 5 lượt stress đã chạy trong Phase2.4A. Phase2.4B vẫn NOT RUN, chưa phê duyệt hardware.
+
+## Phase 2.4A — Android control transport có quản lý, 2026-11-03 13:38 +07
+
+**Đã hoàn tất 2.4A bằng USB giả và kiểm thử Android; đã chuẩn bị kế hoạch 2.4B. Toàn bộ kiểm thử USB thật vẫn NOT RUN, chờ phê duyệt riêng.** Nhánh `chore/modernize-android-build`, HEAD `8a004a3cc94d8c736da84cad1908b6a270b789a0`, đúng checkpoint Phase 2.3/ADR-013 đã push. Có 11 file Java mới/sửa và 5 hồ sơ; chưa stage/commit/push/merge.
+
+- **Transport:** Tbs5530ControlTransport chỉ được coordinator/binding cấp sau khi connection hiện tại đã được nhận và claim. Handle gắn với generation, tức số phiên hiện hành; không mở connection thứ hai hoặc đưa UsbDeviceConnection cho caller. Mỗi lần gọi kiểm owner/token/claim/state trước và sau. Short transfer, kết quả âm và lỗi không tự retry, không công bố dữ liệu IN. Không tự READY, probe, reset hoặc nạp firmware.
+- **Lifecycle:** tái sử dụng Session.transaction, giữ nguyên tính liên tục của cặp I²C 0x90/0x91. Detach, timeout logic và close vô hiệu hóa session ngay; release/close chờ giao dịch đang chạy trả về. Chặn main thread trước khi lấy khóa; không force-close hoặc giả định UsbRequest.cancel hủy được synchronous call.
+- **Descriptors:** metadata bất biến, chọn Bulk IN 0x82 theo interface ID0/alternate/direction/type; từ chối thiếu, trùng hoặc mâu thuẫn. Packet size 64/512 là giới hạn phần mềm của profile, không chứng minh tốc độ USB. Không chọn 0x81 chỉ vì đứng trước, không TS reader hoặc tự gọi setInterface.
+- **PASS thực:** **177 unit methods** (drivers163/usbxfer1/dvbservice13), 0 failure/error; **30 instrumentation tests** (28 facade/control +2 native/registry) trên AVD API37/x86_64, 0 failure/error/skipped. Debug APK PASS; lint 0 Error/0 Fatal/11 Warning. Lượt tổng hợp exit0/8m8s/241tasks:50 executed,191 up-to-date. Core Java8/bytecode52 và 5 lượt ×24 transport/concurrency tests đều PASS.
+- **Giữ nguyên:** toolchain, dependencies, min21/source-target8, EP0 bytes/Bridge/FirmwarePlan, native/JNI, driver cũ, service/registry/XML/TCP. Ba references giữ SHA khóa và sạch. Instrumentation dùng fake Manager/RawConnection; wrapper gọi UsbDeviceConnection.controlTransfer **chưa được kích hoạt trên phần cứng**.
+
+**Kế hoạch 2.4B:** [RESEARCH.md](RESEARCH.md) có checklist môi trường/nguồn/OTG → enumeration → permission do người dùng chọn → open/claim(false) → release/close, bảng bằng chứng và điều kiện dừng. Cần chọn Android Host cụ thể và phê duyệt riêng từng phạm vi. Chưa tạo hoặc chạy diagnostic entry point cho USB thật. [ADR-014](DECISIONS.md) ghi thiết kế quyền sở hữu và owner tương lai.
+
+**Giới hạn:** path/id dùng lại khi bỏ lỡ reconnect không đủ chứng minh cùng thiết bị; synchronous call không trả vẫn PENDING/chặn reopen; kết quả âm không phân loại được mọi timeout. Kích hoạt alternate khác0 và runtime OS21/23/31/33/34 chưa kiểm chứng. USB thật, firmware, frontend, DVB lock và TS đều **NOT RUN**. Dừng sau 2.4A và kế hoạch 2.4B, không tự bring-up.
+
 ## Checkpoint phát hành Phase 2.3 — 2026-11-03 12:57 +07
 
 - Người dùng yêu cầu commit và push12file Phase2.3 trên `chore/modernize-android-build`. Preflight: local và live origin cùng `635ee4a57267de6055126efcfee6121b30701433`, staged diff rỗng; đúng7Javafiles mới/sửa và5hồ sơ.
