@@ -1,5 +1,40 @@
 # TBS5530 test matrix
 
+## 2026-11-03 22:16 +07 — Phase 2.5: OnePlus 7/API 30, USB thật có giới hạn
+
+Baseline dc50e7304941a7d01aa1d490c13fcf09683a01c9/chore/modernize-android-build, cộng các thay đổi chưa commit. OnePlus GM1900/Android 11/API 30, chỉ định rõ thiết bị qua Wireless ADB (ADB không dây), kết nối OTG trực tiếp. OxygenOS 11.0.9.1.GM57AA do người dùng cung cấp; thuộc tính build/OTA đã ghi trong ENVIRONMENT. Không dùng emulator hoặc chuyển tiếp USB từ Windows.
+
+| Gate thiết bị thật | Kết quả | Bằng chứng |
+|---|---|---|
+| Kiểm tra kết nối ban đầu | STOP đúng yêu cầu | ADB offline, chưa sửa mã/chạy build/truy cập USB; chỉ tiếp tục sau khi người dùng xác nhận đã nối lại |
+| Thiết bị đích sau khi nối lại | PASS | manufacturer OnePlus/model GM1900/API 30/state=device, port mới; không dùng alias mDNS làm thiết bị đích khác |
+| Android USB Host/OTG | PASS | feature true, UsbManager và JSON nhận 734c5530; không sửa thiết lập OTG |
+| Cấu hình/interface/endpoint | PASS metadata | Một cấu hình có ID 1, interface có ID 0/alternate 0–3; alternate 0 rỗng; alternate 1 có Bulk 01/81/02/04/86/88; không alternate nào có 82, thông tin packet/interval ở RESEARCH |
+| Profile an toàn để nhận connection và claim interface | BLOCKED đúng guard | Profile mặc định dùng interface 0/alternate 0 thiếu 82; không gọi setInterface/setConfiguration hoặc thay 88 cho 82 |
+| Hộp thoại USB thật | PASS xuất hiện | Ứng dụng yêu cầu quyền, người dùng tự chọn OK; agent không bấm Allow hoặc dùng ADB để vượt bước cấp quyền |
+| Callback cấp quyền thực | NOT VERIFIED | Đọc lại sau deadline 30s, callback count 0/correlation false/cleanup đã xong; không gọi kết quả giả lập là PASS thật |
+| Quyền hiện hành sau OK | PASS tại thời điểm đọc | Làm mới JSON cho thấy hasPermission true; lượt chỉ xin quyền sau đó ghi nhận quyền đã có sẵn (pre-granted)/state PERMISSION_GRANTED trước cleanup |
+| Quyền cuối sau UTP/cài lại APK | PASS quan sát | Metadata cuối ghi permission false; không yêu cầu lại để ép hộp thoại thành PASS |
+| Từ chối quyền thật | NOT RUN | Không chủ động thu hồi quyền hoặc bấm Hủy |
+| Real open/claim/release/close | BLOCKED/NOT RUN | Không có profile an toàn, toàn bộ counters thực đều là 0; không đọc raw descriptors |
+| Rút thiết bị thật/hủy USB handle | NOT RUN | Không có chu kỳ kết nối, không rút cáp hoặc gây treo I/O |
+| Firmware/vendor/I²C/reset/bulk/tune/TS | NOT RUN | Không thực hiện, ngoài phase |
+
+| Gate phần mềm | Kết quả thực | Bằng chứng |
+|---|---|---|
+| Binding chỉ yêu cầu quyền | PASS 2 phương thức mới | Grant/deny/pre-granted đều có 0 lần open, callback trùng không nhận connection hoặc claim interface, không cấp control handle |
+| Dữ liệu descriptor OnePlus dùng cho kiểm thử | PASS 1 phương thức mới | Alternate 0 rỗng và alternate 1–3 không có 82 đều bị từ chối; không suy ra 88=TS |
+| JVM toàn bộ module | PASS 180 phương thức, 0 failure/error | drivers 166/usbxfer 1/dvbservice 13, từng task dùng --rerun |
+| Instrumentation chẩn đoán debug trên API 30 | PASS 14 tests | 12 tests baseline + kiểm JSON/redaction/persistence của chế độ chỉ yêu cầu quyền và việc chặn profile không an toàn; các cổng giả lập không thực hiện I/O phần cứng |
+| Instrumentation facade/control trên API 30 | PASS 28 tests | Nhánh API 30/receiver/worker/control giả lập; không thay thế bằng chứng callback USB thật |
+| Kiểm tra nhanh native/XML trên API 30 | PASS 2 tests | Load UsbXfer trên runtime arm64 và kiểm registry tương đương XML, không gọi USB ioctl |
+| Tổng instrumentation | PASS 44 tests, 0 failure/error/skipped | XML app 14 + drivers 28 + dvbservice 2, thiết bị đích GM1900/Android 11 |
+| Debug/release/lint | PASS | Lượt Gradle cuối: 4m32s/418 tasks, 36 executed, 382 up-to-date; lint 0 Error/0 Fatal/11 Warning |
+| Java 8/tách diagnostic khỏi release | PASS | javac --release8/major 52; manifest/DEX của release không chứa Activity debug/exporter |
+| Đọc báo cáo có cấu trúc | PASS | run-as đọc JSON do AtomicFile ghi, không cần root; có timestamp/operation/generation/metadata/events, không có path/id/serial |
+
+Lượt chạy đầy đủ trước lượt cuối có 179 phương thức unit test/44 instrumentation tests PASS; sau khi bổ sung dữ liệu kiểm thử và events trong JSON, đã chạy lại đủ số lượng cuối 180/44, không dùng số baseline 177/42 làm kết quả mới. Chi tiết lệnh, kiểm tra kết nối và mốc xin quyền thật ở [WORKLOG.md](WORKLOG.md); bảng descriptor và giới hạn ở [RESEARCH.md](RESEARCH.md).
+
 ## 2026-11-03 16:51 +07 — Phase 2.4B: QEMU hardware attempt và diagnostic
 
 Windows 10.0.19045/PowerShell; chore/modernize-android-build/c153e05e454f506f5c6639685d2cded51e8c0126 cộng thay đổi trong working tree. Emulator 37.2.13/build 16740729, QEMU 2.12.0-19097-g85fa07f04ef/WHPX; image 37.0 Google APIs rev 7/API 37/x86_64. Phase này có thử chuyển tiếp USB từ host (passthrough), nhưng chưa chạy permission/connection Android thật; tách bảng này khỏi kết quả fake PASS.

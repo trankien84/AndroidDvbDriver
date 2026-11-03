@@ -1,5 +1,13 @@
 # Kiểm kê môi trường
 
+## 2026-11-03 — Phase 2.5: OnePlus 7 thật qua Wireless ADB
+
+- Thiết bị xác minh trực tiếp: **OnePlus GM1900 (OnePlus 7), Android 11/API 30**; build `GM1900_14_220617`, OTA `OnePlus7Oxygen_14.P.45_GLO_0450_2206171433`. Người dùng cung cấp OxygenOS 11.0.9.1.GM57AA; thuộc tính ro.oxygen.version trống nên không gọi đây là phiên bản vừa đo bằng thuộc tính hệ thống.
+- Wireless ADB (ADB không dây) ban đầu offline: dừng ngay. Sau khi người dùng nối lại và xác nhận, tra serial TCP/port mới rồi xác minh manufacturer/model/API/state trước khi tiếp tục. Có alias mDNS của cùng thiết bị; toàn bộ lệnh chọn đúng một serial TCP, không dùng emulator. Không lưu IP/port/thông tin xác thực ghép nối vào mã nguồn hoặc hồ sơ công khai. Build dài có kiểm tra kết nối mỗi 10s; không đổi ADB tcpip, không ghép nối lại hoặc tự chuyển thiết bị đích.
+- Android USB Host feature=true; OTG đang nhận diện TBS 734c:5530. Một cấu hình có ID 1, bốn mục cùng interface ID 0/alternate 0–3; alternate 0 không có endpoint, các alternate khác không có IN 82. Không chỉnh thiết lập OTG, thuộc tính USB hệ thống, kernel, SELinux hoặc driver Windows. Không dùng usbipd/WSL cho kết nối trực tiếp Android.
+- Compile SDK 37.2/target 37/min 21/Java 8 và toolchain AGP 9.5.0/Gradle 9.8.2/JDK 25 giữ nguyên. **Runtime kiểm thử là API 30**, không phải API 37. Chức năng xuất báo cáo có cấu trúc dùng AtomicFile/API 17, StandardCharsets/API 19; các nhánh xử lý mới đều nằm trong phạm vi min 21.
+- JSON của debug nằm trong vùng riêng của ứng dụng, đọc qua run-as, có metadata đã lọc, timestamp/operation/generation và counters (thời điểm/thao tác/phiên và bộ đếm); không có USB serial/path/OS device ID. Dữ liệu dumpsys thô có thể chứa thông tin cục bộ, không commit log thô. Chưa đo tốc độ USB đã thương lượng; kích thước packet 512 không được dùng thay cho phép đo tốc độ.
+
 ## 2026-11-03 — Phase 2.4B: kiểm kê chuyển tiếp USB từ Windows qua QEMU
 
 - Windows 10.0.19045, WHPX 10.0.19045 đã cài và dùng được theo emulator -accel-check, exit 0. Emulator **37.2.13.0/build 16740729**, QMP query-version trả **QEMU 2.12.0**, package `(v2.12.0-19097-g85fa07f04ef)`; không giả định đây là upstream QEMU 11 theo ghi chú phát hành preview.

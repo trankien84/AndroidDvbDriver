@@ -67,6 +67,22 @@ public class Tbs5530DescriptorsTest {
         }
     }
 
+    @Test public void onePlusObservedFourAlternatesDoNotProveTsProfileOrSelect88Instead() {
+        rejects(() -> Tbs5530Descriptors.selectBulkEndpoint(Collections.emptyList(),0));
+        int[] addresses={0x01,0x81,0x02,0x04,0x86,0x88};
+        int[][] types={{2,2,2,2,2,2},{3,3,3,2,3,2},{3,3,1,2,1,2}};
+        for (int alternate=1;alternate<=3;alternate++) {
+            List<Tbs5530Descriptors.Endpoint> entries=new ArrayList<>();
+            for(int index=0;index<addresses.length;index++) entries.add(new Tbs5530Descriptors.Endpoint(
+                    0,alternate,addresses[index],addresses[index]&0x80,types[alternate-1][index],
+                    alternate>1 && index<2?64:512));
+            final int alt=alternate;
+            rejects(() -> Tbs5530Descriptors.selectBulkEndpoint(entries,alt));
+            assertTrue(entries.stream().anyMatch(ep -> ep.address==0x88));
+            assertFalse(entries.stream().anyMatch(ep -> ep.address==0x82));
+        }
+    }
+
     @Test public void rejectsDuplicateStreamAndNonstreamAddresses() {
         Tbs5530Descriptors.Endpoint stream = endpoint(0x82, 2, 512);
         rejects(() -> Tbs5530Descriptors.selectBulkEndpoint(Arrays.asList(stream, stream), 0));

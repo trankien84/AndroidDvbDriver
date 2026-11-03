@@ -1,5 +1,30 @@
 # Port TBS5530 sang Android — trạng thái hiện tại
 
+## Checkpoint phát hành Phase 2.5 — 2026-11-03 22:43 +07
+
+- Người dùng yêu cầu commit và push 14 file còn lại: 8 file mã nguồn/tests Phase 2.5 và 6 hồ sơ đã biên tập. Nhánh `chore/modernize-android-build`; preflight xác nhận local và origin cùng `dc50e7304941a7d01aa1d490c13fcf09683a01c9`, stage trống. Wireless ADB đã xác minh đúng GM1900/API 30, không thao tác USB.
+- Message: `feat: add permission-only USB preflight and private diagnostic reports`. Hash và kết quả push được xác minh từ Git sau thao tác; các mục “chưa commit/push” bên dưới là lịch sử trước checkpoint.
+- Không chạy lại build/tests trong tác vụ Git. Bằng chứng gần nhất vẫn là 180 unit methods, 44 instrumentation tests trên OnePlus/API 30, debug/release build và lint 0 errors/11 warnings. Connection cycle thật vẫn BLOCKED bởi profile thiếu IN82; không firmware hoặc vendor requests.
+
+## Checkpoint biên tập tài liệu — 2026-11-03 22:26 +07
+
+Chỉ rà soát và sửa cách diễn đạt trong STATUS, ENVIRONMENT, DECISIONS và TEST-MATRIX: tách từ bị dính, làm rõ câu văn và bảng, giữ nguyên bằng chứng lịch sử. Trạng thái hiện tại vẫn là Phase 2.5 trên nhánh `chore/modernize-android-build`, HEAD `dc50e7304941a7d01aa1d490c13fcf09683a01c9`. Không chạy lại kiểm thử hoặc build, không thao tác phần cứng; các kết quả bên dưới là bằng chứng đã ghi trước đợt biên tập. Xác minh tổng thể hoàn tất lúc 22:39 +07: UTF-8, liên kết, bảng, SHA, lệnh và số liệu lịch sử được giữ nguyên; 8 file mã nguồn/test không thay đổi trong đợt biên tập. Đã dừng khi Wireless ADB mất kết nối và chỉ tiếp tục kiểm cuối sau khi người dùng xác nhận nối lại; không chạy lại build/tests hoặc thao tác USB.
+
+## Phase 2.5 — OnePlus 7 nhận USB thật; chu kỳ kết nối bị chặn bởi mô tả thiết bị, 2026-11-03 22:16 +07
+
+**Đã kiểm USB Host và metadata (thông tin mô tả thiết bị) trên OnePlus 7 GM1900, Android 11/API 30. Chưa có bằng chứng open/claim hoặc DVB hoạt động.** Nhánh `chore/modernize-android-build`, HEAD `dc50e7304941a7d01aa1d490c13fcf09683a01c9`; Phase 2.4B/ADR-015 đã push tại baseline này. Có 8 file mã nguồn/kiểm thử và 6 hồ sơ sửa, chưa stage/commit/push/merge.
+
+- **Wireless ADB (ADB không dây):** lần đầu offline nên dừng ngay. Sau khi người dùng xác nhận nối lại, tra port mới, xác minh GM1900/API 30/state=device và chỉ chọn một serial tường minh. Các lượt build/kiểm thử dài đều kiểm kết nối mỗi 10 giây; không chuyển sang emulator hoặc tự ghép nối lại.
+- **USB thật:** USB Host=true; TBS 734c:5530 có một cấu hình với ID 1 và bốn mục cùng interface ID 0, alternate 0–3. Alternate 0 rỗng; alternate 1 có Bulk 01/81/02/04/86/88. Alternate 2/3 có Interrupt/Isochronous như bảng [RESEARCH.md](RESEARCH.md). **Không alternate nào có IN 82**, khác snapshot WSL lịch sử; không tự đổi endpoint, firmware hoặc alternate.
+- **Quyền truy cập USB:** hộp thoại hệ thống thật đã hiện, người dùng tự chọn OK. Khi đọc lại, lượt đầu đã hết thời hạn 30 giây và receiver đã được dọn; callback count=0, open/claim=0. Sau khi làm mới, hasPermission=true; lượt chỉ yêu cầu quyền mới xác nhận quyền đã có sẵn và trạng thái PERMISSION_GRANTED trước khi dọn tài nguyên. Không tuyên bố callback cấp/từ chối quyền thật PASS. Sau UTP cài/gỡ kiểm thử, APK cuối được cài lại và metadata hiện permission=false; không tự yêu cầu lại hộp thoại.
+- **An toàn khi nhận connection và claim interface:** công cụ chẩn đoán chỉ bật chu kỳ khi metadata khớp profile (bộ điều kiện kiểm tra) mặc định; profile OnePlus hiện bị BLOCKED trước open. Nút chỉ yêu cầu quyền dùng cùng binding/coordinator và bảo đảm việc cấp quyền không dẫn đến nhận connection hoặc claim interface. Không gọi setInterface, setConfiguration, getRawDescriptors, controlTransfer, I²C, bulk, firmware hoặc reset.
+- **Báo cáo:** JSON chỉ có trong debug, tại `files/tbs5530-diagnostic.json`, đọc qua run-as; có timestamp/operation/generation, model/API, đầy đủ descriptors, permission/correlation count, state trước cleanup, counters/thread/duration/events và lý do chặn. Đây là các trường về thời điểm, thao tác, phiên, mô tả thiết bị, quyền, trạng thái và bộ đếm chẩn đoán. Không ghi path/device ID/serial/credentials. API 30 được kiểm thật, không nhầm compile 37.2 thành runtime 37.
+- **PASS mới:** **180 phương thức unit test** (drivers 166/usbxfer 1/dvbservice 13); **44 instrumentation tests** trên GM1900/API 30 (app 14 + drivers 28 + dvbservice 2), 0 failure/error/skipped. Debug/release APK và lint PASS: 0 errors/0 fatal/11 warnings; Java 8, bytecode 52; manifest/DEX của release không chứa công cụ chẩn đoán. Lượt cuối 4m32s/418 tasks: 36 executed, 382 up-to-date, với việc kiểm tra kết nối xuyên suốt.
+
+**BLOCKED/NOT RUN:** open/claim(false)/release/close thật, rút thiết bị thật, đọc raw descriptors, vendor/firmware/frontend/lock/TS. Không ép claim alternate 1 hoặc nhận 88 là TS; cần nghiên cứu descriptor/trạng thái firmware và được duyệt phạm vi tiếp theo. [ADR-016](DECISIONS.md) ghi quyết định tách việc xin quyền khỏi nhận connection/claim interface và giới hạn bằng chứng.
+
+**Điểm dừng:** giữ debug APK cuối trên điện thoại, không rút cáp/reset hoặc mở thêm chu kỳ. Kế tiếp rà soát khác biệt descriptor và nguồn gốc firmware trước khi xin phép khởi động phần cứng riêng; việc nhận diện thiết bị/cấp quyền không chứng minh DVB-T2 hoạt động. Không tự chuyển phase hoặc commit/push.
+
 ## Checkpoint phát hành Phase 2.4B và tài liệu — 2026-11-03 19:17 +07
 
 - Người dùng yêu cầu commit và push các thay đổi còn lại: 5 file công cụ chẩn đoán/debug tests và 6 hồ sơ đã biên tập. Nhánh `chore/modernize-android-build`; preflight xác nhận local và origin cùng `c153e05e454f506f5c6639685d2cded51e8c0126`, vùng stage trống.

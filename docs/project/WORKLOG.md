@@ -54,7 +54,7 @@
 - **PASS có phạm vi:** Git identity/source objects, workspace resolution, sync syntax, SDK inventory, WSL listing, USB visibility/ownership listing, MCP read-only calls, source analysis.
 - **FAIL:** TBS checkout thực thiếu/index thiếu; JAVA_HOME không tồn tại; SDK process/default lệch; workspace ignored (khả năng bàn giao qua Git chưa đủ).
 - **BLOCKED:** clean baseline, Gradle runtime dự kiến, GitNexus project index, cam kết không fetch ngầm toàn phiên.
-- **NOT RUN:** Gradle/unit/lint/assemble/instrumentation/native ABI/16KiB, APK/UI, WSL USB attach/claim lại, firmware/hash/license/upload, vendor/I2C/chip ID/DVB-T2 lock/MPEG-TS thật. Bằng chứng WSL/PyUSB 2026-11-01 giữ nguyên, gắn rõ lịch sử.
+- **NOT RUN:** Gradle/unit/lint/assemble/instrumentation/native ABI/16 KiB, APK/UI, WSL USB attach/claim lại, firmware/hash/license/upload, vendor/I2C/chip ID/DVB-T2 lock/MPEG-TS thật. Bằng chứng WSL/PyUSB 2026-11-01 giữ nguyên, gắn rõ lịch sử.
 
 ### Hồ sơ và bàn giao
 
@@ -122,7 +122,7 @@
 
 - `GetEnvironmentVariable` Process/User/Machine: process vẫn JAVA_HOME cũ không tồn tại, thiếu SDK/AVD env; Machine JAVA_HOME hợp lệ `C:\Program Files\Java\latest\jdk-25`, User SDK/AVD đúng. Mỗi lệnh cần thiết set JAVA_HOME từ Machine và SDK/AVD process riêng, không thay global.
 - `android --help`, `android info sdk`, `android --sdk=D:\Android\Sdk sdk list`, `emulator list`, `emulator.exe -list-avds`, ADB `devices -l`, MCP `list_avds`: ban đầu không có AVD hoặc device. Có image `system-images;android-37.0;google_apis;x86_64` cài sẵn. User đồng ý tạo AVD riêng qua ask_user.
-- Android CLI `emulator create --help` chỉ hỗ trợ chọn profile, không chọn name/path/image chính xác; dùng avdmanager hiện có. `avdmanager create avd --help` trả lỗi cú pháp rồi in đúng options; không ghi gì. Sau đó `'no' | avdmanager.bat create avd -n TBS5530_Runtime_API37 -k 'system-images;android-37.0;google_apis;x86_64' -p D:\Android\AVD\TBS5530_Runtime_API37.avd -d medium_phone`, exit0; không `--force`, không tải SDK/image, không wipe data.
+- Android CLI `emulator create --help` chỉ hỗ trợ chọn profile, không chọn name/path/image chính xác; dùng avdmanager hiện có. `avdmanager create avd --help` trả lỗi cú pháp rồi in đúng options; không ghi gì. Sau đó `'no' | avdmanager.bat create avd -n TBS5530_Runtime_API37 -k 'system-images;android-37.0;google_apis;x86_64' -p D:\Android\AVD\TBS5530_Runtime_API37.avd -d medium_phone`, exit 0; không `--force`, không tải SDK/image, không wipe data.
 - Emulator process ở shell 1004: `emulator.exe -avd TBS5530_Runtime_API37 -port 5554 -no-snapshot -no-boot-anim -no-audio -no-window -gpu swiftshader_indirect`. Đợi `get-state=device` và `sys.boot_completed=1` với timeout 4 phút (lượt 1005 exit 0).
 - Runtime từ getprop: Android 17, SDK 37, x86_64; `getconf PAGE_SIZE=4096`; `emu avd name` đúng AVD đã tạo. `pm list features` không có USB host. Không gắn tuner/emulator USB passthrough. Source.properties của image ghi revision 7, CLI catalog trước đó báo 8; ghi metadata/runtime thực, không suy diễn runtime 37.2 từ compileSDK.
 - `gradlew --version`: Gradle 9.8.2/JDK 25.0.5.0.3. Đọc scripts và source.properties xác nhận AGP 9.4.1/compile 37.2/target 37/min 21, NDK 30.0.16248370/CMake 4.1.2/BT 37.0.0; ADB 37.0.1/Emulator 37.2.13. Không nâng version/dependency hoặc cài package nào.
@@ -152,7 +152,7 @@
 
 - Workspace JSON có 4 roots tương đối đúng và PowerShell mặc định. Exception `.gitignore` đã có sẵn trước phase; không thêm trùng/force-add/stage. Hash cuối .gitignore `DB291A4767C7E5C4B900D560E9B12781A24BDB5D287C280A0B076CBF625981A3`, workspace `B715366CEBE4B1C9A74B1ECC4F747024D10EECEB581B4FF1ED0800134F4D11F9`, giữ nguyên so với trước khi tạo branch.
 - Cập nhật snapshot toolchain bằng tiếng Anh trong `.github/copilot-instructions.md` và `android-build.instructions.md`; giữ quy tắc an toàn Windows/WSL/usbipd/MCP/hardware. Không sửa 4 instructions còn lại/skills/global settings. Không nâng AGP 9.5 hoặc dependencies.
-- Reference commands chỉ `--no-lazy-fetch`/GIT_OPTIONAL_LOCKS0 rev-parse/status/sparse list/Test-Path: TBS SHA 2ce787de9f6e81b4294692a45de15596ae2e1322 vẫn thiếu index/81399 D, tbs5530.c/.h và cxd2878.c thiếu trên đĩa. C SHA c5fa27eecbe80633cbb365cc44656daea1c0e2e3 và Go 11228b05fb1626bf41c4e1879ace10cd0a8d575c sạch. Không sync/fetch/repair/reset hoặc ghi USB/firmware/I2C/vendor.
+- Các lệnh kiểm reference chỉ gồm rev-parse/status/sparse list/Test-Path, dùng `--no-lazy-fetch` và GIT_OPTIONAL_LOCKS bằng 0: TBS SHA 2ce787de9f6e81b4294692a45de15596ae2e1322 vẫn thiếu index/81399 D, tbs5530.c/.h và cxd2878.c thiếu trên đĩa. C SHA c5fa27eecbe80633cbb365cc44656daea1c0e2e3 và Go 11228b05fb1626bf41c4e1879ace10cd0a8d575c sạch. Không sync/fetch/repair/reset hoặc ghi USB/firmware/I2C/vendor.
 - Unit regression ở lượt 1028 exit 0/32s, 39 tasks UP-TO-DATE: validation task thành công, không nói 31 methods được chạy lại mới. Tests đã thực chạy mới là instrumentation 2 methods.
 - Cleanup: xác nhận `emu avd name` trước `adb -s emulator-5554 emu kill`; shell 1004 kết thúc exit 0. Lần list ngay 3s sau còn serial do shutdown đang diễn ra; recheck lượt 1031 `adb devices -l` rỗng. Giữ AVD để tái sử dụng, không wipe/xóa hoặc dừng thiết bị khác.
 
@@ -184,7 +184,7 @@
 ### Preflight và bản stable
 
 - `web_fetch` đọc Google AGP API reference, Current Release 9.5.0; notes 9.5 có final 9.5.0 entry và đúng Google Maven POM 9.5.0. Các URL ở ADR-009; kiểm ngày 2026-11-02. Compatibility: Gradle >=9.6/JDK >=17/API 37; ma trận Java của Gradle 9.8.2 hỗ trợ JDK 25 từ 9.1.0. Không suy default NDK 28/BT 36 là yêu cầu downgrade project pins 30/37.
-- Đối chiếu Android CLI --help/infoSDK/sdklist/docssearch AGP 9.5 và source.properties: còn platform 34/37.2, BT 37, NDK 30, CMake 4.1.2, cmdline 23, ADB 37.0.1, emulator 37.2.13; giữ image 34 TV x86/37.0 Google APIs x86_64. Người dùng đã dọn platform 37.0/BT 36/NDK 28/CMake 3.22.1; phase không xóa thêm. Image revision local 7 khác catalog in 8; ghi rõ metadata local, không update toàn SDK.
+- Đối chiếu Android CLI qua --help, thông tin SDK, danh sách SDK, tìm tài liệu AGP 9.5 và source.properties: còn platform 34/37.2, BT 37, NDK 30, CMake 4.1.2, cmdline 23, ADB 37.0.1, emulator 37.2.13; giữ image 34 TV x86/37.0 Google APIs x86_64. Người dùng đã dọn platform 37.0/BT 36/NDK 28/CMake 3.22.1; phase không xóa thêm. Image revision local 7 khác catalog in 8; ghi rõ metadata local, không update toàn SDK.
 - JAVA_HOME của Process cũ trỏ tới jdk-25 không tồn tại, User trống, Machine C:\Program Files\Java\latest\jdk-25 hợp lệ. Child build nạp Machine JAVA_HOME, ANDROID_HOME=D:\Android\Sdk/ANDROID_AVD_HOME=D:\Android\AVD; wrapper --version xác nhận Launcher 25.0.5.0.3/daemon resolved JDK 25.0.5.0.3. Không đổi global env/IDE.
 - Audit lần đầu, lượt 1043, bị RemoteSigned chặn. Đã hỏi; người dùng chỉ định rõ `Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process`. Các lệnh script dùng try/finally lưu và restore policy cũ trong child Process, không thay User/Machine. Process sau đó là Undefined, CurrentUser/LocalMachine vẫn RemoteSigned. Không UnblockFile hoặc tự bypass mặc định trong script/task.
 
@@ -395,7 +395,7 @@ Evidence local ở các module `build\test-results\testDebugUnitTest\TEST-*.xml`
 
 ### Giới hạn và bàn giao
 
-- Không instrumentation mới: thay đổi JVM-only chưa được nối vào Android runtime, không Android framework binding/manifest/JNI/registry changes. Native-load/registryXML/UI PASS trước là lịch sử, không PASS mới. Real USB/permission dialog/firmware/lock/TS/native cancel NOT RUN.
+- Không instrumentation mới: thay đổi JVM-only chưa được nối vào Android runtime, không Android framework binding/manifest/JNI/registry changes. Các kết quả PASS trước về native load, registry XML và UI là lịch sử, không phải PASS mới. Real USB/permission dialog/firmware/lock/TS/native cancel NOT RUN.
 - Đã tra Google UsbDeviceConnection/USB Host guide: controlTransfer EP0 synchronous, timeout tính bằng ms/kết quả âm báo failure; không có cancellation handle riêng bảo đảm ngắt call. Code không cưỡng bức close in-flight; call không trả thì pending/reopen bị chặn. Deferred cleanup có thể chạy trên transaction thread; cancel không được join chính nó. Permission/open/claim timeout là caller/port contract, không thêm scheduler.
 - Cần review ADR-012 và Android attachment identity/receiver/PendingIntent/deadline/threading trước Phase 2.3. Không dùng firmware thật/production frontend hoặc bring-up phần cứng khi chưa có kế hoạch/phê duyệt riêng.
 - Kiểm cuối: git diff --check PASS; UTF-8 strict/relative links PASS cho 11 file, main core có 0 Android/AndroidX imports; 8 tracked changes + 3 untracked file Java, staged diff rỗng. File concurrency mới được chuẩn hóa CRLF→LF sau khi gate EOL phát hiện, không đổi logic/assertion, không chạy lại tests cho EOL-only. Toàn bộ file Java mới/sửa cuối dùng LF. JDK Machine java -version xác nhận 25.0.5.0.3; các output kiểm tra tạm không còn.
@@ -589,7 +589,7 @@ $env:LIBUSB_DEBUG = '4'
 
 - Thêm 5 file: app/src/debug/AndroidManifest.xml, Tbs5530DiagnosticController.java, Tbs5530DiagnosticMetadata.java, Tbs5530UsbDiagnosticActivity.java và app/src/androidTest/.../Tbs5530UsbDiagnosticTest.java. Chỉ có debug Activity mở tường minh, không launcher/USB attach filter, không auto open theo extras. Debug USB Host optional để chạy trên image không có feature; giữ main/release USB Host required true.
 - Controller dùng binding/facade/runtime/session hiện hữu, giữ qua Activity recreation, chặn cycle mới khi pending. Refresh chỉ đọc metadata; người dùng chọn đúng TBS mới request permission. Grant mới thực hiện một open/claim false cycle/rồi release-close; deny/timeout có 0 open. Không gọi controlIo/controlTransfer hoặc recovery/retry. Báo cáo plain text lọc path/id/serial/exception messages; thread/duration/counters/state hiển thị kết quả trả về thực, không gọi PASS khi thiếu cleanup.
-- Sau blocker, boot AVD thường ở shell 150 để regression, không retry passthrough. Diagnostic install thực Success/explicit launch COLD Status ok 7704 ms. UI“USBHostkhông/khôngUSBdevices/khôngTBS/0open/0claim/NOTRUNcycle”. Không nhấn request permission vì không có target. Output layout tiếng Việt của Android CLI bị mojibake do encoding stdout; agent kiểm source UTF8/Unicode thật không có U+FFFD.
+- Sau blocker, boot AVD thường ở shell 150 để regression, không retry passthrough. Cài diagnostic thực trả Success; khởi động tường minh có kết quả COLD Status ok, 7704 ms. UI cho thấy không có USB Host, không có USB devices hoặc TBS, 0 open/0 claim; chu kỳ ở trạng thái NOT RUN. Không nhấn request permission vì không có target. Output layout tiếng Việt của Android CLI bị lỗi hiển thị dấu do encoding stdout; agent kiểm source UTF-8/Unicode thật, không có U+FFFD.
 - Launcher/SystemUI ANR overlays xuất hiện trên emulator; chọn Wait theo ngữ nghĩa để đóng, không tắt lock/security/đổi system settings. MCP describe_ui gặp uiautomator dump busy 137; dùng Android CLI semantic layout/input làm fallback. Không gộp System ANR thành diagnostic app ANR.
 
 ### Regression, lỗi test đã sửa và release exclusion
@@ -633,3 +633,76 @@ Kiểm cuối: git diff --check, UTF-8 strict/LF/EOF file Java và liên kết M
 - Đợt biên tập đã hoàn tất kiểm tra sáu hồ sơ: UTF-8, liên kết, cấu trúc bảng, code fences, SHA và lệnh lịch sử được giữ; fingerprint xác nhận 5 file mã nguồn không bị thay đổi bởi biên tập. Các file kiểm tra tạm đã dọn.
 - Message `feat: add debug USB preflight diagnostics and polish project docs`, có Co-authored-by trailer. Chỉ stage 11 file nêu trên; không APK, raw logs, firmware hoặc reference sources. Push tường minh lên origin/chore/modernize-android-build, không force; xác minh SHA remote và working tree sau thao tác, không ghi trước thành công.
 - Không chạy lại build/test/hardware cho tác vụ Git và checkpoint tài liệu. Kết quả 177 unit methods/42 instrumentation tests/debug/release/lint của Phase 2.4B vẫn là bằng chứng thực gần nhất, không phải lượt PASS mới. Không đổi driver Windows, không mở Phase 2.5 hoặc hardware bring-up.
+
+## 2026-11-03 21:28–22:16 +07 — Phase 2.5: OnePlus 7/API 30, enumeration và permission có giới hạn
+
+### Wireless guard và baseline
+
+- 21:28, `adb devices -l` báo OnePlus offline: dừng ngay, không sửa mã, build, chạy test hoặc thao tác USB. Người dùng xác nhận nối lại lúc 21:34; đã tra serial TCP với port mới, trạng thái device, model GM1900, manufacturer OnePlus, API 30 và Android 11. Có alias mDNS của cùng điện thoại nhưng mọi lệnh dùng một serial TCP đã xác minh. Không tự chọn emulator, pair lại, đổi tcpip 5555 hoặc tiếp tục chỉ vì thiết bị tự online.
+- Repository chính sạch khi bắt đầu, nhánh chore/modernize-android-build tại `dc50e7304941a7d01aa1d490c13fcf09683a01c9`; Phase 2.4B/ADR 015 đã push. Đã đọc instructions, các quy tắc hardware/ADB/build/records và phần mới nhất của 6 hồ sơ/ADR 010–015; dùng project-handoff/tbs-research. Ba reference repositories được kiểm đầu/cuối, đúng SHA: TBS 2ce787de9f6e81b4294692a45de15596ae2e1322, C c5fa27eecbe80633cbb365cc44656daea1c0e2e3, Go 11228b05fb1626bf41c4e1879ace10cd0a8d575c; có 0 changes, dùng no-lazy-fetch. Không sửa references hoặc toolchain.
+- Thuộc tính runtime: build GM1900_14_220617, OTA OnePlus7Oxygen_14.P.45_GLO_0450_2206171433; ro.oxygen.version trống. OxygenOS 11.0.9.1.GM57AA là phiên bản người dùng cung cấp. USB Host feature=true, không cần đổi thiết lập OTG. Không dùng WSL/usbipd hoặc driver Windows trong kiểm thử trực tiếp trên Android.
+- Guard (bộ kiểm tra kết nối) kiểm danh sách ADB devices, state, model và API trước mọi thao tác thiết bị/build, đồng thời kiểm mỗi 10s khi Gradle chạy. Wrapper theo dõi PID tiến trình con; nếu guard thất bại thì dừng tiến trình con và ném lỗi WIRELESS_ADB_STOP, không chuyển sang thiết bị khác. Không có lần mất kết nối mới trong các lệnh đã hoàn tất. IP/port/serial cục bộ không được ghi vào mã nguồn hoặc tài liệu công khai.
+
+### Descriptors thực tế và chặn acquisition
+
+- Đọc dumpsys usb và cây giao diện qua Android CLI, không yêu cầu người dùng gửi ảnh/screenshot. Lượt uiautomator dump riêng không tạo được file; chuyển sang Android CLI layout để đọc đúng app. Debug APK baseline khởi động lạnh trong 417ms. Không bấm chạy chu kỳ khi descriptor (mô tả cấu trúc USB) chưa được phân tích.
+- Metadata thật: VID 734c/PID 5530, configuration ID 1, 4 entries cùng interface ID 0, alternate 0–3. Alt 0 rỗng; alt 1 có Bulk 01/81/02/04/86/88, packet 512, interval 0. Alt 2 có Interrupt 01/81 với packet 64, interval 1; Interrupt 02/86 với packet 512, interval 1; Bulk 04/88 với packet 512, interval 0. Alt 3 tương tự nhưng 02/86 là Isochronous. Không có 82. Bảng đầy đủ index/ID/alternate/address/direction/type/packet/interval được ghi trong RESEARCH; JSON được đọc trực tiếp bằng run-as.
+- Đối chiếu nguồn chính thức: properties trong tbs5530.c dùng TS 82, còn download firmware được tách riêng; snapshot WSL trước có 81/82, khác hiện tại. Không suy ra firmware đã đổi hoặc dùng 88 thay 82. Tbs5530Descriptors chặn đúng theo profile, không được nới validation hoặc đổi alternate để claim. Open/claim/release/close thật bị BLOCKED; không gọi getRawDescriptors khi chưa open, không gọi setInterface/setConfiguration.
+
+### Sửa diagnostic và permission-only có regression
+
+- Baseline chỉ có nút permission+cycle, chưa có chức năng xuất dữ liệu có cấu trúc vào vùng riêng của app. Đã thêm permission-only (chỉ xin quyền), tái dùng Binding/Coordinator với acquire=false sau grant. Cách start mặc định cũ được giữ nguyên. Snapshot kiểm profile trước chu kỳ; UI tắt chu kỳ với descriptor OnePlus nhưng vẫn cho phép xin quyền. Không tạo vòng đời USB thứ hai, không gọi controlIo/transfer trong diagnostic.
+- JSON export chỉ dành cho debug, dùng AtomicFile ghi vào `files/tbs5530-diagnostic.json`; đọc bằng `adb -s <VERIFIED_SERIAL> shell run-as info.martinmarinov.dvbdriver cat files/tbs5530-diagnostic.json`. Các trường gồm timestamp/operation/generation/model/API/configs/interfaces/endpoints/permission/callback/state_before_cleanup/counters/events/thread/duration/result/failure_reason; loại bỏ path, OS ID, USB serial, correlation UUID và credentials. Mã release không export.
+- Thêm unit tests cho permission-only với grant/deny/pre-granted, bảo đảm 0 open, cùng fixture mô phỏng descriptor OnePlus. Instrumentation kiểm lưu JSON, lọc dữ liệu, permission-only và profile không an toàn với 0 open. Không bỏ assertion hoặc dùng callback giả rồi gọi là hardware PASS.
+
+### Permission thực: điều đã và chưa chứng minh
+
+- Trước request, JSON ghi operation 0, generation 0, state DETECTED, hasPermission=false và 0 open/claim. Cài APK mới bằng -r trả Success, khởi động trong 874ms. Metadata profile bị BLOCKED, nút chạy chu kỳ không được kích hoạt.
+- 21:55, bấm nút “Chỉ yêu cầu quyền (không mở USB)” sau khi guard đạt. Dialog thật “Cho phép DVB-T Driver truy cập null?” xuất hiện vì thiết bị không có product name. Ask_user yêu cầu người dùng tự chọn; người dùng trả lời đã OK. Agent không bấm Allow hoặc cấp quyền qua ADB/root.
+- Khi đọc JSON, operation 1/generation 1 đã CLOSED; callback count=0, correlation=false, permission vẫn là ĐANG CHỜ, pending=false, cleanup=false và 0 open/claim/release/close. Deadline 30s đã hết trước khi đọc lại, receiver đã cleanup; không gọi callback grant là PASS. Refresh metadata sau đó thấy hasPermission=true: quyền OS đã được cấp, không có thiết bị khác hoặc connection mới.
+- Lượt permission-only operation 2 là pre-granted (đã có quyền): không request dialog, state PERMISSION_GRANTED trước cleanup và CLOSED sau cleanup, 0 open/claim/callback, không pending. Không tự thu hồi quyền để hiện lại dialog. Denied thật vẫn NOT RUN; phân biệt rõ timeout với quyền thực tế tại thời điểm đọc. Cập nhật nhãn báo cáo diagnostic thành TIMEOUT thay ĐANG CHỜ sau deadline, không nới timeout để biến test cũ thành PASS.
+- UTP instrumentation cài/gỡ target debug APK; sau khi cài lại APK cuối, metadata ghi hasPermission=false. Không suy ra quyền đã cấp phải tồn tại qua cài/gỡ; không tự xin lại. JSON cuối ghi operation 0, state DETECTED, BLOCKED_PROFILE/MISSING_SAFE_TS_ENDPOINT_PROFILE, 0 open/0 claim, USB Host=true và có target. Giữ APK cuối trên điện thoại, chưa rút USB.
+
+### Commands regression và kết quả mới trên API 30
+
+Chỉ đặt môi trường tiến trình con trong PowerShell: lấy JAVA_HOME từ Machine, ANDROID_HOME=D:\Android\Sdk và ANDROID_SERIAL=<VERIFIED_SERIAL>. Guard mỗi 10s kiểm ADB devices/model/API và chọn serial cụ thể; không dùng emulator mặc định dù có alias mDNS.
+
+```powershell
+.\gradlew.bat :drivers:testDebugUnitTest --tests *Tbs5530UsbBindingTest :app:assembleDebug --console plain --no-daemon --max-workers=1
+.\gradlew.bat :app:assembleDebug --console plain --no-daemon --max-workers=1
+```
+
+Hai lượt kiểm tập trung/build đều PASS: lượt đầu 2m54s, 100 tasks, 18 executed và 82 up-to-date; lượt sau 1m13s, 95 tasks, 12 executed và 83 up-to-date. Lượt đầy đủ trước fixture cuối PASS trong 7m2s, 418 tasks, 85 executed và 333 up-to-date, với 179 unit tests + 44 instrumentation tests. Sau khi bổ sung fixture descriptor và JSON events, đã chạy lại lượt cuối:
+
+```powershell
+.\gradlew.bat :drivers:testDebugUnitTest --rerun :usbxfer:testDebugUnitTest --rerun :dvbservice:testDebugUnitTest --rerun :app:connectedDebugAndroidTest :drivers:connectedDebugAndroidTest :dvbservice:connectedDebugAndroidTest :app:assembleDebug :app:assembleRelease :app:lintDebug --console plain --no-daemon --max-workers=1
+```
+
+**PASS exit 0, 4m32s; 418 tasks: 36 executed và 382 up-to-date.** XML thực tế: drivers 166/usbxfer 1/dvbservice 13 = **180 JVM methods, 0 failure/error**; instrumentation app 14 + drivers 28 + dvbservice 2 = **44 tests, 0 failure/error/skipped**, target GM1900/Android 11/API 30. Tất cả ports trong app instrumentation đều là fake; UI tests chỉ kiểm metadata/export, không bấm xin quyền phần cứng. Fake control của drivers không gửi lệnh tới TBS. NativeLibrarySmokeTest::usbTransferLibraryLoadsWithoutOpeningUsb và DeviceFilterXmlEquivalenceTester::allDevicesAreInXml đều PASS mới trên API 30, không gọi ioctl với FD giả.
+
+- Build debug/release APK PASS; lint XML có 0 Error/0 Fatal/11 Warning. `apkanalyzer manifest print` và `dex packages --defined-only` xác nhận release có 0 diagnostic/exporter classes; USB Host required=true không đổi. Không nâng build tools/dependencies hoặc thêm suppression.
+- Dùng JDK Machine, javac --release8 với android 37.2 jar cho nguồn TBS main + debug: PASS; javap cho DiagnosticActivity có major version 52. Thư mục kiểm tra app/build/p25-java8-check đã được xóa trong finally, xác nhận không còn. Compile 37.2 không đồng nghĩa runtime 37; runtime thực tế là 30.
+
+### Bàn giao và giới hạn
+
+Enumeration/USB Host và hasPermission tại thời điểm đọc là PASS thực; dialog đã xuất hiện và người dùng đã chọn OK. Callback grant thật chưa được xác minh vì hết deadline; open/claim/release/close thật và physical detach vẫn NOT RUN/BLOCKED do descriptor profile. Không cố gây tình huống I/O bị chặn, không claim với force, không gọi setInterface/setConfiguration hoặc thực hiện vendor/I²C/reset/firmware/LNB/tune/bulk/TS. Không tương tác với app ngoài diagnostic và dialog USB đã được duyệt.
+
+Kiểm cuối: Wireless ADB vẫn đúng GM1900/API 30/state=device; không có lần mất kết nối mới sau khi người dùng xác nhận reconnect. UTF-8/liên kết Markdown và git diff --check PASS; IDE không errors; stage trống. Không diff build/wrapper/app main/release, native/usbxfer/dvbservice, registry hoặc production descriptor/facade validation. Ba references đúng SHA khóa và sạch. Không script/output compile tạm còn lại; raw logs ngoài Git. Giữ debug APK cuối trên thiết bị, không force-stop ứng dụng khác hoặc thay thiết lập hệ thống.
+
+Cần review ADR-016 và descriptor/state/provenance trước phase bridge/firmware được cấp phép riêng. Không đánh giá driver/DVB là ready chỉ từ enumeration hoặc grant. Repository chính vẫn ở dc50e73; 8 file source/test và 6 hồ sơ sửa, chưa stage/commit/push/merge. Không tự chuyển phase hoặc yêu cầu cắm/rút lặp.
+
+## 2026-11-03 22:26 +07 — Biên tập lại sáu hồ sơ sau Phase 2.5 theo yêu cầu
+
+- Người dùng yêu cầu rà lại cả 6 hồ sơ dự án để sửa chữ dính và câu khó đọc. Chỉ biên tập tài liệu; phần việc tại đây chỉ sửa WORKLOG.md, đọc hết lịch sử và giữ thứ tự các mục, bằng chứng, số liệu, trạng thái, lệnh và định danh kỹ thuật.
+- Giữ nguyên 8 file mã nguồn/test Phase 2.5 chưa commit trên nhánh chore/modernize-android-build, HEAD dc50e73. Không sửa mã nguồn, references hoặc instructions; không stage/commit/push, chạy build/tests, ADB hoặc thao tác phần cứng.
+- Việc xác minh chung cả 6 hồ sơ do parent thực hiện sau biên tập; mục này không ghi trước kết quả PASS.
+- **Xác minh hoàn tất lúc 22:39 +07:** lượt kiểm cuối trước đó bị dừng ngay khi Wireless ADB mất kết nối. Sau khi người dùng xác nhận nối lại lúc 22:38, tra serial TCP mới và xác minh OnePlus GM1900/API 30/state=device; không tái sử dụng connection hoặc generation USB cũ, không thao tác USB.
+- Đối chiếu với snapshot trước biên tập, bao gồm nội dung Phase 2.5 chưa commit: cả 6 hồ sơ giữ nguyên SHA, URL, inline code, lệnh trong code fences, cấu trúc bảng và số liệu. UTF-8, liên kết Markdown và git diff --check PASS. Cảnh báo thứ tự chữ số trong STATUS chỉ do thêm checkpoint biên tập; phần lịch sử giữ nguyên thứ tự chữ số. Không còn mẫu chữ dính phổ biến đã kiểm ngoài code/URL.
+- Fingerprint SHA-256 xác nhận cả 8 file mã nguồn/test không thay đổi trong đợt biên tập. Không chạy lại build/tests hoặc phần cứng, không stage/commit/push. File kiểm tra và snapshot tạm được dọn sau xác minh.
+
+## 2026-11-03 22:43 +07 — Commit và push Phase 2.5 cùng tài liệu đã biên tập
+
+- Người dùng phê duyệt commit và push các thay đổi còn lại. Preflight: nhánh chore/modernize-android-build, local/live origin cùng dc50e7304941a7d01aa1d490c13fcf09683a01c9; stage trống, đúng 14 file (8 mã nguồn/tests và 6 hồ sơ), git diff --check PASS. Guard xác nhận OnePlus GM1900/API 30 online bằng serial hiện hành; không dùng handle USB cũ hoặc thao tác USB.
+- Message `feat: add permission-only USB preflight and private diagnostic reports`, có Co-authored-by trailer. Chỉ stage 14 file đã kiểm; không APK, raw logs, pairing credentials, firmware hoặc references. Push tường minh origin/chore/modernize-android-build, không force; xác minh SHA remote và working tree sau thao tác, không ghi trước thành công.
+- Không chạy lại build/test/hardware cho tác vụ Git và checkpoint này. Bằng chứng gần nhất của Phase 2.5 là 180 unit methods, 44 instrumentation tests, debug/release build và lint 0 errors/11 warnings. Không thay guard descriptor, không mở connection cycle thật hoặc firmware/vendor bring-up.
+- Lượt commit đầu dừng trước stage do Wireless ADB mất kết nối. Sau xác nhận nối lại lúc 22:45, đã tra serial mới và xác minh OnePlus GM1900/API 30/state=device. Kiểm diff phát hiện một dòng trống thừa ở cuối WORKLOG; chỉ bỏ dòng đó, không sửa logic hoặc bằng chứng. Không chỉnh bản đính kèm chỉ đọc; mọi thay đổi tài liệu ở repository chính.

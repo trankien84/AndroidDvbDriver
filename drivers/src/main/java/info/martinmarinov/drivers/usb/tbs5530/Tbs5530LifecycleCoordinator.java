@@ -136,12 +136,17 @@ public final class Tbs5530LifecycleCoordinator implements AutoCloseable {
     /** Returns whether this callback was consumed, not whether the device became ready. */
     public boolean permissionResult(Request request, AttachmentIdentity identity, boolean granted)
             throws IOException {
+        return permissionResult(request, identity, granted, true);
+    }
+
+    public boolean permissionResult(Request request, AttachmentIdentity identity, boolean granted, boolean acquire)
+            throws IOException {
         synchronized (session) {
             if (!matches(request) || !request.identity.equals(identity) || !request.pending
                     || session.getState() != Tbs5530Session.State.WAIT_PERMISSION) return false;
             request.pending = false;
             if (!session.permissionResult(request.token, granted)) return false;
-            if (!granted) return true;
+            if (!granted || !acquire) return true;
             acquiring++;
         }
         acquire(request);

@@ -33,6 +33,11 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
     private boolean active, bindingClosed, destroyed, connectedObserved;
     private int selected, clicks, failures;
     private String permission = "CHƯA YÊU CẦU";
+    private boolean permissionOnly;
+    private int callbacks;
+    private boolean correlationMatched;
+    private boolean permissionRequested;
+    private String stateBeforeCleanup = "NOT_RUN";
 
     Tbs5530DiagnosticController(FacadeFactory factory, Metadata metadata) {
         this(factory, metadata, 30000, 10000);
@@ -60,19 +65,28 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
     List<String> labels() { return new ArrayList<>(snapshot.labels); }
     int selectedIndex() { return selected; }
     void select(int index) { main(); if (!active && index >= 0 && index < snapshot.devices.size()) selected = index; }
-    boolean canStart() { return !destroyed && !active && !snapshot.devices.isEmpty(); }
+    boolean canRequestPermission() { return !destroyed && !active && !snapshot.devices.isEmpty(); }
+    boolean canStart() { return canRequestPermission() && snapshot.acquisitionAllowed.get(selected); }
     boolean isActive() { return active; }
     boolean isRuntimeTerminated() { return runtime == null || runtime.isTerminated(); }
 
-    void startSelected() {
+    void startSelected() { start(false); }
+    void permissionSelected() { start(true); }
+
+    private void start(boolean onlyPermission) {
         main();
-        if (!canStart()) return;
+        if (onlyPermission ? !canRequestPermission() : !canStart()) return;
         Tbs5530UsbBinding.Device device = snapshot.devices.get(selected);
         if (device.vendorId != 0x734c || device.productId != 0x5530) return;
         synchronized (this) {
             steps.clear();
             for (int i = 0; i < attempts.length; i++) { attempts[i] = 0; completed[i] = 0; }
             failures = 0;
+            permissionOnly = onlyPermission;
+            callbacks = 0;
+            correlationMatched = false;
+            permissionRequested = false;
+            stateBeforeCleanup = "NOT_RUN";
             permission = "ĐANG KIỂM TRA";
         }
         clicks++;
@@ -85,7 +99,7 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
         try {
             binding = new Tbs5530UsbBinding(session, decorate(factory.create()), runtime, runtime,
                     this::error, permissionTimeout, acquisitionTimeout);
-            binding.start(device);
+            if (onlyPermission) binding.requestPermissionOnly(device); else binding.start(device);
         } catch (IOException | RuntimeException failure) {
             error(failure);
             closeBinding();
@@ -100,7 +114,11 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
         if (!bindingClosed && binding != null && !binding.isPending()) {
             // CONNECTED means ownership only. Close immediately, without probing readiness.
             connectedObserved = session.getState() == Tbs5530Session.State.CONNECTED;
-            synchronized (this) { steps.add("Phiên trước khi đóng: " + session.getState()); }
+            synchronized (this) {
+                stateBeforeCleanup = session.getState().name();
+                if (session.getState() == Tbs5530Session.State.CLOSED && "ĐANG CHỜ".equals(permission)) permission = "TIMEOUT";
+                steps.add("Phiên trước khi đóng: " + session.getState());
+            }
             closeBinding();
         }
         if (bindingClosed && (binding == null || !binding.isPending())) active = false;
@@ -132,9 +150,11 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
             }
             @Override public Tbs5530UsbBinding.Registration requestPermission(Tbs5530UsbBinding.Device device,
                     String correlation, Tbs5530UsbBinding.PermissionCallback callback) throws IOException {
-                synchronized (Tbs5530DiagnosticController.this) { permission = "ĐANG CHỜ"; }
+                synchronized (Tbs5530DiagnosticController.this) { permission = "ĐANG CHỜ"; permissionRequested = true; }
                 return delegate.requestPermission(device, correlation, (token, reported, granted) -> {
                     synchronized (Tbs5530DiagnosticController.this) {
+                        callbacks++;
+                        correlationMatched = correlation.equals(token) && device.equals(reported);
                         permission = granted == null ? "KHÔNG XÁC ĐỊNH" : granted ? "ĐÃ CẤP" : "TỪ CHỐI";
                     }
                     callback.result(token, reported, granted);
@@ -222,6 +242,42 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
         out.append("open đo cả kiểm tra descriptor của facade; claim(false) do facade Android thực thi.\n");
         for (String entry : steps) out.append(entry).append('\n');
         return out.toString();
+    }
+
+    synchronized org.json.JSONObject structuredReport() throws org.json.JSONException {
+        org.json.JSONObject json = new org.json.JSONObject();
+        json.put("timestamp_epoch_ms",System.currentTimeMillis());json.put("operation_id",clicks);
+        json.put("generation",session==null?0:session.getGeneration());
+        json.put("state",session==null?"DETECTED":session.getState().name());
+        json.put("permission",permission);json.put("permission_only",permissionOnly);
+        json.put("permission_requested",permissionRequested);json.put("pre_granted",!permissionRequested && "ĐÃ CẤP".equals(permission));
+        json.put("state_before_cleanup",stateBeforeCleanup);
+        json.put("acquisition_profile_allowed",!snapshot.devices.isEmpty() && snapshot.acquisitionAllowed.get(selected));
+        json.put("acquisition_result",attempts[0]>0?completed[0]>0?"OPENED":"FAIL":"NOT_RUN");
+        json.put("failure_reason",failures>0?"EXCEPTION_RECORDED":"TIMEOUT".equals(permission)?"PERMISSION_DEADLINE":
+                !snapshot.devices.isEmpty() && !snapshot.acquisitionAllowed.get(selected)?"MISSING_SAFE_TS_ENDPOINT_PROFILE":"NONE");
+        json.put("callback_count",callbacks);json.put("correlation_device_matched",correlationMatched);
+        json.put("pending",active);json.put("cleanup_pending",session!=null&&session.isCleanupPending());
+        json.put("open_calls",attempts[0]);json.put("claim_calls",attempts[1]);json.put("release_calls",attempts[2]);json.put("close_calls",attempts[3]);
+        json.put("open_completed",completed[0]);json.put("claim_completed",completed[1]);json.put("release_completed",completed[2]);json.put("close_completed",completed[3]);
+        json.put("failures",failures);json.put("steps",new org.json.JSONArray(steps));
+        org.json.JSONArray events = new org.json.JSONArray();
+        for (String entry : steps) {
+            String[] fields=entry.split(" \\| ");
+            org.json.JSONObject event=new org.json.JSONObject();
+            event.put("operation",fields[0]);
+            if(fields.length>1)event.put("thread",fields[1]);
+            if(fields.length==4) {
+                event.put("duration_ms",Long.parseLong(fields[2].replace(" ms","")));
+                event.put("result",fields[3]);
+            } else if(fields.length==3)event.put("result",fields[2]);
+            events.put(event);
+        }
+        json.put("events",events);
+        json.put("test_status",active?"PENDING":failures>0?"FAIL":permissionOnly&&"ĐÃ CẤP".equals(permission)?"PERMISSION_CONFIRMED":
+                !snapshot.devices.isEmpty()&&!snapshot.acquisitionAllowed.get(selected)?"BLOCKED_PROFILE":"NOT_RUN");
+        json.put("text_report",report());
+        return json;
     }
 
     private void changed() { if (observer != null) observer.run(); }

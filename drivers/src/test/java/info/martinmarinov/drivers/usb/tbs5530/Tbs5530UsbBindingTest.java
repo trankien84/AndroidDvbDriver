@@ -109,6 +109,27 @@ public class Tbs5530UsbBindingTest {
             f.worker.drain(); assertEquals(Arrays.asList("claim","control","release","close"),f.usb.connections.get(0).calls);
         }
     }
+    @Test public void permissionOnlyGrantAndDenialNeverAcquireOrClaim() throws Exception {
+        for (boolean grant : Arrays.asList(false, true)) try (Fixture f = new Fixture()) {
+            f.binding.requestPermissionOnly(A); f.worker.drain();
+            f.usb.permission = grant; f.usb.callback.result(f.usb.correlation, A, grant); f.worker.drain();
+            assertEquals(0, f.usb.opens); assertTrue(f.usb.connections.isEmpty());
+            assertEquals(grant ? Tbs5530Session.State.PERMISSION_GRANTED : Tbs5530Session.State.CLOSED, f.session.getState());
+            assertThrows(IOException.class, f.binding::controlIo);
+            f.usb.callback.result(f.usb.correlation, A, true); f.worker.drain(); assertEquals(0, f.usb.opens);
+            assertEquals(1, f.usb.receiverCloses); assertFalse(f.binding.isPending());
+        }
+    }
+
+    @Test public void preGrantedPermissionOnlySkipsDialogButNeverOpens() throws Exception {
+        try (Fixture f = new Fixture()) {
+            f.usb.permission = true; f.binding.requestPermissionOnly(A); f.worker.drain();
+            assertEquals(0, f.usb.opens); assertEquals(0, f.usb.requests);
+            assertEquals(Tbs5530Session.State.PERMISSION_GRANTED, f.session.getState());
+            assertThrows(IOException.class, f.binding::controlIo);
+        }
+    }
+
     @Test public void alreadyGrantedStillAcquiresOffCallerThreadWithoutDialog() throws Exception {
         try (Fixture f = new Fixture()) {
             f.usb.permission = true; f.binding.start(A); assertEquals(0, f.usb.opens);

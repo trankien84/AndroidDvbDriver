@@ -142,6 +142,35 @@ public class Tbs5530UsbDiagnosticTest {
         assertFalse(report.contains("/private/"));
     }
 
+    @Test public void permissionOnlyGrantExportsCorrelationWithoutAnyConnection() throws Exception {
+        FakeFacade fake = new FakeFacade();
+        Tbs5530DiagnosticController owner = controller(fake, 2000);
+        try {
+            main(owner::permissionSelected); await(() -> fake.callback != null); fake.respond(true); idle(owner);
+            org.json.JSONObject json = owner.structuredReport();
+            assertTrue(json.getBoolean("permission_only")); assertEquals(1,json.getInt("operation_id"));
+            assertEquals(1,json.getInt("callback_count")); assertTrue(json.getBoolean("correlation_device_matched"));
+            assertTrue(json.getLong("timestamp_epoch_ms") > 0); assertEquals(1,json.getLong("generation"));
+            assertEquals(0,fake.opens.get()); assertEquals(0,fake.claims.get()); assertEquals(0,fake.transfers.get());
+            assertEquals(0,json.getInt("open_calls")); assertFalse(json.getBoolean("cleanup_pending"));
+            redacted(json.toString());
+        } finally { finish(owner); }
+    }
+
+    @Test public void incompatibleProfileBlocksCycleButStillAllowsPermissionOnly() throws Exception {
+        FakeFacade fake = new FakeFacade(); AtomicReference<Tbs5530DiagnosticController> ref = new AtomicReference<>();
+        main(() -> ref.set(new Tbs5530DiagnosticController(() -> fake,
+                () -> new Tbs5530DiagnosticMetadata.Snapshot("BLOCKED: missing 82",Collections.singletonList("TBS"),
+                        Collections.singletonList(DEVICE),Collections.singletonList(false)),2000,2000)));
+        Tbs5530DiagnosticController owner=ref.get();
+        try {
+            main(() -> { assertFalse(owner.canStart());assertTrue(owner.canRequestPermission());owner.startSelected(); });
+            assertEquals(0,fake.opens.get()); assertNull(fake.callback);
+            main(owner::permissionSelected);await(() -> fake.callback!=null);fake.respond(true);idle(owner);
+            assertEquals(0,fake.opens.get());assertEquals(0,fake.claims.get());
+        } finally { finish(owner); }
+    }
+
     @Test public void metadataAndRefreshNeverCreateBindingOrAskPermission() throws Exception {
         FakeFacade fake = new FakeFacade();
         Tbs5530DiagnosticController owner = controller(fake, 1000);
@@ -375,7 +404,21 @@ public class Tbs5530UsbDiagnosticTest {
                 assertFalse(owner.isActive());
                 assertTrue(owner.isRuntimeTerminated());
                 assertTrue(owner.report().contains("CHƯA BẮT ĐẦU"));
-                // Emulator-only UI check; no permission button is clicked even if USB metadata exists.
+                try {
+                    java.io.File exported = new java.io.File(activity.getFilesDir(),"tbs5530-diagnostic.json");
+                    assertTrue(exported.isFile());
+                    java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+                    try (java.io.FileInputStream input = new java.io.FileInputStream(exported)) {
+                        byte[] data = new byte[4096]; int count;
+                        while ((count = input.read(data)) != -1) bytes.write(data,0,count);
+                    }
+                    org.json.JSONObject json = new org.json.JSONObject(new String(bytes.toByteArray(),java.nio.charset.StandardCharsets.UTF_8));
+                    assertEquals(android.os.Build.VERSION.SDK_INT,json.getInt("api"));
+                    assertEquals(0,json.getInt("operation_id")); assertEquals(0,json.getInt("open_calls"));
+                    assertNotNull(json.getJSONObject("usb").getJSONArray("devices"));
+                    redacted(json.toString());
+                } catch (java.io.IOException | org.json.JSONException failure) { throw new AssertionError(failure); }
+                // UI check never clicks a permission/acquisition button, including on physical devices.
                 findButton(activity.getWindow().getDecorView(), "Làm mới (chỉ metadata)").performClick();
                 expected.set(owner.report());
                 findButton(activity.getWindow().getDecorView(), "Sao chép báo cáo đã ẩn định danh").performClick();

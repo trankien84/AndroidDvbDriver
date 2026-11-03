@@ -21,7 +21,8 @@ import info.martinmarinov.drivers.usb.tbs5530.Tbs5530AndroidUsbFacade;
 public final class Tbs5530UsbDiagnosticActivity extends Activity {
     private Tbs5530DiagnosticController controller;
     private TextView report;
-    private Button request, refresh;
+    private Button request, refresh, permissionOnly;
+    private boolean reportWriteFailed;
     private Spinner selection;
 
     @Override protected void onCreate(Bundle state) {
@@ -52,6 +53,7 @@ public final class Tbs5530UsbDiagnosticActivity extends Activity {
             controller.refresh();
             selection.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, controller.labels()));
         });
+        permissionOnly = button(layout, "Chỉ yêu cầu quyền (không mở USB)", controller::permissionSelected);
         request = button(layout, "Yêu cầu quyền + chạy một chu kỳ", controller::startSelected);
         button(layout, "Đóng", () -> { controller.close(); finish(); });
         button(layout, "Sao chép báo cáo đã ẩn định danh", () -> {
@@ -81,6 +83,31 @@ public final class Tbs5530UsbDiagnosticActivity extends Activity {
         request.setEnabled(controller.canStart());
         refresh.setEnabled(!controller.isActive());
         selection.setEnabled(!controller.isActive());
+        permissionOnly.setEnabled(controller.canRequestPermission());
+        exportReport();
+    }
+
+    private void exportReport() {
+        try {
+            org.json.JSONObject json = controller.structuredReport();
+            json.put("model",android.os.Build.MODEL);json.put("manufacturer",android.os.Build.MANUFACTURER);
+            json.put("android_version",android.os.Build.VERSION.RELEASE);json.put("api",android.os.Build.VERSION.SDK_INT);
+            json.put("usb",Tbs5530DiagnosticMetadata.structured(getApplicationContext()));
+            android.util.AtomicFile file = new android.util.AtomicFile(new java.io.File(getFilesDir(),"tbs5530-diagnostic.json"));
+            java.io.FileOutputStream output = null;
+            try {
+                output = file.startWrite();
+                output.write(json.toString(2).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                file.finishWrite(output);
+            } catch (java.io.IOException error) {
+                if (output != null) file.failWrite(output);
+                throw error;
+            }
+            reportWriteFailed = false;
+        } catch (java.io.IOException | org.json.JSONException | RuntimeException error) {
+            if (!reportWriteFailed) android.util.Log.w("Tbs5530Diagnostic", "Private report export failed: " + error.getClass().getSimpleName());
+            reportWriteFailed = true;
+        }
     }
 
     Tbs5530DiagnosticController diagnosticController() { return controller; }

@@ -63,7 +63,7 @@ public final class Tbs5530UsbBinding implements AutoCloseable {
         Registration permission;
         Cancellation deadline;
         long deadlineId;
-        boolean invalid, callbackConsumed, acquiring;
+        boolean invalid, callbackConsumed, acquiring, permissionOnly;
         Attempt(Device device, long epoch) { this.device = device; this.epoch = epoch; }
     }
 
@@ -81,7 +81,12 @@ public final class Tbs5530UsbBinding implements AutoCloseable {
         });
     }
 
-    public void start(Device device) throws IOException {
+    public void start(Device device) throws IOException { start(device, false); }
+
+    /** Explicit metadata/permission preflight: even a valid grant must not acquire a connection. */
+    public void requestPermissionOnly(Device device) throws IOException { start(device, true); }
+
+    private void start(Device device, boolean permissionOnly) throws IOException {
         Objects.requireNonNull(device);
         Attempt attempt;
         synchronized (this) {
@@ -89,7 +94,7 @@ public final class Tbs5530UsbBinding implements AutoCloseable {
             if (jobs != 0 || coordinator.isAcquiring() || session.isCleanupPending()
                     || current != null && !current.invalid) throw new IllegalStateException("Previous attachment is pending");
             if (epoch == Long.MAX_VALUE) throw new IllegalStateException("Attachment epochs exhausted");
-            attempt = new Attempt(device, ++epoch); current = attempt;
+            attempt = new Attempt(device, ++epoch); attempt.permissionOnly = permissionOnly; current = attempt;
         }
         try {
             arm(attempt, permissionTimeout);
@@ -148,8 +153,8 @@ public final class Tbs5530UsbBinding implements AutoCloseable {
             synchronized (this) { if (!active(attempt)) return; attempt.acquiring = true; }
         }
         try {
-            if (permitted) arm(attempt, acquisitionTimeout);
-            coordinator.permissionResult(attempt.request, attempt.request.getIdentity(), permitted);
+            if (permitted && !attempt.permissionOnly) arm(attempt, acquisitionTimeout);
+            coordinator.permissionResult(attempt.request, attempt.request.getIdentity(), permitted, !attempt.permissionOnly);
         } finally {
             synchronized (this) { attempt.acquiring = false; }
             disarm(attempt);
