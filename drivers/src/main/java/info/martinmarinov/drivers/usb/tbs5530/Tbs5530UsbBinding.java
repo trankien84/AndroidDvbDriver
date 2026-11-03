@@ -1,0 +1,304 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+package info.martinmarinov.drivers.usb.tbs5530;
+
+import java.io.IOException;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.Objects;
+import java.util.concurrent.Executor;
+
+/** Per-owner USB lifecycle binding; contains no Android framework or transfer implementation. */
+public final class Tbs5530UsbBinding implements AutoCloseable {
+    public static final class Device {
+        public final String path;
+        public final int id, vendorId, productId;
+        public Device(String path, int id, int vendorId, int productId) {
+            if (path == null || path.isEmpty() || id < 0 || vendorId < 0 || vendorId > 65535
+                    || productId < 0 || productId > 65535) throw new IllegalArgumentException("Invalid USB device");
+            this.path = path; this.id = id; this.vendorId = vendorId; this.productId = productId;
+        }
+        @Override public boolean equals(Object other) {
+            if (!(other instanceof Device)) return false;
+            Device d = (Device) other;
+            return id == d.id && vendorId == d.vendorId && productId == d.productId && path.equals(d.path);
+        }
+        @Override public int hashCode() { return Objects.hash(path, id, vendorId, productId); }
+    }
+    public interface Registration extends AutoCloseable { @Override void close() throws IOException; }
+    public interface PermissionCallback { void result(String correlation, Device device, Boolean granted); }
+    public interface Events {
+        void attached(Device device);
+        void detached(Device device);
+    }
+    public interface Facade {
+        List<Device> devices() throws IOException;
+        boolean hasPermission(Device device) throws IOException;
+        Registration requestPermission(Device device, String correlation, PermissionCallback callback) throws IOException;
+        Registration listen(Events events) throws IOException;
+        Tbs5530LifecycleCoordinator.Connection open(Device device) throws IOException;
+    }
+    public interface Cancellation { void cancel(); }
+    public interface Scheduler { Cancellation schedule(Runnable task, long delayMillis); }
+    public interface Errors { void report(Throwable failure); }
+
+    private final Tbs5530Session session;
+    private final Facade facade;
+    private final Executor worker;
+    private final Scheduler scheduler;
+    private final Errors errors;
+    private final long permissionTimeout, acquisitionTimeout;
+    private final Tbs5530LifecycleCoordinator coordinator;
+    private final Registration events;
+    private long epoch;
+    private Attempt current;
+    private boolean closed;
+    private int jobs;
+
+    private static final class Attempt {
+        final Device device;
+        final long epoch;
+        final String correlation = UUID.randomUUID().toString();
+        Tbs5530LifecycleCoordinator.Request request;
+        Registration permission;
+        Cancellation deadline;
+        long deadlineId;
+        boolean invalid, callbackConsumed, acquiring;
+        Attempt(Device device, long epoch) { this.device = device; this.epoch = epoch; }
+    }
+
+    public Tbs5530UsbBinding(Tbs5530Session session, Facade facade, Executor worker, Scheduler scheduler,
+                            Errors errors, long permissionTimeoutMillis, long acquisitionTimeoutMillis) throws IOException {
+        if (permissionTimeoutMillis <= 0 || acquisitionTimeoutMillis <= 0) throw new IllegalArgumentException("Positive deadlines required");
+        this.session = Objects.requireNonNull(session); this.facade = Objects.requireNonNull(facade);
+        this.worker = Objects.requireNonNull(worker); this.scheduler = Objects.requireNonNull(scheduler);
+        this.errors = Objects.requireNonNull(errors);
+        permissionTimeout = permissionTimeoutMillis; acquisitionTimeout = acquisitionTimeoutMillis;
+        coordinator = new Tbs5530LifecycleCoordinator(session, this::requestPermission, this::open);
+        events = facade.listen(new Events() {
+            public void attached(Device device) { attachmentChanged(device); }
+            public void detached(Device device) { detachEvent(device); }
+        });
+    }
+
+    public void start(Device device) throws IOException {
+        Objects.requireNonNull(device);
+        Attempt attempt;
+        synchronized (this) {
+            if (closed) throw new IllegalStateException("Binding closed");
+            if (jobs != 0 || coordinator.isAcquiring() || session.isCleanupPending()
+                    || current != null && !current.invalid) throw new IllegalStateException("Previous attachment is pending");
+            if (epoch == Long.MAX_VALUE) throw new IllegalStateException("Attachment epochs exhausted");
+            attempt = new Attempt(device, ++epoch); current = attempt;
+        }
+        try {
+            arm(attempt, permissionTimeout);
+            submit(() -> begin(attempt));
+        } catch (RuntimeException error) {
+            synchronized (this) { attempt.invalid = true; }
+            disarm(attempt);
+            throw error;
+        }
+    }
+
+    private void begin(Attempt attempt) throws IOException {
+        if (!active(attempt)) return;
+        if (!present(attempt.device)) { invalidate(attempt, true); return; }
+        Tbs5530LifecycleCoordinator.AttachmentIdentity identity = new Tbs5530LifecycleCoordinator.AttachmentIdentity(
+                attempt.device.path, attempt.device.id, attempt.device.vendorId, attempt.device.productId, attempt.epoch);
+        coordinator.requestPermission(identity);
+    }
+
+    private void requestPermission(Tbs5530LifecycleCoordinator.Request request) throws IOException {
+        Attempt attempt;
+        synchronized (this) {
+            attempt = current;
+            if (attempt == null || attempt.invalid || closed || request.getIdentity().getAttachmentId() != attempt.epoch) {
+                coordinator.invalidate(request, false); return;
+            }
+            attempt.request = request;
+        }
+        if (facade.hasPermission(attempt.device)) {
+            callback(attempt.correlation, attempt.device, true); return;
+        }
+        Registration registration = facade.requestPermission(attempt.device, attempt.correlation, this::callback);
+        synchronized (this) {
+            if (active(attempt) && !attempt.callbackConsumed) { attempt.permission = registration; return; }
+        }
+        registration.close();
+    }
+
+    private void callback(String correlation, Device device, Boolean granted) {
+        Attempt attempt;
+        synchronized (this) {
+            attempt = current;
+            if (!active(attempt) || attempt.callbackConsumed || granted == null || device == null
+                    || !attempt.correlation.equals(correlation) || !attempt.device.equals(device)) return;
+            attempt.callbackConsumed = true;
+        }
+        submit(() -> accept(attempt, granted));
+    }
+
+    private void accept(Attempt attempt, boolean granted) throws IOException {
+        clearPermission(attempt);
+        if (!active(attempt)) return;
+        if (!present(attempt.device)) { invalidate(attempt, true); return; }
+        boolean permitted = granted && facade.hasPermission(attempt.device);
+        if (permitted) {
+            synchronized (this) { if (!active(attempt)) return; attempt.acquiring = true; }
+        }
+        try {
+            if (permitted) arm(attempt, acquisitionTimeout);
+            coordinator.permissionResult(attempt.request, attempt.request.getIdentity(), permitted);
+        } finally {
+            synchronized (this) { attempt.acquiring = false; }
+            disarm(attempt);
+        }
+        if (!permitted) synchronized (this) { attempt.invalid = true; }
+    }
+
+    private Tbs5530LifecycleCoordinator.Connection open(Tbs5530LifecycleCoordinator.AttachmentIdentity identity) throws IOException {
+        Attempt attempt;
+        synchronized (this) { attempt = current; }
+        if (!active(attempt) || identity.getAttachmentId() != attempt.epoch
+                || !present(attempt.device) || !facade.hasPermission(attempt.device)) throw new IOException("Attachment or permission changed");
+        Tbs5530LifecycleCoordinator.Connection connection = facade.open(attempt.device);
+        if (connection == null) throw new IOException("openDevice returned null");
+        try {
+            if (!active(attempt) || !present(attempt.device) || !facade.hasPermission(attempt.device)) {
+                throw new IOException("Attachment changed during open");
+            }
+        } catch (IOException | RuntimeException error) {
+            try { connection.close(); } catch (IOException | RuntimeException cleanup) { if (cleanup != error) error.addSuppressed(cleanup); }
+            throw error;
+        }
+        return new Tbs5530LifecycleCoordinator.Connection() {
+            public void claim(Tbs5530LifecycleCoordinator.Claim receipt) throws IOException {
+                ensureCurrent(attempt);
+                connection.claim(receipt);
+                ensureCurrent(attempt);
+            }
+            public void cancel() throws IOException { connection.cancel(); }
+            public void release() throws IOException { connection.release(); }
+            public void close() throws IOException { connection.close(); }
+        };
+    }
+
+    private void ensureCurrent(Attempt attempt) throws IOException {
+        if (!active(attempt) || !present(attempt.device) || !facade.hasPermission(attempt.device)) {
+            throw new IOException("Attachment changed during acquisition");
+        }
+    }
+
+    private boolean present(Device expected) throws IOException {
+        return facade.devices().contains(expected);
+    }
+
+    private synchronized boolean active(Attempt attempt) {
+        return !closed && attempt != null && current == attempt && !attempt.invalid;
+    }
+
+    private void arm(Attempt attempt, long timeout) {
+        disarm(attempt);
+        final long deadlineId;
+        synchronized (this) { deadlineId = attempt.deadlineId; }
+        Cancellation task = scheduler.schedule(() -> invalidate(attempt, false, deadlineId), timeout);
+        synchronized (this) {
+            if (active(attempt)) { attempt.deadline = task; return; }
+        }
+        task.cancel();
+    }
+
+    private void disarm(Attempt attempt) {
+        Cancellation task;
+        synchronized (this) { task = attempt.deadline; attempt.deadline = null; attempt.deadlineId++; }
+        if (task != null) task.cancel();
+    }
+
+    private void clearPermission(Attempt attempt) throws IOException {
+        Registration registration;
+        synchronized (this) { registration = attempt.permission; attempt.permission = null; }
+        if (registration != null) registration.close();
+    }
+
+    private void invalidate(Attempt attempt, boolean detached) { invalidate(attempt, detached, -1); }
+
+    private void invalidate(Attempt attempt, boolean detached, long deadlineId) {
+        Tbs5530LifecycleCoordinator.Request request;
+        synchronized (this) {
+            if (attempt == null || current != attempt || attempt.invalid
+                    || deadlineId >= 0 && attempt.deadlineId != deadlineId) return;
+            attempt.invalid = true; request = attempt.request;
+        }
+        disarm(attempt);
+        if (request != null) coordinator.invalidate(request, detached);
+        submit(() -> {
+            try { clearPermission(attempt); } finally { session.drainCleanup(); }
+        });
+    }
+
+    private void attachmentChanged(Device device) {
+        Attempt attempt;
+        synchronized (this) { attempt = current; }
+        if (attempt != null && attempt.device.path.equals(device.path)) invalidate(attempt, true);
+    }
+
+    private void detachEvent(Device device) {
+        // Only the current attempt captured at delivery may be affected. Reused OS identities remain ambiguous.
+        Attempt attempt;
+        synchronized (this) { attempt = current; }
+        if (attempt == null || !attempt.device.equals(device)) return;
+        scheduler.schedule(() -> {
+            try { if (active(attempt) && !present(device)) invalidate(attempt, true); }
+            catch (IOException | RuntimeException error) { invalidate(attempt, true); errors.report(error); }
+        }, 0);
+    }
+
+    private interface Job { void run() throws IOException; }
+    private void submit(Job job) {
+        synchronized (this) { jobs++; }
+        try {
+            worker.execute(() -> {
+                try { job.run(); }
+                catch (IOException | RuntimeException error) {
+                    Attempt attempt;
+                    synchronized (this) { attempt = current; }
+                    if (attempt != null) {
+                        disarm(attempt);
+                        if (attempt.request != null) session.failed(attempt.request.getToken(), error);
+                        try { clearPermission(attempt); }
+                        catch (IOException | RuntimeException cleanup) { if (cleanup != error) error.addSuppressed(cleanup); }
+                    }
+                    errors.report(error);
+                } finally { synchronized (this) { jobs--; } }
+            });
+        } catch (RejectedExecutionException error) {
+            Attempt attempt;
+            synchronized (this) { jobs--; attempt = current; if (attempt != null) attempt.invalid = true; }
+            if (attempt != null) {
+                disarm(attempt);
+                if (attempt.request != null) coordinator.invalidate(attempt.request, false);
+            }
+            // The executor owner must close the binding before shutdown; never fall back to main-thread cleanup.
+            errors.report(error);
+        }
+    }
+
+    public synchronized boolean isPending() {
+        return jobs != 0 || coordinator.isAcquiring() || session.isCleanupPending()
+                || current != null && !current.invalid && session.getState() == Tbs5530Session.State.WAIT_PERMISSION;
+    }
+
+    public void cancel() {
+        Attempt attempt;
+        synchronized (this) { attempt = current; }
+        invalidate(attempt, false);
+    }
+
+    @Override public void close() throws IOException {
+        Attempt attempt;
+        synchronized (this) { if (closed) return; closed = true; attempt = current; }
+        invalidate(attempt, false);
+        events.close();
+    }
+}

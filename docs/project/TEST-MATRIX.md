@@ -1,5 +1,31 @@
 # TBS5530 test matrix
 
+## 2026-11-03 12:39 +07 — Phase 2.3: Android framework binding, không tuner
+
+Windows PowerShell; `chore/modernize-android-build`/`635ee4a57267de6055126efcfee6121b30701433` cộng working changes. AGP9.5.0/Gradle9.8.2/JDK25.0.5.0.3/compile37.2/target37/min21/Java8 giữ nguyên. AVD TBS5530_Runtime_API37, emulator-5554, API37/x86_64; không physical Android/tuner. Mọi open/claim/request trong binding tests dùng fake Manager/RawConnection, không USB thật.
+
+| Gate | Kết quả thực | Bằng chứng và giới hạn |
+|---|---|---|
+| Baseline/ADR-012 | PASS identity | Git HEAD và live origin đúng635ee4a, main sạch trước sửa; kết quả126methods Phase2.2 là lịch sử riêng |
+| JVM binding suite | PASS26methods | Grant/deny/timeout; malformed/duplicate/stale/wrongdevice; reused path/id+epoch; 2devices cùngVID/PID; livepermission/list; stale timer; blockedopen/claim detach/cancel/deadline; partial cleanup/suppressed; worker/scheduler shutdown |
+| Java8/stress độc lập | PASS3lượt×36tests | Core khôngAndroid compile --release8/bytecode52; binding26+concurrency10,120latch-controlled iterations qua3lượt, outputtạm đãdọn |
+| Regression unit ba module | PASS152methods,0failure/error | drivers138/usbxfer1/dvbservice13, các task --rerun; Bridge17/Firmware19/Session17/Concurrency10/Coordinator32 vẫn PASS |
+| Android binding instrumentation | PASS19tests,0failure/error/skipped | Actual receiver/PI/fill-in/one-shot/cleanup; injectedManager; descriptor selection, claimfalse/releasefalse/ownership; fakeblockedopen/claim không block main; independent deadline; runtime shutdown/self-wait guard |
+| Native library smoke | PASS1test | NativeLibrarySmokeTest::usbTransferLibraryLoadsWithoutOpeningUsb; chỉ load library trênx86_64, không USBioctl/transfer |
+| Device filter equivalence | PASS1test | DeviceFilterXmlEquivalenceTester::allDevicesAreInXml, registry/XML không đổi, không VID734c:5530 |
+| API policy branches21/23/31/33/34/37 | PASS assertions trênAPI37 | Instrumentation helper kiểm flags/receiver-policy từngAPI; **không** là OS runtimePASS cho21/23/31/33/34 |
+| Main/receiver không làm acquire | PASS software | Fakeopen/claim bị giữ bằnglatch nhưng main/deadline vẫn tiến; wrapper từ chối open trênmain; không joinmain/selfthread |
+| Debug APK | PASS | AssembleDebug, install -r Success; cuốiunit/build/lint run exit0/2m8s/177tasks22executed155up-to-date |
+| LintDebug | PASS có warning | XML0Error/0Fatal/11Warning, cùng nhóm cũ; không thêm suppression/baseline |
+| No-tuner launch/UI | PASS trong cửa sổ smoke | ColdStatusok3453ms, Welcome/Diagnostic/START→handled NoDevicesFound; PID5124filteredlog không fatal/linker/security/appANR |
+| Emulator SystemUI | FAIL riêng môi trường, đã qua được | Hộp “System UI isn't responding”; chọn Wait bằng semanticselector, app tiếp tục hoạt động. Không gộp vào appANR |
+| Emulator/CLI startup | CLI FAIL→fallback PASS | CLI báo AVDkhôngtồntại dù list có, exit0 sai; emulator.exe với explicitAVDhome boot_completed1/API37/x86_64 |
+| RuntimeAPI21/23/31/33/34 | NOT RUN | Không có image/thiếtbị tương ứng trongphạmvi, không tải thêm |
+| USB permission dialog và protected USB attach/detach thật | NOT RUN | Syntheticcallbacks không chứng minh delivery từ USB service hoặc physicalidentity/re-enumeration |
+| PhysicalUSBHost/open/claim/nativecancel/firmware/frontend/TS | NOT RUN | Wrappers được implement nhưng không kích hoạt với thiết bị thật; không controltransport/uploader/frontend/streaming |
+
+Instrumentation final combinedrun exit0/4m48s/241tasks53executed188up-to-date:19drivers+2dvbservice XML. Sau đó chỉ thêm1JVM ownership assertion và chạy lại unit/build/lint đạt152methods; không đổi production logic sau lần instrumentation. Các output kiểm tra nằm build directories, không commit. Chi tiết lệnh/AVD cleanup ở [WORKLOG.md](WORKLOG.md).
+
 ## 2026-11-03 11:25 +07 — Phase 2.2: concurrency và lifecycle fake
 
 Windows PowerShell; `chore/modernize-android-build`/`6eb23537484a3e1dd263bd5a88f56914c7c5e313` cộng working changes. Không emulator/tuner/Android USB access. Toolchain giữ AGP9.5.0/Gradle9.8.2/JDK25/compile37.2/min21/Java8. Phase2.1/ADR-011 đã tích hợp tại SHA này;83methods PASS trước đó là lịch sử, không gộp vào kết quả mới.

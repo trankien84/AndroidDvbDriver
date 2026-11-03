@@ -1,5 +1,55 @@
 # Research log (append-only)
 
+## 2026-11-03 12:39 +07 — Phase 2.3: Android USB framework binding và instrumentation
+
+### Checkpoint, audit nguồn và phạm vi
+
+Main sạch ở `chore/modernize-android-build`/`635ee4a57267de6055126efcfee6121b30701433`; live origin cùngSHA, xác nhận Phase2.2/ADR-012 đã tích hợp/push. Các snapshot “chưa commit” của phase trước giữ lịch sử. Ba references kiểm chỉ đọc giữ nguyên/sạch: TBS2ce787de9f6e81b4294692a45de15596ae2e1322, Cc5fa27eecbe80633cbb365cc44656daea1c0e2e3, Go11228b05fb1626bf41c4e1879ace10cd0a8d575c; không đồng bộ/sửa chúng.
+
+Audit Android source tại635ee4a:
+- `dvbservice/AndroidManifest.xml` khai báo UsbDelegate exported cho USB_DEVICE_ATTACHED, service khôngexport; device_filter.xml chưa TBS5530. UsbDelegate::onCreate chỉ chuyển UsbDevice sang Activity intent rồi finish, không có lifecycle generation binding.
+- DvbUsbDeviceRegistry chỉ ba creators hiện hữu, query UsbManager list rồi tạo DvbDevice tương ứng. Giữ nguyên để không tự đưa TBS vào luồng user-facing.
+- DvbUsbDevice::open final lấy permission Future rồi init với retry; UsbPermissionObtainer::obtainFdFor/registerNewBroadcastReceiver dùng action chung, mutable PI và có thể openDevice trực tiếp trong onReceive. Không dùng đường này cho TBS mới, cũng không sửa legacyhelper khiến driver cũ thay đổi ngoài scope.
+- DvbService worker hiện owns DvbServer lifecycle; TransferThread lo TS/TCP. Chưa tạo TbsDvbDevice nên không nối binding vào service hoặc thay global worker. Binding mới chỉ được khởi tạo bởi caller/test có owner rõ ràng.
+
+### API Android đối chiếu và chọn policy
+
+Tra AndroidCLI docs search/fetch và các nguồn Google ngày2026-11-03:
+[USB Host](https://developer.android.com/develop/connectivity/usb/host), [UsbManager](https://developer.android.com/reference/android/hardware/usb/UsbManager), [UsbDevice](https://developer.android.com/reference/android/hardware/usb/UsbDevice), [UsbInterface](https://developer.android.com/reference/android/hardware/usb/UsbInterface), [UsbDeviceConnection](https://developer.android.com/reference/android/hardware/usb/UsbDeviceConnection), [PendingIntent](https://developer.android.com/reference/android/app/PendingIntent), [broadcasts](https://developer.android.com/develop/background-work/background-tasks/broadcasts), [Android12 mutability](https://developer.android.com/about/versions/12/behavior-changes-12#pending-intent-mutability), [Android14 safer intents](https://developer.android.com/about/versions/14/behavior-changes-14#safer-intents), [Android17 target37 changes](https://developer.android.com/about/versions/17/behavior-changes-17).
+
+| API runtime | Policy đã implement | Bằng chứng/giới hạn |
+|---|---|---|
+|21|Mutable mặc định, one-shot PI/action+URI/package riêng, receiverregistrationlegacy|Không FLAG_IMMUTABLE vì fill-in USB extras cần mutable; chỉ branchassertion trên37, chưa21runtime|
+|23|FLAG_IMMUTABLE đã có nhưng không chọn cho USBresult|Không suy templateimmutable là nhận được systemfill-in; branchassertion|
+|31|FLAG_MUTABLE explicit|Đáp ứng target31+mutability; không implicitPItrốngscope|
+|33|RECEIVER_NOT_EXPORTED, typed getParcelableExtra|Policy mới có guard; reject missing/wrongtype; branchassertion|
+|34|Mutable PI phải có component hoặc package|setPackage(appPackage), không ALLOW_UNSAFE_IMPLICIT_INTENT; contextcustomreceiver cóexportflag|
+|37|Giữ các guard trên, không nới phạmvi|Actualreceiver+PI instrumentation PASS trênAPI37; không phát hiện yêu cầu USB mới trong trang target37 đã đọc, không suy ra mọiUSBbehaviorđềuđãchứngminh|
+
+PendingIntent được tạo cho receiver context-registered nên dùng explicit package scope, không trỏ component giả trong manifest. Mỗi request có action/data/correlation độc lập, FLAG_ONE_SHOT và token cancel khi close; không dựa extras làm PIidentity vì extras không quyết định PI matching. Receiver dùng applicationContext và scope lifecycle riêng, chỉ parse action/data/device/granted rồi dispatch; connection acquisition không chạy trên broadcast/main. Hành vi fill-in/one-shot có test PI thật với syntheticextras; actual USBpermissiondialog vẫn NOT RUN.
+
+### Component mới và contracts
+
+- [Tbs5530UsbBinding.java](../../drivers/src/main/java/info/martinmarinov/drivers/usb/tbs5530/Tbs5530UsbBinding.java): JVM engine, Facade/Registration/Events/Scheduler/Errors ports; explicit start chọn device; epoch tăng mỗi attempt, correlation UUID, current request duy nhất. Callback sai/duplicate/stale không consume request khác. Worker kiểm live list+hasPermission trước accept, trước/sau open và claim. Grant/open/claim không tự READY.
+- [Tbs5530AndroidUsbFacade.java](../../drivers/src/main/java/info/martinmarinov/drivers/usb/tbs5530/Tbs5530AndroidUsbFacade.java): production framework wrappers chuẩn bị, injectManager/RawConnection cho tests. Constructor không USBoperation/receiverregistration; listen/request registration do engineowner gọi. Chọn interfaceID0+alternate từ descriptors, không arrayposition, rejectmissing/ambiguity, claimforcefalse. Mark receipt sau successfulclaim trước postchecks; releasefalse làIOException nhưng close vẫn thực hiện đúng một lần. Không control/vendor/firmware/streaming methods.
+- [Tbs5530AndroidRuntime.java](../../drivers/src/main/java/info/martinmarinov/drivers/usb/tbs5530/Tbs5530AndroidRuntime.java): mộtworker cho acquire/cleanup và scheduler riêng cho deadlines; không joinmain hoặc worker tự chờ mình, không dùng shutdownNow để tuyên bố physicalcancel.
+- Session/Coordinator thêm `requestCancellation`/`invalidate` chỉ đổi state và `drainCleanup` ngoài main. Cleanup ownership được giữ nguyên ADR-012, active transfer drain sau physicalcompletion; cleanupRunning guard chặn hai drainer nhận cùng tài nguyên. Không đổi EP0bytes/I²C/FirmwarePlan hoặcRetry.
+
+Logicaldeadline permission và acquisition khác physicalcompletion. DeadlineID loại timer cũ đã cancel; acquisition block không cản scheduler invalidate. Receiver detach chụp attempt và kiểm live list ngoài acquisitionworker, tránh xếp invalidation sau open đangblock. Cleanup được xếp worker, không đóng connection khi open/claim/transfer còn sử dụng. Worker đã shutdown sai thứ tự không được fallback IO trênmain; reporterror, owner phải đóng binding trước runtime và theo dõi pending.
+
+### Identity và reconnect: điều chứng minh được và không chứng minh được
+
+Identity gồm VID/PID/path/id+epochapplication; không đọcserial như điều kiện. Hai devices cùngVID/PID vẫn tách theo snapshot. Newattach ở path đangtheodõi invalidates bảo thủ, không tự nối lại. Oldpermission dùngcorrelation/epoch cũ bịloại. Detachđếnmuộn không đóng currentconnection nếu snapshot cònhiện diện; nếu snapshotđãmất thì invalidate, queuedcheck chỉ ảnhhưởng attempt đãchụp, không generationmới.
+
+Tuy nhiên Android USBbroadcast không có epochapplication. Nếu detach+reattach dùnglại toànbộpath/id/VID/PID và appmissedattach/detach, APIkhông đủ chứngminh làcùngphysicalsession. Live-listchecks giảm race nhưng không loại TOCTOU giữa haiBindercalls. Đây là giới hạn cần hardwarevalidation, không biến snapshotmatch thànhphysicalidentityPASS.
+
+### Kết quả kiểm thử và bước kế tiếp
+
+- Implemented7Javafiles mới/sửa, không frameworkregistration trong appmanifest/registry/service. Unit-tested152methods, trongđó26binding mới; instrumentation-tested19binding+2native/registry trênAPI37/x86_64; debug/lintPASS0errors11warnings. Counts/lệnh ở TEST-MATRIX/WORKLOG.
+- Androidframework verified cóphạmvi:actualPIconstruction/fillin/oneshot/registration/unregistration, syntheticdispatch, worker/deadline responsiveness. DeviceManager/connection luônfake; protectedsystemUSBdelivery/dialog/physicalHost/otherOSversions chưađo.
+- Appnotuner InstallSuccess/launchStatusok, Welcome/Diagnostic/START handledNoDevicesFound, khôngappfatal trongcửasổlog. SystemUIANR là vấnđềemulatorriêng, khôngappANR. KhôngtestDvbServiceactive/streaminglifecycle cầntuner.
+- Phase2.4 đềxuất: reviewADR013/ownerprocesslifetime, kiểm permissioncallback+identity trênAndroidphysicalkhôngwrites vớiapprovalriêng; chỉkhi firmwareprovenance/license/hash/addressmap và commandplan/rollbackđượcduyệt mới xemxéthardwarebringup. Chưavendortransport/uploader/CXDfrontend/TS, chưacommit/push.
+
 ## 2026-11-03 11:25 +07 — Phase 2.2: lifecycle races, ownership và Android API contract
 
 ### Checkpoint và nguồn hiện tại

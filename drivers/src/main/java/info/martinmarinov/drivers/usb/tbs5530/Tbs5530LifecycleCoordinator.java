@@ -190,6 +190,17 @@ public final class Tbs5530LifecycleCoordinator implements AutoCloseable {
         return session.cancel(request.token);
     }
 
+    /** Invalidates without invoking resource callbacks; drainCleanup belongs on the owner's worker. */
+    public boolean invalidate(Request request, boolean detached) {
+        synchronized (session) {
+            if (!matches(request)) return false;
+            request.pending = false;
+            return session.requestCancellation(request.token, detached);
+        }
+    }
+
+    public boolean isAcquiring() { synchronized (session) { return acquiring != 0; } }
+
     public boolean cancel(Request request) throws IOException {
         synchronized (session) {
             if (!matches(request)) return false;

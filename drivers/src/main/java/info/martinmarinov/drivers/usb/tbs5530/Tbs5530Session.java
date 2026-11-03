@@ -31,6 +31,7 @@ public final class Tbs5530Session implements AutoCloseable {
     private boolean frontendInitialized;
     private boolean firmwareUploaded;
     private boolean cleaning;
+    private boolean cleanupRunning;
     private boolean cancellationRequested;
     private int activeTransactions;
     private Throwable failure;
@@ -171,24 +172,39 @@ public final class Tbs5530Session implements AutoCloseable {
     @Override
     public void close() throws IOException { terminate(null, State.CLOSED); }
 
-    private boolean terminate(Long token, State destination) throws IOException {
+    /** Logical invalidation only; safe for a callback that must never run resource cleanup. */
+    public synchronized boolean requestCancellation(long token, boolean detached) {
+        return invalidate(token, detached ? State.DISCONNECTED : State.CLOSED);
+    }
+
+    private synchronized boolean invalidate(Long token, State destination) {
+        if (token != null && token != generation) return false;
+        if (cleaning) return false;
+        if (resources == null && (state == State.CLOSED || state == State.DISCONNECTED)) return false;
+        cancellationRequested = true;
+        streaming = false;
+        frontendLocked = false;
+        frontendInitialized = false;
+        firmwareUploaded = false;
+        state = destination;
+        cleaning = true;
+        return true;
+    }
+
+    /** Run only off the main/broadcast thread. Active transactions drain their own resources. */
+    public void drainCleanup() throws IOException {
         Cleanup cleanup;
         synchronized (this) {
-            if (token != null && token != generation) return false;
-            if (cleaning) return false;
-            if (resources == null && (state == State.CLOSED || state == State.DISCONNECTED)) return false;
-            cancellationRequested = true;
-            streaming = false;
-            frontendLocked = false;
-            frontendInitialized = false;
-            firmwareUploaded = false;
-            state = destination;
-            cleaning = true;
-            cleanup = activeTransactions == 0 ? takeCleanup() : null;
+            cleanup = cleaning && activeTransactions == 0 ? takeCleanup() : null;
         }
         IOException problem = finishCleanup(cleanup);
         if (problem != null) throw problem;
-        return true;
+    }
+
+    private boolean terminate(Long token, State destination) throws IOException {
+        boolean accepted = invalidate(token, destination);
+        if (accepted) drainCleanup();
+        return accepted;
     }
 
     private static final class Cleanup {
@@ -200,6 +216,8 @@ public final class Tbs5530Session implements AutoCloseable {
     }
 
     private Cleanup takeCleanup() {
+        if (cleanupRunning) return null;
+        cleanupRunning = true;
         Cleanup result = new Cleanup(resources, cancelNeeded, claimed);
         resources = null;
         claimed = false;
@@ -224,6 +242,7 @@ public final class Tbs5530Session implements AutoCloseable {
             synchronized (this) {
                 cleanupFailure = problem;
                 cleaning = false;
+                cleanupRunning = false;
             }
         }
         return problem;

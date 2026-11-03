@@ -1,5 +1,26 @@
 # TBS5530 Android port — current status
 
+## Checkpoint phát hành Phase 2.3 — 2026-11-03 12:57 +07
+
+- Người dùng yêu cầu commit và push12file Phase2.3 trên `chore/modernize-android-build`. Preflight: local và live origin cùng `635ee4a57267de6055126efcfee6121b30701433`, staged diff rỗng; đúng7Javafiles mới/sửa và5hồ sơ.
+- Message: `feat: add Android USB lifecycle binding and instrumentation`. Hash/kết quả push kiểm từ Git sau thao tác; không ghi trước thành công. Các mục “chưa commit/push” bên dưới là snapshot trước checkpoint.
+- Không chạy lại tests trong tác vụ Git: bằng chứng gần nhất vẫn152unit methods,21instrumentation tests, debug/lint và3lượt stress đã chạy ở Phase2.3. Không đổi logic hoặc mở Phase2.4/hardware.
+
+## Phase 2.3 — Android USB framework binding, 2026-11-03 12:39 +07
+
+**Đã hoàn tất binding và kiểm thử phần mềm, chưa dùng USB tuner thật.** Nhánh `chore/modernize-android-build`, HEAD `635ee4a57267de6055126efcfee6121b30701433` đúng baseline đã push và chứa ADR-012. Có7Javafiles mới/sửa cùng5hồ sơ; chưa stage/commit/push/merge.
+
+- **Kiến trúc:** Tbs5530UsbBinding giữ identity/correlation/lifecycle trên JVM; Tbs5530AndroidUsbFacade bọc UsbManager/PendingIntent/receiver/connection; Tbs5530AndroidRuntime sở hữu worker và scheduler độc lập. Chưa nối service/UsbDelegate/registry/XML; constructor không tự request/open thiết bị. Các wrapper không có vendor control/firmware/streaming API.
+- **Permission:** mỗi request có action/data/correlation riêng, PendingIntent one-shot package-scoped; API31+ MUTABLE cho fill-in extras, API33+ receiver NOT_EXPORTED. Receiver chỉ parse/dispatch; worker kiểm current attempt/epoch, live list và hasPermission trước/sau open/claim. Interface chọn bằng ID/alternate, force=false; partial/rejected ownership cleanup đúng lease.
+- **Threading:** permission/acquisition deadlines độc lập, cancellation chỉ invalidate; physical completion/cleanup không được giả coi đã xong. Session/coordinator thêm logical invalidate/drain seam để receiver/main không chạy cleanup. Không force-close connection đang open/claim/transfer hoặc join main/self-worker.
+- **PASS thực:** **152unit methods** (drivers138/usbxfer1/dvbservice13),0failure/error; **21instrumentation tests** trên AVD TBS5530_Runtime_API37, API37/x86_64 (19binding+2native/registry). Main thread vẫn phản hồi khi fake open/claim block; actual PendingIntent fill-in/one-shot và receiver registration/cleanup đạt. Debug APK PASS, lint0errors/0fatal/11warnings. Exact commands ở [WORKLOG.md](WORKLOG.md), phạm vi chứng minh ở [TEST-MATRIX.md](TEST-MATRIX.md).
+- **No-tuner runtime:** cài APK Success, cold start Statusok/3453ms, Welcome→Diagnostic→START hiện “No devices found” được xử lý, không fatal/linkage/security exception trong cửa sổ Logcat app đã lọc. Emulator có SystemUI ANR riêng, đã chọn Wait; không coi đó là app ANR. Emulator helper đã dừng sau kiểm thử, không wipe dữ liệu.
+- **Giữ nguyên:** EP0/I²C/FirmwarePlan, driver cũ, enum/TCP, registry/XML, native/JNI và toolchain/dependencies; ba references giữ SHA khóa/sạch. API21/23/31/33/34 chỉ policy branches/docs, **chưa runtime trên các OS đó**. Permission dialog/USB Host thật, firmware/frontend/lock/TS **NOT RUN**.
+
+**Giới hạn:** OS device path/id không chứa attachment epoch; missed detach+reattach dùng lại toàn bộ fields không thể phân biệt chắc chắn. Late detach được kiểm live list, không tự đóng current device chỉ vì VID/PID giống. Synchronous call không trả vẫn pending/chặn reopen; executor owner phải đóng binding trước runtime, không thể bảo đảm kill blocked native operation. Dynamic receiver không giữ process sống sau khi owner mất lifecycle.
+
+**Trước Phase2.4:** review [ADR-013](DECISIONS.md), framework binding/process ownership và identity/deadline trên thiết bị Android thật. Hardware bring-up chỉ sau phê duyệt riêng, firmware provenance/license/hash/address map và kế hoạch lệnh/rollback; không tự bật registry, uploader, frontend hoặc TS.
+
 ## Checkpoint phát hành Phase 2.2 — 2026-11-03 11:33 +07
 
 - Người dùng yêu cầu commit và push11file Phase2.2 trên `chore/modernize-android-build`. Preflight: HEAD local và live origin cùng `6eb23537484a3e1dd263bd5a88f56914c7c5e313`, staged diff rỗng; chỉ có6Javafiles mới/sửa và5hồ sơ.

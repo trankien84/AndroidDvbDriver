@@ -407,3 +407,76 @@ Evidence local ở các module `build\test-results\testDebugUnitTest\TEST-*.xml`
 - Staged diff check phát hiện một dòng trống thừa ở EOF của concurrencytest mới, commit chưa chạy. Chỉ bỏ dòng trống đó, không đổi logic/assertion; stage lại và staged diff --check PASS. Không đổi Git whitespace policy.
 - Message `feat: add TBS5530 lifecycle coordinator and safe cancellation`, kèm Co-authored-by trailer. Chỉ stage11file đã kiểm, không output/cache/firmware/reference. Sau commit push explicit origin/chore/modernize-android-build không force và xác minh SHA remote/working tree. Hash và kết quả thực báo sau kiểm tra, không khẳng định trước thành công.
 - Không chạy lại tests cho tác vụ Git/documentation checkpoint. Kết quả126unit methods/debug/lint/stress ở mục Phase2.2 là lần thực chạy gần nhất; không ghi như lần PASS mới. Không thay production logic, dependencies/toolchain/hardware, không bắt đầu Phase2.3.
+
+## 2026-11-03 12:05–12:42 +07 — Phase 2.3: Android framework binding/instrumentation, không tuner
+
+### Baseline, audit và nguồn
+
+- Windows PowerShell, cwd `D:\API\TBS5530-DVB-Android\AndroidDvbDriver`. Main sạch lúc bắt đầu, nhánh chore/modernize-android-build/635ee4a57267de6055126efcfee6121b30701433; `git ls-remote --heads origin chore/modernize-android-build` cùngSHA. Đây là checkpoint Phase2.2/ADR-012 đã commit/push, không còn pending như snapshot cũ.
+- Đọc instructions v4/scoped build/hardware/ADB/records/toolchain cùng STATUS/ENVIRONMENT/RESEARCH/DECISIONS/WORKLOG/TEST-MATRIX; dùng project-handoff và android-cli. Audit UsbDelegate, manifest/service/worker, registry, DvbUsbDevice, UsbPermissionObtainer và device_filter.xml. Không dùng legacy permission helper cho TBS, không sửa driver khác hoặc nối registry/service.
+- `git --no-lazy-fetch`/no-lazy-fetch1/optional-locks0 kiểm đầu/cuối: TBS2ce787de9f6e81b4294692a45de15596ae2e1322, Cc5fa27eecbe80633cbb365cc44656daea1c0e2e3, Go11228b05fb1626bf41c4e1879ace10cd0a8d575c; cả ba0status entries. Không tải/sửa reference, firmware hoặc Gitconfig.
+- Semantic source search timeout, fallback glob/grep/view có giới hạn; GitNexus list_repos không có targetindex, không tự analyze hoặc tuyên bố emptygraph là safe. Gateway discovery ADB/list_avds xác nhận TBS5530_Runtime_API37. Không thêm MCP endpoint hoặc sửa Proxy.
+- Kiểm android --help/docs search help/emulator help trước dùng. AndroidCLI docs search/fetch USBHost/receiver/Android14, GoogleAPI PendingIntent/USBManager/Connection và target37 notes; nguồn/phân biệt API21/23/31/33/34/37 ghi RESEARCH/ADR013. Không thay build pins/dependencies/SDK/JDK/systemenv.
+
+### Implementation
+
+- Thêm Tbs5530UsbBinding (pureJVM engine), Tbs5530AndroidUsbFacade (Android wrappers + injectedManager/RawConnection), Tbs5530AndroidRuntime (worker+independent scheduler), Tbs5530UsbBindingTest và instrumentation Tbs5530AndroidUsbFacadeTest. Sửa Session/Coordinator để logical invalidation không chạy cleanup trên receiver/main; explicit drainCleanup ở worker, cleanupRunning bảo vệ ownership. Tổng7Javafiles mới/sửa, chưa có controltransport/uploader/streaming.
+- Mỗi permission request có UUIDcorrelation/action/data riêng, package-scoped mutable one-shot PI; API31explicitMUTABLE/API33NOT_EXPORTED/typedparcelable, không unsafeimplicitflag. Receiver parse nhanh, acquisition/hasPermission/listchecks/open/claim/cleanup nằm ngoài main; deadline logical không đóng connection đang dùng.
+- Application attachment epoch +snapshot; duplicate/stale/wrongdevice callbacks không open. Liveidentity/quyền được kiểm trước/sau open/claim; interfaceID/alternate thay vì arrayindex; forcefalse, receipt chỉ sau claimtrue. Khi đổiidentity/permission hoặc cleanupfail giữcause/suppressed và exactly-once ownership.
+- Khởi tạo không tự request/open; bindings chưa gắn app/service/registry/XML. Constructors và tests fake không gọi manager thật. Không đổi EP0encoding/I²Catomicity/FirmwarePlan/Retry/wireprotocol/JNI. Bổ sung ADR013 và5hồ sơ.
+
+### JVM regression và build/lint
+
+Child environment dùng MachineJAVA_HOME đã xác minh ở phase trước, không sửa User/Machine:
+
+```powershell
+$env:JAVA_HOME = [Environment]::GetEnvironmentVariable('JAVA_HOME', 'Machine')
+$env:ANDROID_HOME = 'D:\Android\Sdk'
+$env:ANDROID_AVD_HOME = 'D:\Android\AVD'
+```
+
+Các lượt focused JVM binding/core đều PASS. Combined validation sau hardening facade/runtime/engine:
+
+```powershell
+$env:ANDROID_SERIAL = 'emulator-5554'
+.\gradlew.bat :drivers:testDebugUnitTest --rerun :usbxfer:testDebugUnitTest --rerun :dvbservice:testDebugUnitTest --rerun :drivers:connectedDebugAndroidTest :dvbservice:connectedDebugAndroidTest :app:assembleDebug :app:lintDebug --console plain --no-daemon --max-workers=1
+```
+
+**PASS exit0/4m48s/241tasks53executed188up-to-date.** Unit snapshot151methods; instrumentation19drivers+2dvbservice=21tests,0failure/error/skipped; debug/lintPASS. Sau đó chỉ thêm1JVMtest identity-changed-during-open/cleanupfailure assertion và chạy lại toàn unit/build/lint:
+
+```powershell
+.\gradlew.bat :drivers:testDebugUnitTest --rerun :usbxfer:testDebugUnitTest --rerun :dvbservice:testDebugUnitTest --rerun :app:assembleDebug :app:lintDebug --console plain --no-daemon --max-workers=1
+```
+
+**PASS exit0/2m8s/177tasks22executed155up-to-date.** XML cuối: drivers138/usbxfer1/dvbservice13=**152methods**,0failure/0error; binding26methods mới. Bridge17/Firmware19/Session17/Concurrency10/Coordinator32 tiếp tục PASS. LintXML0Error/0Fatal/11Warning (Autofill1/GradleDependency2/IconLauncherShape3/LabelFor1/TextFields1/UnusedResources3), không suppression/baseline mới. Warning source/target8obsolete/deprecatedAPI vẫn hiện, không nâng toolchain để né.
+
+Kiểm độc lập cuối: `javac --release 8 -cp <JUnit4.13.2;Hamcrest1.3 từ cache sẵn có> -d drivers\build\p23-java8-check <6pure-corefiles và toànTBSJVMtestfiles>` PASS, javap Tbs5530UsbBinding majorversion52. JUnitCore Tbs5530UsbBindingTest +Tbs5530ConcurrencyTest chạy3lượt, mỗi lượt **OK(36tests)**/0.448s/0.484s/0.345s, gồm120latch-controlled iterations của concurrencyloop qua3lượt. Không dependencydownload; outputcompile riêng đãxóa trongfinally, xác nhận không còn.
+
+### AVD và instrumentation
+
+- `adb.exe devices -l` ban đầu không có device; SDKemulator -list-avds với ANDROID_AVD_HOME=D:\Android\AVD có TBS5530_Runtime_API37. AndroidCLI emulator start --headless báo sai “Device ... doesn't exist” nhưng exit0; không coi exit0 là bootPASS.
+- Fallback gọi `D:\Android\Sdk\emulator\emulator.exe -avd TBS5530_Runtime_API37 -no-window -no-audio -no-snapshot-save -no-boot-anim` trong shell71; không tạo/tải/wipe AVD. Kiểm explicitserial emulator-5554: sys.boot_completed1, ro.build.version.sdk37, abi x86_64. Image hiện hữu android-37.0/google_apis/x86_64.
+- :drivers:connectedDebugAndroidTest thực chạy19methods Tbs5530AndroidUsbFacadeTest: actualregistration/unregistration, actualmutablePI fill-in/oneshot, missing/malformedextras, wrongaction/data/correlation, distinctrequests, selectionID/alternate, claimfalse/releasefalse, post-open/post-claim checks, mainthreadguard, worker shutdown/selfwait, logicaldeadline và blockedopen/claim mainresponsiveness. Toàn bộ Manager/RawConnection fake, không systemUSBdialog hoặc physicalIO.
+- :dvbservice:connectedDebugAndroidTest thực chạy DeviceFilterXmlEquivalenceTester::allDevicesAreInXml và NativeLibrarySmokeTest::usbTransferLibraryLoadsWithoutOpeningUsb: **2PASS**, không fakefd/ioctl.
+- XML ở drivers/dvbservice `build\outputs\androidTest-results\connected\debug\TEST-TBS5530_Runtime_API37(AVD) - 17.xml` root testsuites lần lượt19/2,0fail/error/skipped; testcase names đã kiểm, không chỉ dựa task exit. Unit XML tại mỗi module build/test-results/testDebugUnitTest; lint ở app/build/reports/lint-results-debug.xml. Không stage outputs/rawlogs/APK.
+
+### No-tuner app smoke và cleanup
+
+- ADB explicit emulator-5554 `install -r app\build\outputs\apk\debug\app-debug.apk` Success; resolve WelcomeActivity; `am start -W` COLD Statusok/TotalTime3453ms, PID5124. AndroidCLI layout cài layout instrumentation server trên AVD để kiểm hierarchy; không systemsettings/SDKchange.
+- Emulator hiển thị “System UI isn't responding” riêng. MCPtap_on_text thất bại vì uiautomatorbusy/exit137; fallback AndroidCLI semanticinput `id=android:id/aerr_wait`, chọnWait, appWelcome hiển thị tiếp. Không gộpSystemUIANR vàoappANR.
+- Semantic tap Diagnostic rồiSTART: dialog Attention/“No devices found”, appfilteredLogcat chỉ handledDvbException tạiDeviceController.run, khôngFATAL/UnsatisfiedLinkError/SecurityException/appANR trongcửasổkiểm. KhôngTUNE/TSrecord/hardwareoperations. Không xác minh activeDvbService/TS lifecycle khi khôngtuner.
+- Dừng helper emulator đúng shell71 bằng stop_powershell sau validation; adb devices cuối rỗng. Không killprocess theo tên/wipeAVD, không dọnSDK/firmware. Không tạo script tạm. Engine/testfiles chuẩn hóaLF/EOF-only cuối, không đổi logic hoặc assertion, không rerun cho EOL-only.
+
+### Bàn giao và giới hạn
+
+Kiểm cuối git diff --check, UTF-8 strict/LF/EOF choJavafiles và relative Markdown links PASS trên12file; staged diff rỗng. Không diff app/usbxfer/dvbservice/build/wrapper/registry/legacy permission helper/DeliverySystem. IDE main/unit/instrumentation không errors; references cuối vẫn sạch, ADBdevices rỗng sau dừng helper. Không script/outputkiểmtra tạm còn lại.
+
+Implemented7Javafiles +5hồ sơ, chưa stage/commit/push/merge; HEAD vẫn635ee4a. Runtime API21/23/31/33/34 NOT RUN; policy branch assertions trên37 không thay runtime coverage. PhysicalUSBHost/systemUSBpermissiondialog/attachdetachdelivery/reusedidentity/nativecancel/firmware/frontend/lock/TS NOT RUN. Main constructor/receiver behavior synthetic được kiểm nhưng binding chưa nốiservice hoặc giữprocess sống tự động.
+
+Phase2.4 cần review ADR013, ownerprocess lifetime/receiver/deadline/identity mapping và testplan thiếtbịAndroid. Hardwarebringup chỉ sau phê duyệt riêng +firmwareprovenance/license/hash/addressmap +commandplan/rollback; không tự thêmregistry/uploader/frontend/TS. Dừng Phase2.3.
+
+## 2026-11-03 12:57 +07 — Checkpoint commit/push Phase2.3 theo yêu cầu
+
+- Người dùng phê duyệt commit các thay đổi Phase2.3 và push nhánh hiện tại. Preflight Windows PowerShell/main repo: chore/modernize-android-build, HEAD635ee4a57267de6055126efcfee6121b30701433; live origin cùngSHA, staged diff rỗng, đúng12file (7Javafiles và5hồ sơ), diff --check PASS.
+- Message `feat: add Android USB lifecycle binding and instrumentation`, có Co-authored-by trailer. Chỉ stage12file đã kiểm, không outputs/APK/logs/firmware/reference. Push explicit origin/chore/modernize-android-build không force, sau đó xác minh SHA remote và working tree; hash và kết quả thực báo sau kiểm tra.
+- Không chạy lại tests cho tác vụ Git/documentation checkpoint. Bằng chứng152unit methods/21instrumentation/debug/lint/stress ở mục Phase2.3 là kết quả thực gần nhất, không gọi là lượt PASS mới. Không đổi production logic/toolchain/dependencies/hardware, không bắt đầu Phase2.4.
