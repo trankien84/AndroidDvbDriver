@@ -1,5 +1,37 @@
 # TBS5530 test matrix
 
+## 2026-11-04 00:06 +07 — Phase 2.6: raw descriptor chỉ đọc, OnePlus/API30
+
+Baseline đã push `df076d28dd8100d5caa363f1d866a274e3f2b636`, nhánh `chore/modernize-android-build`, cộng thay đổi working tree chưa commit. 180/44 của Phase2.5 giữ nguyên lịch sử bên dưới, không chuyển thành kết quả mới. Runtime GM1900/Android11/API30/arm64, Wireless ADB serial TCP tường minh, không emulator.
+
+| Gate | Kết quả mới | Bằng chứng / giới hạn |
+|---|---|---|
+| Wireless guard | PASS theo phạm vi; một lần STOP | Serial cũ mất khi sửa code: dừng, chờ xác nhận, tra serial mới, Host/attachment/permission/app owner mới; không tự đổi target. Build dài kiểm mỗi10s |
+| Parser JVM debug | PASS7 methods | Null/empty/device-only, bLength0/1/standard quá ngắn, wTotalLength nhỏ/vượt data, mọi điểm cắt tree, nhiều alternate/một interface, hướng02 OUT khác82 IN, không82 vẫn parse, duplicate/count/unknown payload/redaction/immutable/size cap |
+| Raw lifecycle JVM debug | PASS12 methods | Deny/missing/stale trước open; detach trong open/read; permission mất; open null/exception; read/close exception; cleanup một lần; deadline/owner close không force-close; không retry; events khác attachment |
+| Production regression | PASS | `drivers/src/main` không đổi; test profile vẫn từ chối thiếu82. Capability raw không có claim/vendor/control/bulk API |
+| TBS JVM toàn bộ | PASS168 methods | Gồm149 cũ và19 mới; không coi fake transport là hardware PASS |
+| JVM toàn bộ module | PASS199 methods | drivers185/usbxfer1/dvbservice13;0 failures/errors; từng test task dùng `--rerun` ở lượt cuối |
+| Instrumentation diagnostic | PASS17 tests | OnePlusAPI30, fake raw port, worker khác main,0 production open/claim/transfer, block cùng owner và giữa hai owner; giữ14 tests cũ |
+| Instrumentation facade | PASS28 tests | Android/API30, fake Manager/raw transport; không truy cập tuner |
+| Native smoke/XML | PASS2 tests | `NativeLibrarySmokeTest` load trên arm64; `DeviceFilterXmlEquivalenceTester`1; không ioctl USB |
+| Tổng instrumentation | PASS47 tests | App17+drivers28+dvbservice2;0 failures/errors/skipped; connected tasks thực thi lại sau raw cycle |
+| Debug/release APK | PASS | Mã cuối trước USB:2m55s/419 tasks,38 executed/381 up-to-date; sau USB:2m2s/419 tasks,23 executed/396 up-to-date |
+| Lint | PASS0 errors/0 fatal/9 warnings | XML lint9.5.0 trên mã cuối; lượt sau USB task chạy lại, analysis/report up-to-date của cùng source. Không gọi11 warnings lịch sử là kết quả mới |
+| Java8 | PASS |10 core/debug JVM source compile bằng `javac --release 8`; `javap` parser major52. Main build source/target8/min21 không đổi |
+| Debug-only isolation | PASS | DEX debug có6 class diagnostic; release DEX không6 class; release manifest không Activity. Không thay registry/XML production |
+| USB Host/metadata mới | PASS |734c:5530/configvalue1/alt0–3 trước raw; metadata-only không open |
+| Permission callback thật | PASS tại lượt mới |Người dùng tự Allow;operation1/gen1;callback1/correlation=true;PERMISSION_GRANTED trước cleanup,CLOSED sau;open0/claim0 |
+| Raw cycle thật, được duyệt1 lần | PASS read-only |Operation2/gen2;open/read/close1/1;13ms worker;permission/identity=true;failureNONE;pending/cleanup=false;0claim/release/transfer |
+| Raw tree thực trả về | PASS parse phạm vi189bytes |SHA256 `e2887bad8b5a0e8dcaaa69bd636a01a2d11e53fe4b532b5b14828a2d3df952de`;device18+config171;bNumInterfaces1/alt0–3;issues0 |
+| Raw so metadata | PASS18/18 endpoints |Đối chiếu ID/alternate/address/direction/type/packet/interval;khôngIN82. Không chứng minh cache bằng descriptor live trên bus |
+| TBS ChangeMode | Source/static research |Trang official+ZIP directory+strings trong RAM,không chạy EXE;chưa biết protocol/descriptors/rollback;không hardware PASS |
+| Trạng thái cuối sau UTP/cài lại | PASS metadata |Debug APK cuối cold launch,generation0/DETECTED,pending=false,open0/claim0;permission=false.Không xin lại hoặc chạy raw lần2 |
+| Streaming readiness/active alternate/firmware state | BLOCKED/UNKNOWN |Không82,khôngGET_INTERFACE/GET_CONFIGURATION;không suy firmware cold/warm hoặc88=TS |
+| Firmware/CPU/vendor/I²C/bulk/tuner/TS/ChangeMode execution/reset | NOT RUN |Ngoài phê duyệt;không tự bắt đầu phase kế tiếp |
+
+Lượt focused đầu:19 methods chạy,18PASS/1FAIL do fixture duplicate endpoint sửa nhầm byte attributes (offset62),không phải parser lỗi. Sửa fixture sang address offset61;chạy lại19/19PASS rồi full regression. Chưa phát hiện bug runtime Android ở raw cycle;không nới profile để đổi BLOCKED thành PASS. Chi tiết lệnh và kết quả ở [WORKLOG.md](WORKLOG.md),raw fields/nguồn/giả thuyết ở [RESEARCH.md](RESEARCH.md),quyền sở hữu ở [ADR-017](DECISIONS.md).
+
 ## 2026-11-03 22:16 +07 — Phase 2.5: OnePlus 7/API 30, USB thật có giới hạn
 
 Baseline dc50e7304941a7d01aa1d490c13fcf09683a01c9/chore/modernize-android-build, cộng các thay đổi chưa commit. OnePlus GM1900/Android 11/API 30, chỉ định rõ thiết bị qua Wireless ADB (ADB không dây), kết nối OTG trực tiếp. OxygenOS 11.0.9.1.GM57AA do người dùng cung cấp; thuộc tính build/OTA đã ghi trong ENVIRONMENT. Không dùng emulator hoặc chuyển tiếp USB từ Windows.

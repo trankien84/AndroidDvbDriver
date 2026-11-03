@@ -142,6 +142,67 @@ public class Tbs5530UsbDiagnosticTest {
         assertFalse(report.contains("/private/"));
     }
 
+    @Test public void rawInspectionWithoutTsEndpointNeverClaimsAndExportsBoundedResult() throws Exception {
+        FakeFacade fake = new FakeFacade();
+        AtomicInteger opens = new AtomicInteger(), reads = new AtomicInteger(), closes = new AtomicInteger();
+        AtomicReference<Tbs5530DiagnosticController> ref = new AtomicReference<>();
+        info.martinmarinov.drivers.usb.tbs5530.Tbs5530RawDescriptorInspection.Port port =
+                new info.martinmarinov.drivers.usb.tbs5530.Tbs5530RawDescriptorInspection.Port() {
+            @Override public List<Tbs5530UsbBinding.Device> devices() { return Collections.singletonList(DEVICE); }
+            @Override public boolean hasPermission(Tbs5530UsbBinding.Device device) { return true; }
+            @Override public Tbs5530UsbBinding.Registration listen(Tbs5530UsbBinding.Events events) { return () -> { }; }
+            @Override public info.martinmarinov.drivers.usb.tbs5530.Tbs5530RawDescriptorInspection.Connection open(Tbs5530UsbBinding.Device device) {
+                assertNotEquals(android.os.Looper.getMainLooper(), android.os.Looper.myLooper());
+                opens.incrementAndGet();
+                return new info.martinmarinov.drivers.usb.tbs5530.Tbs5530RawDescriptorInspection.Connection() {
+                    @Override public byte[] getRawDescriptors() { reads.incrementAndGet(); return new byte[]{18,1,0,2,0,0,0,64,0x4c,0x73,0x30,0x55,0,1,1,2,3,1}; }
+                    @Override public void close() { closes.incrementAndGet(); }
+                };
+            }
+        };
+        main(() -> ref.set(new Tbs5530DiagnosticController(() -> fake,
+                () -> new Tbs5530DiagnosticMetadata.Snapshot("metadata", Collections.singletonList("TBS"),
+                        Collections.singletonList(DEVICE), Collections.singletonList(false)), port, 2000, 2000)));
+        Tbs5530DiagnosticController owner = ref.get();
+        try {
+            main(() -> { assertFalse(owner.canStart()); assertTrue(owner.canInspectRaw()); owner.rawSelected();
+                assertFalse(owner.canRequestPermission()); owner.startSelected(); owner.rawSelected(); });
+            idle(owner);
+            org.json.JSONObject json = owner.structuredReport();
+            assertEquals("READ_AND_CLOSED", json.getString("state"));
+            assertEquals(1, opens.get()); assertEquals(1, reads.get()); assertEquals(1, closes.get());
+            assertEquals(0, fake.opens.get()); assertEquals(0, fake.claims.get()); assertEquals(0, fake.transfers.get());
+            assertFalse(json.getBoolean("pending")); assertFalse(json.getBoolean("streaming_ready"));
+            assertEquals("PARTIAL_OR_INCONSISTENT", json.getJSONObject("raw_descriptors").getString("status"));
+            redacted(json.toString());
+        } finally { finish(owner); }
+    }
+
+    @Test public void twoDebugOwnersCannotOpenParallelConnections() throws Exception {
+        FakeFacade fake = new FakeFacade(); fake.granted = true; fake.blockClaim = true;
+        FakeFacade second = new FakeFacade(); second.granted = true;
+        Tbs5530DiagnosticController first = controller(fake, 2000), other = controller(second, 2000);
+        try {
+            main(first::startSelected); assertTrue(fake.claiming.await(3, TimeUnit.SECONDS));
+            main(() -> { assertFalse(other.canRequestPermission()); other.startSelected(); });
+            assertEquals(0, second.opens.get());
+            fake.claimGate.countDown(); idle(first);
+            main(() -> { assertTrue(other.canStart()); other.startSelected(); });
+            idle(other); assertEquals(1, second.opens.get());
+        } finally { fake.claimGate.countDown(); finish(first); finish(other); }
+    }
+
+    @Test public void rawInspectionBlockedWhileExistingCycleOwnsOrAcquiresConnection() throws Exception {
+        FakeFacade fake = new FakeFacade(); fake.granted = true; fake.blockClaim = true;
+        Tbs5530DiagnosticController owner = controller(fake, 2000);
+        try {
+            main(owner::startSelected); assertTrue(fake.claiming.await(3, TimeUnit.SECONDS));
+            main(() -> { assertFalse(owner.canInspectRaw()); owner.rawSelected(); });
+            assertEquals(1, fake.opens.get()); assertEquals(0, fake.closes.get());
+            fake.claimGate.countDown(); idle(owner); assertEquals(1, fake.closes.get());
+        } finally { fake.claimGate.countDown(); finish(owner); }
+    }
+
     @Test public void permissionOnlyGrantExportsCorrelationWithoutAnyConnection() throws Exception {
         FakeFacade fake = new FakeFacade();
         Tbs5530DiagnosticController owner = controller(fake, 2000);

@@ -706,3 +706,59 @@ Cần review ADR-016 và descriptor/state/provenance trước phase bridge/firmw
 - Message `feat: add permission-only USB preflight and private diagnostic reports`, có Co-authored-by trailer. Chỉ stage 14 file đã kiểm; không APK, raw logs, pairing credentials, firmware hoặc references. Push tường minh origin/chore/modernize-android-build, không force; xác minh SHA remote và working tree sau thao tác, không ghi trước thành công.
 - Không chạy lại build/test/hardware cho tác vụ Git và checkpoint này. Bằng chứng gần nhất của Phase 2.5 là 180 unit methods, 44 instrumentation tests, debug/release build và lint 0 errors/11 warnings. Không thay guard descriptor, không mở connection cycle thật hoặc firmware/vendor bring-up.
 - Lượt commit đầu dừng trước stage do Wireless ADB mất kết nối. Sau xác nhận nối lại lúc 22:45, đã tra serial mới và xác minh OnePlus GM1900/API 30/state=device. Kiểm diff phát hiện một dòng trống thừa ở cuối WORKLOG; chỉ bỏ dòng đó, không sửa logic hoặc bằng chứng. Không chỉnh bản đính kèm chỉ đọc; mọi thay đổi tài liệu ở repository chính.
+
+## 2026-11-03 23:34–2026-11-04 00:10 +07 — Phase 2.6 thống nhất: USB mode, raw descriptors và hồi quy
+
+### Baseline, hướng nghiên cứu và guard
+
+- Đọc toàn bộ copilot-instructions, build/toolchain/hardware/ADB/project-records instructions, ADR-010–016 và phần hiện hành của sáu hồ sơ. Git local, origin tracking và commit người dùng cung cấp cùng `df076d28dd8100d5caa363f1d866a274e3f2b636`, nhánh `chore/modernize-android-build`, working tree sạch ban đầu. Đây là checkpoint Phase 2.5 đã push. Không fetch/reset/merge/stage/commit/push; không sửa ba references.
+- SHA references đo đầu/cuối: official `2ce787de9f6e81b4294692a45de15596ae2e1322`, C `c5fa27eecbe80633cbb365cc44656daea1c0e2e3`, Go `11228b05fb1626bf41c4e1879ace10cd0a8d575c`; status porcelain không có thay đổi. Dùng source trực tiếp; GitNexus không có index repo này. AgentMemory recall không kết quả. Research subagent không khởi chạy được vì model mặc định không khả dụng; không thử model khác hoặc coi là kết quả agent. Đã nghiên cứu trực tiếp và ghi nguồn ở RESEARCH.
+- Wireless guard đầu xác minh GM1900/API 30/state=device bằng serial TCP; không dùng alias mDNS. Trong lúc sửa diagnostic, serial đã chọn biến mất và danh sách có cổng mới: dừng ngay, dùng ask_user yêu cầu xác nhận. Sau người dùng xác nhận mới tra serial mới, kiểm model/API/USB Host, app-private metadata và khởi động lạnh owner mới. Không open USB trước hoặc trong ngắt kết nối, không tái dùng connection/generation cũ.
+- Guard mỗi 10 giây khi chạy Gradle: kiểm `adb devices -l`, `adb -s <VERIFIED_SERIAL> get-state`, model/API; nếu mất thì dừng cây tiến trình theo PID cụ thể. Script theo dõi nằm trong session files, không ghim serial/IP vào repository. Không tự reconnect/pair, không chuyển emulator hoặc thiết bị khác.
+
+### Implementation và kiểm thử trước USB
+
+- Thêm ba class debug-only trong drivers: `Tbs5530RawDescriptors` parser JVM giới hạn/bounds/unsigned/counts, `Tbs5530RawDescriptorInspection` capability một lần có worker/deadline/identity/permission/invalidation/close, `Tbs5530AndroidRawDescriptorPort` chỉ open/getRawDescriptors/close. Thêm hai suites ở testDebug, tổng 19 phương thức.
+- Controller debug là owner: tách metadata, permission-only và raw; chặn song song bằng active/pending và reservation token giữa các owner trong process. Không singleton connection/Context. Activity có nút raw chủ động, không attach handler. JSON app-private giữ trường số đã lọc/hash/operation generation/permission/thread/duration/counters/pending/error, không raw bytes/string/path/serial. App build thêm Git baseline vào BuildConfig debug, có nhãn working-tree không được SHA chứng thực. Không đổi version/toolchain/dependencies hoặc production lifecycle/transport/registry.
+- `problems` chỉ báo source set debug chưa ở classpath của Java editor, không có bằng chứng biên dịch từ đó; Gradle là phép kiểm thật. Focused đầu chạy19 tests,18 PASS/1 FAIL ở fixture duplicate endpoint: test sửa nhầm offset62 (attributes) thay vì61 (address). Chỉ sửa fixture, chạy lại19/19 PASS cùng assembleDebug trong1m49s/101 tasks. Không che failure hoặc gọi đây là bug parser Android.
+- Các full runs trước hardware đều có guard: lượt đầu PASS5m42s/419 tasks (68 executed/351 up-to-date); sau hoàn thiện reservation giữa owner, lượt mã cuối PASS2m55s/419 tasks (38 executed/381 up-to-date). 199 JVM methods, 47 instrumentation trên OnePlus, debug/release/lint PASS trước open thật. Không thay profile chỉ để qua guard.
+
+### Permission callback và đúng một raw cycle được duyệt
+
+- Cài `app-debug.apk` bằng `adb -s <VERIFIED_SERIAL> install -r`, start tường minh `info.martinmarinov.dvbdriver/.Tbs5530UsbDiagnosticActivity`; cold launch666ms. Metadata mới: GM1900/API30, Host=true, 734c:5530, permission=false, generation0/DETECTED, pending/cleanup=false, open/claim/close0. Không có session acquisition active.
+- Ask_user trình bày open/getRawDescriptors/close một lần, không claim/config/alternate/vendor/I²C/bulk/reset/firmware; người dùng phê duyệt đúng chu kỳ. Gateway discovery không trả đúng UI inspection tool, dùng Android CLI layout theo hướng dẫn, lọc cửa sổ ứng dụng ở các lượt sau; không lưu hierarchy thô hoặc thông tin ứng dụng khác vào hồ sơ.
+- Bấm nút chỉ yêu cầu quyền trong app. Người dùng tự chọn Allow rồi xác nhận; agent không bấm hộp thoại hệ thống. JSON operation1/generation1: callback_count1/correlation_device_matched=true, state_before_cleanup=PERMISSION_GRANTED, state=CLOSED, open/claim/close0, pending/cleanup=false. Đây là PASS callback thật mới, không dùng lại lượt quá hạn của Phase2.5.
+- Làm mới metadata, kiểm permission=true, đúng attachment734c:5530 và không pending; capability tự kiểm full identity/permission trước/sau open/read. Bấm raw đúng một lần. Kết quả operation2/generation2 READ_AND_CLOSED; openDevice1/1, getRawDescriptors1/1, close1/1, claim/release/transfer0; worker tbs5530-usb-worker,13ms, identity/permission=true, invalidated=false, failureNONE, pending/cleanup=false. Không thử lần hai.
+- Raw189 bytes, SHA256 `e2887bad8b5a0e8dcaaa69bd636a01a2d11e53fe4b532b5b14828a2d3df952de`, parser COMPLETE_RETURNED_TREE/issues0. Device descriptor18 + config171; bcdUSB0200/bcdDevice0001/EP0packet64; configvalue1/bNumInterfaces1, alternate0–3 của ID0. Cả18 endpoint khớp metadata về ID/alt/address/direction/type/packet/interval; khôngIN82. Chi tiết và giới hạn cache/live bus ở RESEARCH. Không suy88=TS hoặc firmware cold/warm.
+
+### Nghiên cứu ChangeMode và firmware, không execution
+
+- TBS download chính hãng còn link ChangeMode ZIP. Chỉ tải nội dung vào RAM bằng HttpClient, ZipArchive liệt kê đúng một EXE, không README; đọc các chuỗi tĩnh trong RAM, không ghi hoặc chạy EXE. ZIP213579bytes/hash `c6555841ca048da247692c7200267adf22a1c24bfe56a66c0a00a0a2e7aee6c2`; EXE522728bytes/hash `6da03e94ef1d570c2a4dbccef3a529bf2a56b8cb5e0f5b2ecacf5eddd773afcd`. Thấy nhãn DVB-S/S2,DVB-T/T2 và BDA; chưa chứng minh giao thức/firmware/descriptors/rollback hoặc82/88. Không chuyển tuner sang Windows.
+- Official/C/Go dùng82; official cold table theoID và no_reconnect, C/Go load firmware trước frontend. CPU/register và chip-ID sequence chỉ đọc source, không gửi lệnh. Không có blob firmware trong ba checkout đã kiểm nên hash ảnh thật và giấy phép phân phối NOT VERIFIED. Không tải firmware. Các câu hỏi TBS và điều kiện duyệt bring-up đã ghi trong RESEARCH/ADR-017.
+
+### Commands và regression cuối
+
+PowerShell tại repository chính; JAVA_HOME lấy từ Machine cho child process, ANDROID_HOME/ANDROID_SERIAL đặt trong child. Toolchain đã đọc từ build/wrapper và source.properties, không nâng/cài/gỡ.
+
+```powershell
+.\gradlew.bat :drivers:testDebugUnitTest --tests *Tbs5530Raw* :app:assembleDebug --console plain --no-daemon --max-workers=1
+.\gradlew.bat :drivers:testDebugUnitTest --rerun :usbxfer:testDebugUnitTest --rerun :dvbservice:testDebugUnitTest --rerun :app:connectedDebugAndroidTest :drivers:connectedDebugAndroidTest :dvbservice:connectedDebugAndroidTest :app:assembleDebug :app:assembleRelease :app:lint --console plain --no-daemon --max-workers=1
+adb -s <VERIFIED_SERIAL> shell run-as info.martinmarinov.dvbdriver cat files/tbs5530-diagnostic.json
+javac --release 8 -d <SESSION_TEMP_CLASSES> <EIGHT_CORE_AND_TWO_DEBUG_JVM_SOURCES>
+javap -verbose -classpath <SESSION_TEMP_CLASSES> info.martinmarinov.drivers.usb.tbs5530.Tbs5530RawDescriptors
+apkanalyzer.bat manifest print app\build\outputs\apk\release\app-release-unsigned.apk
+git --no-pager diff --check
+```
+
+- Sau raw chạy lại full command: **BUILD SUCCESSFUL2m2s,419 tasks,23 executed/396 up-to-date**. XML mới: drivers185/usbxfer1/dvbservice13=199 JVM methods; TBS package168. App instrumentation17 + facade28 + native1 + XML1 =47,0 failures/errors/skipped. Connected tasks đã thực thi, không đánh up-to-date thành hardware evidence.
+- Lint XML:0 errors/fatal,9 warnings. Debug/release APK PASS; analysis/report lint lượt cuối up-to-date trên cùng mã đã PASS trước đó. Java8 compile10 sources PASS, parser bytecode major52. Debug DEX có6 class diagnostic; release DEX không6 class và manifest không Activity. Native smoke trên arm64 và device-filter XML tương đương PASS. Không chạy native USB ioctl.
+- UTP có cài/gỡ app. Sau regression đã cài lại APK debug cuối và cold launch678ms, chỉ metadata: generation0/DETECTED, target734c:5530, permission=false, pending/cleanup=false, open/claim/close0. Không yêu cầu quyền lại hoặc đọc raw lần hai. Bằng chứng raw/permission trước đó giữ trong session JSON đã lọc và hồ sơ.
+- Có 16 file thay đổi: app build + 3 debug classes + 1 instrumentation suite, 3 drivers debug classes + 2 testDebug suites, 6 hồ sơ dự án. Stage trống; không instructions/reference/production registry/profile thay đổi. Raw logs, binary APK, executable tool, firmware và thông tin ghép nối không được thêm Git.
+- **Điểm dừng:** mục tiêu chẩn đoán read-only hoàn tất trong phạm vi duyệt; production streaming và firmware/mode vẫn BLOCKED/UNKNOWN. Không firmware/CPU reset/vendor/I²C/config/alternate/bulk/tune/LNB/TS/ChangeMode execution. Bước kế tiếp chỉ chuẩn bị tài liệu TBS, firmware provenance/license/hash/address map/rollback và kế hoạch trước/sau cùng board cần phê duyệt mới; không tự bắt đầu phase tiếp theo.
+
+## 2026-11-04 00:18 +07 — Commit và push Phase 2.6 theo yêu cầu
+
+- Người dùng phê duyệt commit toàn bộ changes Phase 2.6 và push lên origin của nhánh hiện tại. Preflight: `chore/modernize-android-build`, local và live origin cùng `df076d28dd8100d5caa363f1d866a274e3f2b636`, stage trống, đúng 16 file gồm mã/debug tests/build metadata và sáu hồ sơ. Không thay ba references; không reset/merge/rebase hoặc force-push.
+- Lượt đầu dừng trước stage do Wireless ADB offline. Sau xác nhận của người dùng, tra serial TCP mới và kiểm GM1900/API 30/state=device, USB Host=true, app đang chạy; metadata 734c:5530, permission=false, generation 0/DETECTED, pending/cleanup=false, open/claim=0. Không tự reconnect/pair hoặc tái dùng handle USB cũ.
+- Message `feat: add debug-only raw USB descriptor inspection`, có Co-authored-by trailer. Chỉ stage 16 file đã kiểm; JSON đính kèm app-private/session ở ngoài repository không được sao chép vào Git. Kiểm mẫu secrets/IP-port và `git diff --check` trước commit; push tường minh `origin HEAD:refs/heads/chore/modernize-android-build`, không force. Kết quả commit/push và SHA được xác minh sau thao tác, không ghi trước thành công.
+- Không chạy lại build/tests hoặc USB cycle trong tác vụ Git. Kết quả 199 JVM/47 instrumentation, debug/release/lint và raw read là bằng chứng Phase 2.6 vừa ghi phía trên, không phải lượt chạy mới.

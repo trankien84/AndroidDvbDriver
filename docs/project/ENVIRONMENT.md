@@ -1,5 +1,13 @@
 # Kiểm kê môi trường
 
+## 2026-11-03–04 — Phase 2.6: raw descriptor trên OnePlus, không đổi toolchain
+
+- Xác minh mới GM1900/API30/state=device qua một serial TCP tường minh; bỏ alias mDNS. Một lần serial TCP cũ biến mất trong lúc sửa diagnostic: dừng ngay trước build/test/USB, chờ người dùng xác nhận, tra cổng mới và cold launch owner mới. USB Host=true, attachment734c:5530, permission=false ban đầu, generation0/pending=false/open0. Không pair/reconnect tự động hoặc chuyển thiết bị.
+- Toolchain đang khai báo/đang cài được kiểm trực tiếp: Gradle9.8.2/checksum wrapper giữ nguyên, AGP9.5.0, Java25.0.5.0.3, platform37.2 revision2, Build-Tools37.0.0, NDK30.0.16248370, CMake4.1.2, ADB37.0.1. Compile37.2/target37/min21/Java8 giữ nguyên; runtime OnePlusAPI30/arm64. Không kiểm latest stable vì không có tác vụ nâng cấp; không install/uninstall hoặc đổi môi trường Machine/User. Lệnh build chỉ dùng môi trường tiến trình con.
+- Chu kỳ raw được người dùng duyệt riêng: permission callback thật có1 lần/match=true, sau đó raw operation2/generation2, open/getRawDescriptors/close1 lần,13ms, trên worker; không claim/transfer. Tree189 bytes, USBbcd0200/devicebcd0001, configvalue1/wTotalLength171/bNumInterfaces1, alt0–3; không82. Công suất khai báo100mA không phải đo nguồn; packet512 không đo negotiated speed.
+- Metadata và raw report đã lọc nằm app-private/session, không có raw bytes, USB serial/path hoặc credentials trong Git. APK/log/cache local không phải deliverable công khai. Kiểm permission cuối sau instrumentation/cài lại được ghi ở WORKLOG; không mặc định quyền giữ qua UTP install/uninstall.
+- Không thực thi TBS ChangeMode; ZIP chỉ đọc trong RAM và inspect chuỗi tĩnh, không EXE trên đĩa/không driver Windows. TBS/WSL/Linux snapshots giữ riêng provenance; không chuyển tuner khỏi OnePlus.
+
 ## 2026-11-03 — Phase 2.5: OnePlus 7 thật qua Wireless ADB
 
 - Thiết bị xác minh trực tiếp: **OnePlus GM1900 (OnePlus 7), Android 11/API 30**; build `GM1900_14_220617`, OTA `OnePlus7Oxygen_14.P.45_GLO_0450_2206171433`. Người dùng cung cấp OxygenOS 11.0.9.1.GM57AA; thuộc tính ro.oxygen.version trống nên không gọi đây là phiên bản vừa đo bằng thuộc tính hệ thống.

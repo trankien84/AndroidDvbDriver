@@ -1,5 +1,27 @@
 # Port TBS5530 sang Android — trạng thái hiện tại
 
+## Checkpoint phát hành Phase 2.6 — 2026-11-04 00:18 +07
+
+- Người dùng yêu cầu commit và push 16 file Phase 2.6 trên nhánh `chore/modernize-android-build`. Preflight xác nhận HEAD và live origin cùng `df076d28dd8100d5caa363f1d866a274e3f2b636`, stage trống; không đưa JSON đính kèm ngoài repository, APK, raw logs hoặc firmware vào Git.
+- Message dự kiến: `feat: add debug-only raw USB descriptor inspection`. Hash và kết quả push được xác minh từ Git sau thao tác; các mục “chưa stage/commit/push” bên dưới là lịch sử trước checkpoint này.
+- Đã dừng trước stage khi Wireless ADB offline. Sau người dùng xác nhận nối lại, tra cổng mới và xác minh GM1900/API 30/state=device, USB Host=true, metadata 734c:5530, permission=false, generation 0/DETECTED, không pending hoặc open/claim. Không tái dùng USB handle hoặc mở chu kỳ mới.
+- Không chạy lại build/tests trong tác vụ Git. Bằng chứng gần nhất vẫn là 199 JVM methods, 47 instrumentation tests, debug/release build, lint 0 errors/9 warnings và một raw cycle đã duyệt; firmware/USB mode và streaming vẫn BLOCKED/UNKNOWN.
+
+## Phase 2.6 — Đã đọc raw descriptors; firmware/USB mode vẫn chưa xác minh, 2026-11-04 00:06 +07
+
+**Diagnostic chỉ đọc đã hoạt động trên OnePlus 7; blocker không phải chỉ do Android biểu diễn alternate. Chưa cho phép firmware/bridge bring-up.** Nhánh `chore/modernize-android-build`, HEAD và remote-tracking `df076d28dd8100d5caa363f1d866a274e3f2b636` (checkpoint Phase2.5 đã push); thay đổi Phase2.6 chưa stage/commit/push, không reset/merge. Ba references giữ đúng SHA khóa và sạch.
+
+- **Wireless ADB:** GM1900/API 30/state=device, dùng một serial TCP mới tra, không chọn alias mDNS hoặc emulator. Đã dừng một lần khi serial cũ mất; chỉ tiếp tục sau xác nhận, kiểm lại USB Host, attachment, permission và tạo owner mới. Kiểm kết nối mỗi 10 giây trong build/tests dài; không ghim IP/port vào Git.
+- **Permission thật:** người dùng tự Allow; thao tác 1/generation 1 nhận callback đúng một lần, correlation=true. Trạng thái trước cleanup là PERMISSION_GRANTED, sau là CLOSED, không open/claim. Đây là bằng chứng mới so với callback chưa chứng minh ở Phase 2.5.
+- **Raw cycle được duyệt một lần:** thao tác 2/generation 2, openDevice/getRawDescriptors/close đúng một lần, 13 ms trên worker, không claim/transfer, permission và identity hợp lệ, không pending/cleanup. Trả 189 bytes, SHA-256 `e2887bad8b5a0e8dcaaa69bd636a01a2d11e53fe4b532b5b14828a2d3df952de`; parser đọc đủ tree, không lỗi. Không lưu raw bytes/serial/path vào Git.
+- **Descriptor mới:** bcdUSB=0200, bcdDevice=0001, EP0 packet=64, device class=FF; configuration value=1, wTotalLength=171, bNumInterfaces=1, công suất khai báo 100 mA; interface ID 0 có alternate 0–3. Alternate 0 rỗng; alternate 1 có Bulk 01/81/02/04/86/88; alternate 2/3 giống metadata lịch sử. Cả 18 endpoint đều khớp giữa raw và metadata, không có IN82. Không suy alternate đang active, tốc độ thực, cold/warm hoặc 88=TS.
+- **Nguồn và mode:** official/C/Go đều chọn TS82, load firmware ở probe/open; official “cold” là bảng ID, không đo firmware OnePlus. ZIP ChangeMode chính hãng chỉ có EXE; kiểm tra tĩnh thấy nhãn DVB-S/S2, DVB-T/T2 và BDA, không chứng minh đổi USB descriptors/firmware hoặc cơ chế khôi phục. Không chạy tool. Chi tiết ở [RESEARCH.md](RESEARCH.md).
+- **Phần mềm:** ba class raw mới chỉ trong `drivers/src/debug`, hai suites JVM debug; controller/activity/report thêm nút raw và cơ chế giữ quyền thao tác độc quyền. Không sửa production Session/Binding/Coordinator/Facade/Descriptors/registry. [ADR-017](DECISIONS.md) chốt capability riêng, không claim/transfer.
+- **PASS mới:** 199 JVM methods (TBS 168), 47 instrumentation tests (17+28+2) trên OnePlus/API 30, không failure/error/skipped. Debug/release build, lint 0 errors/9 warnings, Java 8/bytecode 52, native smoke/XML; release không chứa sáu class diagnostic. Regression cuối sau raw mất 2m2s/419 tasks; không dùng số 180/44 lịch sử thay kết quả mới. Xem [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md).
+- **Cuối phiên:** UTP cài/gỡ app; đã cài lại debug APK và khởi động lạnh chỉ đọc metadata, generation 0/DETECTED, không pending/cleanup hoặc open/claim, permission=false. Không xin lại và không chạy raw lần hai. Bằng chứng raw trước đó được giữ trong hồ sơ và báo cáo session đã lọc.
+
+**BLOCKED/NOT RUN:** khả năng streaming, alternate đang active, firmware cold/warm và USB mode, hash/giấy phép/address map firmware thật, vendor/I²C/chip ID/tuner/TS, chạy ChangeMode/reset hoặc ghi configuration/alternate. Kế tiếp chỉ chuẩn bị tài liệu TBS về mode và cơ chế khôi phục, xác minh firmware và kế hoạch trước/sau trên cùng board được duyệt riêng. Giữ production IN82; không tự bước sang phase tiếp theo.
+
 ## Checkpoint phát hành Phase 2.5 — 2026-11-03 22:43 +07
 
 - Người dùng yêu cầu commit và push 14 file còn lại: 8 file mã nguồn/tests Phase 2.5 và 6 hồ sơ đã biên tập. Nhánh `chore/modernize-android-build`; preflight xác nhận local và origin cùng `dc50e7304941a7d01aa1d490c13fcf09683a01c9`, stage trống. Wireless ADB đã xác minh đúng GM1900/API 30, không thao tác USB.

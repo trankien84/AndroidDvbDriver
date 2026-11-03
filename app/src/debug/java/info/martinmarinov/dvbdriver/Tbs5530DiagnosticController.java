@@ -12,15 +12,22 @@ import info.martinmarinov.drivers.usb.tbs5530.Tbs5530AndroidRuntime;
 import info.martinmarinov.drivers.usb.tbs5530.Tbs5530LifecycleCoordinator;
 import info.martinmarinov.drivers.usb.tbs5530.Tbs5530Session;
 import info.martinmarinov.drivers.usb.tbs5530.Tbs5530UsbBinding;
+import info.martinmarinov.drivers.usb.tbs5530.Tbs5530RawDescriptorInspection;
+import info.martinmarinov.drivers.usb.tbs5530.Tbs5530RawDescriptors;
 
 /** Retained debug owner. Only startSelected() requests permission; no connection escapes. */
 final class Tbs5530DiagnosticController implements AutoCloseable {
     interface FacadeFactory { Tbs5530UsbBinding.Facade create(); }
     interface Metadata { Tbs5530DiagnosticMetadata.Snapshot read(); }
 
+    private static Object diagnosticReservation;
+    private final Object reservation = new Object();
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final FacadeFactory factory;
     private final Metadata metadata;
+    private final Tbs5530RawDescriptorInspection.Port rawPort;
+    private Tbs5530RawDescriptorInspection rawInspection;
+    private boolean rawOperation;
     private final long permissionTimeout, acquisitionTimeout;
     private final List<String> steps = new ArrayList<>();
     private final int[] attempts = new int[4], completed = new int[4];
@@ -45,8 +52,15 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
 
     Tbs5530DiagnosticController(FacadeFactory factory, Metadata metadata,
                                long permissionTimeout, long acquisitionTimeout) {
+        this(factory, metadata, null, permissionTimeout, acquisitionTimeout);
+    }
+
+    Tbs5530DiagnosticController(FacadeFactory factory, Metadata metadata,
+                               Tbs5530RawDescriptorInspection.Port rawPort,
+                               long permissionTimeout, long acquisitionTimeout) {
         this.factory = factory;
         this.metadata = metadata;
+        this.rawPort = rawPort;
         this.permissionTimeout = permissionTimeout;
         this.acquisitionTimeout = acquisitionTimeout;
         refresh();
@@ -65,7 +79,29 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
     List<String> labels() { return new ArrayList<>(snapshot.labels); }
     int selectedIndex() { return selected; }
     void select(int index) { main(); if (!active && index >= 0 && index < snapshot.devices.size()) selected = index; }
-    boolean canRequestPermission() { return !destroyed && !active && !snapshot.devices.isEmpty(); }
+    private boolean resourcesIdle() {
+        if (active || binding != null && binding.isPending() || session != null && session.isCleanupPending()) return false;
+        if (rawInspection != null) {
+            Tbs5530RawDescriptorInspection.Snapshot raw = rawInspection.snapshot();
+            if (raw.pending || raw.openCompleted != raw.closeCompleted) return false;
+        }
+        return true;
+    }
+    private static synchronized boolean reservationAvailable() { return diagnosticReservation == null; }
+    private boolean reserve() {
+        synchronized (Tbs5530DiagnosticController.class) {
+            if (diagnosticReservation != null) return false;
+            diagnosticReservation = reservation;
+            return true;
+        }
+    }
+    private void releaseReservation() {
+        synchronized (Tbs5530DiagnosticController.class) {
+            if (diagnosticReservation == reservation) diagnosticReservation = null;
+        }
+    }
+    boolean canRequestPermission() { return !destroyed && resourcesIdle() && reservationAvailable() && !snapshot.devices.isEmpty(); }
+    boolean canInspectRaw() { return rawPort != null && canRequestPermission(); }
     boolean canStart() { return canRequestPermission() && snapshot.acquisitionAllowed.get(selected); }
     boolean isActive() { return active; }
     boolean isRuntimeTerminated() { return runtime == null || runtime.isTerminated(); }
@@ -73,11 +109,27 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
     void startSelected() { start(false); }
     void permissionSelected() { start(true); }
 
+    void rawSelected() {
+        main();
+        if (!canInspectRaw()) return;
+        Tbs5530UsbBinding.Device device = snapshot.devices.get(selected);
+        if (device.vendorId != 0x734c || device.productId != 0x5530 || !reserve()) return;
+        clicks++;
+        rawOperation = true;
+        active = true;
+        if (runtime == null) runtime = new Tbs5530AndroidRuntime();
+        rawInspection = new Tbs5530RawDescriptorInspection(rawPort, runtime, runtime, device, clicks);
+        try { rawInspection.start(); }
+        catch (RuntimeException failure) { error(failure); active = false; releaseReservation(); }
+        handler.post(poll);
+        changed();
+    }
+
     private void start(boolean onlyPermission) {
         main();
         if (onlyPermission ? !canRequestPermission() : !canStart()) return;
         Tbs5530UsbBinding.Device device = snapshot.devices.get(selected);
-        if (device.vendorId != 0x734c || device.productId != 0x5530) return;
+        if (device.vendorId != 0x734c || device.productId != 0x5530 || !reserve()) return;
         synchronized (this) {
             steps.clear();
             for (int i = 0; i < attempts.length; i++) { attempts[i] = 0; completed[i] = 0; }
@@ -89,6 +141,7 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
             stateBeforeCleanup = "NOT_RUN";
             permission = "ĐANG KIỂM TRA";
         }
+        rawOperation = false;
         clicks++;
         connectedObserved = false;
         active = true;
@@ -111,6 +164,13 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
     private void poll() {
         main();
         if (destroyed || !active) return;
+        if (rawOperation) {
+            active = rawInspection.snapshot().pending;
+            if (resourcesIdle()) releaseReservation();
+            changed();
+            if (active) handler.postDelayed(poll, 50);
+            return;
+        }
         if (!bindingClosed && binding != null && !binding.isPending()) {
             // CONNECTED means ownership only. Close immediately, without probing readiness.
             connectedObserved = session.getState() == Tbs5530Session.State.CONNECTED;
@@ -122,6 +182,7 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
             closeBinding();
         }
         if (bindingClosed && (binding == null || !binding.isPending())) active = false;
+        if (resourcesIdle()) releaseReservation();
         changed();
         if (active) handler.postDelayed(poll, 50);
     }
@@ -225,6 +286,17 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
         StringBuilder out = new StringBuilder("Chẩn đoán USB TBS5530 — chỉ bản debug\n");
         out.append("API Android: ").append(android.os.Build.VERSION.SDK_INT).append('\n');
         out.append(snapshot.report).append('\n');
+        if (rawOperation && rawInspection != null) {
+            Tbs5530RawDescriptorInspection.Snapshot raw = rawInspection.snapshot();
+            out.append("Raw inspection: ").append(raw.status).append("; generation: ").append(raw.generation)
+                    .append("; pending: ").append(raw.pending).append("; lỗi: ").append(raw.failure).append('\n');
+            out.append("open/read/close: ").append(raw.openCalls).append('/').append(raw.readCalls).append('/').append(raw.closeCalls)
+                    .append("; close hoàn tất: ").append(raw.closeCompleted).append('\n');
+            if (raw.descriptors != null) out.append("Raw bytes: ").append(raw.descriptors.length)
+                    .append("; parser: ").append(raw.descriptors.status).append("; SHA-256: ").append(raw.descriptors.sha256).append('\n');
+            out.append("Không claim, không transfer; không suy alternate đang active hoặc streaming readiness.\n");
+            return out.toString();
+        }
         out.append("Phiên thao tác: ").append(clicks).append("; generation: ")
                 .append(session == null ? 0 : session.getGeneration()).append('\n');
         out.append("Trạng thái: ").append(session == null ? "CHƯA BẮT ĐẦU" : session.getState())
@@ -244,7 +316,36 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
         return out.toString();
     }
 
+    private org.json.JSONObject rawReport() throws org.json.JSONException {
+        Tbs5530RawDescriptorInspection.Snapshot raw = rawInspection.snapshot();
+        org.json.JSONObject json = new org.json.JSONObject();
+        json.put("timestamp_epoch_ms", System.currentTimeMillis()); json.put("operation_id", clicks);
+        json.put("operation", "RAW_DESCRIPTOR_INSPECTION"); json.put("generation", raw.generation);
+        json.put("state", raw.status); json.put("pending", raw.pending);
+        json.put("cleanup_pending", raw.pending || raw.openCompleted != raw.closeCompleted);
+        json.put("invalidated", raw.invalidated); json.put("permission", raw.permission);
+        json.put("attachment_identity_matched", raw.identityMatched);
+        json.put("open_calls", raw.openCalls); json.put("open_completed", raw.openCompleted);
+        json.put("get_raw_descriptors_calls", raw.readCalls); json.put("get_raw_descriptors_completed", raw.readCompleted);
+        json.put("close_calls", raw.closeCalls); json.put("close_completed", raw.closeCompleted);
+        json.put("claim_calls", 0); json.put("release_calls", 0); json.put("transfer_calls", 0);
+        json.put("failure_reason", raw.failure); json.put("worker", raw.worker); json.put("duration_ms", raw.durationMillis);
+        json.put("usb_api_calls", new org.json.JSONArray(raw.calls)); json.put("text_report", report());
+        json.put("streaming_ready", false); json.put("active_alternate", "NOT_OBSERVED");
+        if (raw.descriptors != null) {
+            Tbs5530RawDescriptors.Result parsed = raw.descriptors;
+            org.json.JSONObject descriptors = new org.json.JSONObject();
+            descriptors.put("length", parsed.length); descriptors.put("sha256", parsed.sha256);
+            descriptors.put("status", parsed.status); descriptors.put("issues", new org.json.JSONArray(parsed.issues));
+            org.json.JSONArray entries = new org.json.JSONArray();
+            for (Tbs5530RawDescriptors.Entry entry : parsed.entries) entries.put(new org.json.JSONObject(entry.fields));
+            descriptors.put("entries", entries); json.put("raw_descriptors", descriptors);
+        }
+        return json;
+    }
+
     synchronized org.json.JSONObject structuredReport() throws org.json.JSONException {
+        if (rawOperation && rawInspection != null) return rawReport();
         org.json.JSONObject json = new org.json.JSONObject();
         json.put("timestamp_epoch_ms",System.currentTimeMillis());json.put("operation_id",clicks);
         json.put("generation",session==null?0:session.getGeneration());
@@ -291,10 +392,17 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
         destroyed = true;
         observer = null;
         handler.removeCallbacks(poll);
+        if (rawInspection != null && rawInspection.snapshot().pending) rawInspection.close();
         try { closeBinding(); }
         finally {
             // Binding invalidates first and queues cleanup; shutdown drains, never joins or interrupts.
-            if (runtime != null) runtime.close();
+            if (runtime != null) {
+                runtime.execute(() -> {
+                    active = false;
+                    if (resourcesIdle()) releaseReservation();
+                });
+                runtime.close();
+            } else releaseReservation();
         }
     }
 }

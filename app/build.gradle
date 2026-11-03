@@ -41,7 +41,18 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    buildFeatures {
+        buildConfig = true
+    }
     buildTypes {
+        debug {
+            def sourceSha = providers.exec {
+                workingDir rootProject.projectDir
+                commandLine 'git', 'rev-parse', 'HEAD'
+            }.standardOutput.asText.get().trim()
+            if (!(sourceSha ==~ /[0-9a-f]{40}/)) throw new GradleException('Invalid source Git SHA')
+            buildConfigField 'String', 'SOURCE_GIT_SHA', '"' + sourceSha + '"'
+        }
         release {
             minifyEnabled = false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'

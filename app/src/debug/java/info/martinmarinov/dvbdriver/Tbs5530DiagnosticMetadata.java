@@ -71,7 +71,7 @@ final class Tbs5530DiagnosticMetadata {
                     boolean allowed = supportsDefaultProfile(device);
                     labels.add(label);
                     acquisitionAllowed.add(allowed);
-                    if (!allowed) out.append("  Connection cycle BLOCKED: interface 0/alternate 0 không có Bulk IN 0x82 hợp lệ. Chỉ được yêu cầu quyền.\n");
+                    if (!allowed) out.append("  Connection cycle BLOCKED: interface 0/alternate 0 không có Bulk IN 0x82 hợp lệ. Vẫn cho phép yêu cầu quyền và đọc raw riêng khi đã có quyền.\n");
                     devices.add(new Tbs5530UsbBinding.Device(device.getDeviceName(), device.getDeviceId(), device.getVendorId(), device.getProductId()));
                 }
             }

@@ -21,7 +21,7 @@ import info.martinmarinov.drivers.usb.tbs5530.Tbs5530AndroidUsbFacade;
 public final class Tbs5530UsbDiagnosticActivity extends Activity {
     private Tbs5530DiagnosticController controller;
     private TextView report;
-    private Button request, refresh, permissionOnly;
+    private Button request, refresh, permissionOnly, raw;
     private boolean reportWriteFailed;
     private Spinner selection;
 
@@ -31,14 +31,15 @@ public final class Tbs5530UsbDiagnosticActivity extends Activity {
         Context application = getApplicationContext();
         controller = retained instanceof Tbs5530DiagnosticController ? (Tbs5530DiagnosticController) retained
                 : new Tbs5530DiagnosticController(() -> new Tbs5530AndroidUsbFacade(application),
-                () -> Tbs5530DiagnosticMetadata.read(application));
+                () -> Tbs5530DiagnosticMetadata.read(application),
+                new info.martinmarinov.drivers.usb.tbs5530.Tbs5530AndroidRawDescriptorPort(application), 30000, 10000);
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
         int padding = (int) (16 * getResources().getDisplayMetrics().density);
         layout.setPadding(padding, padding, padding, padding);
         layout.setFitsSystemWindows(true);
         TextView title = new TextView(this);
-        title.setText("USB TBS5530 — chỉ debug\nChỉ nút yêu cầu quyền mới chạy một chu kỳ. Không firmware hoặc truyền điều khiển.");
+        title.setText("USB TBS5530 — chỉ debug\nMetadata không mở USB. Đọc raw cần quyền đã có, không claim hoặc transfer; không chứng minh streaming.");
         layout.addView(title);
         selection = new Spinner(this);
         selection.setContentDescription("Chọn TBS5530");
@@ -55,6 +56,7 @@ public final class Tbs5530UsbDiagnosticActivity extends Activity {
         });
         permissionOnly = button(layout, "Chỉ yêu cầu quyền (không mở USB)", controller::permissionSelected);
         request = button(layout, "Yêu cầu quyền + chạy một chu kỳ", controller::startSelected);
+        raw = button(layout, "Đọc raw descriptors một lần (không claim)", controller::rawSelected);
         button(layout, "Đóng", () -> { controller.close(); finish(); });
         button(layout, "Sao chép báo cáo đã ẩn định danh", () -> {
             ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
@@ -84,12 +86,15 @@ public final class Tbs5530UsbDiagnosticActivity extends Activity {
         refresh.setEnabled(!controller.isActive());
         selection.setEnabled(!controller.isActive());
         permissionOnly.setEnabled(controller.canRequestPermission());
+        raw.setEnabled(controller.canInspectRaw());
         exportReport();
     }
 
     private void exportReport() {
         try {
             org.json.JSONObject json = controller.structuredReport();
+            json.put("git_sha", BuildConfig.SOURCE_GIT_SHA);
+            json.put("source_state", "BUILD_WORKTREE_NOT_ATTESTED_BY_SHA");
             json.put("model",android.os.Build.MODEL);json.put("manufacturer",android.os.Build.MANUFACTURER);
             json.put("android_version",android.os.Build.VERSION.RELEASE);json.put("api",android.os.Build.VERSION.SDK_INT);
             json.put("usb",Tbs5530DiagnosticMetadata.structured(getApplicationContext()));
