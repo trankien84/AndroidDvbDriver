@@ -38,9 +38,7 @@ public final class Tbs5530Bridge {
         payload[0] = (byte) (length + 1);
         payload[1] = (byte) (address << 1);
         System.arraycopy(data, offset, payload, 2, length);
-        synchronized (session) {
-            transfer(0x40, 0x80, 0, 0, payload, 0, payload.length, TIMEOUT_MILLIS);
-        }
+        transfer(0x40, 0x80, 0, 0, payload, 0, payload.length, TIMEOUT_MILLIS);
     }
 
     public void i2cWriteRead(int writeAddress, int writeFlags, byte[] pointer, int pointerOffset, int pointerLength,
@@ -55,17 +53,18 @@ public final class Tbs5530Bridge {
         validateBuffer(result, resultOffset, readLength, READ_LIMIT);
         byte[] request = {(byte) readLength, (byte) (writeAddress << 1), pointer[pointerOffset]};
         byte[] response = new byte[readLength];
-        synchronized (session) {
+        session.transaction(generation, () -> {
             transfer(0x40, 0x90, 0, 0, request, 0, request.length, TIMEOUT_MILLIS);
             transfer(0xc0, 0x91, 0, 0, response, 0, response.length, TIMEOUT_MILLIS);
-            System.arraycopy(response, 0, result, resultOffset, readLength);
-        }
+            synchronized (session) {
+                session.requireUsable(generation);
+                System.arraycopy(response, 0, result, resultOffset, readLength);
+            }
+        });
     }
 
     public void selectTerrestrialStream() throws TransferException {
-        synchronized (session) {
-            transfer(0x40, 0x8a, 0, 0, new byte[]{0x0a, 0}, 0, 2, TIMEOUT_MILLIS);
-        }
+        transfer(0x40, 0x8a, 0, 0, new byte[]{0x0a, 0}, 0, 2, TIMEOUT_MILLIS);
     }
 
     // Narrow package seam for protocol tests; deliberately no firmware execution entrypoint.
@@ -85,7 +84,7 @@ public final class Tbs5530Bridge {
                 || request == 0x8a && (buffer[offset] != 0x0a || buffer[offset + 1] != 0)) {
             throw new IllegalArgumentException("Invalid TBS5530 control payload");
         }
-        synchronized (session) {
+        session.transaction(generation, () -> {
             session.requireUsable(generation);
             if (Thread.currentThread().isInterrupted()) {
                 TransferException failure = new TransferException(FailureKind.CANCELLED, "Transfer thread interrupted");
@@ -115,7 +114,7 @@ public final class Tbs5530Bridge {
                 session.failed(generation, failure);
                 throw failure;
             }
-        }
+        });
     }
 
     private static void validateAddress(int address) {

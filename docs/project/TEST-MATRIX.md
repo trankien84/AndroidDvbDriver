@@ -1,5 +1,28 @@
 # TBS5530 test matrix
 
+## 2026-11-03 11:25 +07 — Phase 2.2: concurrency và lifecycle fake
+
+Windows PowerShell; `chore/modernize-android-build`/`6eb23537484a3e1dd263bd5a88f56914c7c5e313` cộng working changes. Không emulator/tuner/Android USB access. Toolchain giữ AGP9.5.0/Gradle9.8.2/JDK25/compile37.2/min21/Java8. Phase2.1/ADR-011 đã tích hợp tại SHA này;83methods PASS trước đó là lịch sử, không gộp vào kết quả mới.
+
+| Gate | Kết quả thực | Bằng chứng |
+|---|---|---|
+| Reproduction trên baseline trước sửa | FAIL được tái hiện,2/2methods | Fake controlTransfer bị latch giữ; detach/cancel thread không invalidate kịp, assertion invalidated.await FAIL; Gradle exit1/36s |
+| Bridge regression | PASS17methods | Exact bytes/limits/directions, atomic0x90/91, descriptor82, errors/no-retry; không đổi protocol |
+| Firmware regression | PASS19methods | Synthetic-only immutable plan/hash/ranges/chunks; file implementation và tests không đổi |
+| Session/readiness | PASS17methods | Lifecycle cũ + explicit firmware/frontend milestones; grant/open/claim/upload không tự READY, initialized không tự lock/stream |
+| Concurrency | PASS10methods | Blocked pointer +detach/cancel; pending cleanup/reopen gate; old/queued transaction rejected; late timeout; callback detach không close trong I/O; release/close một lần kể cả concurrent close; cleanup nhả cả hai khóa trước join worker; error giữa read halves không publish bytes |
+| Lifecycle coordinator | PASS32methods | Identity/generation/duplicates7; permission/lifecycle5; exception/ownership/cleanup12; blocked acquisition/detach/monitor8; rejected owner và partial claim không leak/double-close |
+| Stress độc lập cuối | PASS5lượt×10methods | Mỗi lượt có40latch-controlled detach/cancel iterations →200vòng qua5lượt; timeout hữu hạn,0fail; không tăng timeout để che race |
+| Regression ba module | PASS126methods,0failure/error | drivers112/usbxfer1/dvbservice13; từng task --rerun. TBS suites95methods, trong đó43methods thêm so Phase2.1 |
+| Debug build | PASS | :app:assembleDebug; final Gradle exit0/2m23s/177tasks41executed136up-to-date |
+| LintDebug | PASS có warning | XML0Error/0Fatal/11Warning; không baseline/suppress mới |
+| Java8 compatibility | PASS | javac --release8 cho5corefiles và toàn TBS test package, bytecode52; chỉ JUnit/Hamcrest sẵn có, không Android classpath |
+| IDE diagnostics | PASS tại kiểm tra | Không errors ở main/test tbs5530 packages |
+| Existing instrumentation/native-load/UI | NOT RUN | JVM-only coordinator chưa gắn Android runtime; không sửa framework binding/JNI/manifest/app. Không coi kết quả lịch sử Phase1.2 là PASS mới |
+| Real permission dialog/USB transfer/firmware/native cancel/lock/TS | NOT RUN | Không concrete Android transport/binding/uploader/frontend; fake PASS không chứng minh phần cứng |
+
+Lượt stress đầu bị lỗi tên class trong lệnh JUnitCore trước khi chạy tests, đã sửa invocation và chạy đủ5lượt thành công; không sửa assertion. Chi tiết commands/errors ở [WORKLOG.md](WORKLOG.md). Deferred cleanup và quyền sở hữu ghi [ADR-012](DECISIONS.md).
+
 ## 2026-11-03 10:39 +07 — Phase 2.1: Java core và USB giả
 
 Windows PowerShell, nhánh `feat/tbs5530-offline-protocol`, HEAD nền `8588ee7661003052b7d1a0353e23bb3a3dcef8b5` cộng thay đổi chưa commit. Gradle9.8.2/AGP9.5.0/JDK25, compile37.2/target37/min21/Java8 giữ nguyên. Không emulator hoặc tuner; mọi giao dịch dưới đây chỉ qua fake.

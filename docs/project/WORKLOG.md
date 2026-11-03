@@ -333,3 +333,77 @@ $env:ANDROID_AVD_HOME = 'D:\Android\AVD'
 - Status chỉ5hồ sơ modified và8Javafiles mới đã kiểm thử; `git diff --check` PASS. Không build/test/hardware lại trong tác vụ Git. Kết quả83unit methods/debug/lint ở mục Phase2.1 vẫn là lần chạy thực gần nhất, không ghi thành một lần PASS mới.
 - Staged diff check đầu tiên phát hiện CRLF/mixed EOL trong8Javafiles mới (core.autocrlf=false). Commit chưa chạy vì gate chặn. Chỉ chuẩn hóa8file này thành LF, kiểm nội dung không đổi ngoài EOL; stage lại, `git diff --cached --check` PASS và ls-files --eol đều i/lf,w/lf. Không sửa Git config hoặc bỏ whitespace gate; không chạy lại tests vì không đổi logic.
 - Commit dự kiến `feat: add offline TBS5530 USB protocol foundation`, có Co-authored-by trailer. Chỉ stage13file trong hai package tbs5530 và5hồ sơ. Sau commit: switch target, merge --ff-only feature, push explicit target không force; kiểm remote SHA/working tree rồi branch -d feature. Hash và kết quả thực báo sau thao tác, không ghi trước thành công.
+
+## 2026-11-03 11:25 +07 — Phase 2.2: lifecycle và fake adapter
+
+### Khôi phục và checkpoint tích hợp
+
+- Windows PowerShell, cwd `D:\API\TBS5530-DVB-Android\AndroidDvbDriver`. Đọc project/scoped instructions, STATUS/ENVIRONMENT/RESEARCH/DECISIONS/TEST-MATRIX và WORKLOG mới nhất; dùng project-handoff. Không đổi toolchain hoặc reference sources.
+- Preflight main sạch, nhánh `chore/modernize-android-build`, HEAD `6eb23537484a3e1dd263bd5a88f56914c7c5e313`. Xác nhận commit này đã chứa Phase2.1/ADR-011, fast-forward/push ở tác vụ trước. Nhánh local feature/docs và remote docs đã xóa theo yêu cầu riêng trước Phase2.2. Không commit/merge/push/reset/switch trong phase này.
+- Ba references chỉ đọc qua `git --no-lazy-fetch -C <reference> rev-parse HEAD` và `status --porcelain=v1 -uall`, với GIT_NO_LAZY_FETCH=1/GIT_OPTIONAL_LOCKS=0: official2ce787de9f6e81b4294692a45de15596ae2e1322, Cc5fa27eecbe80633cbb365cc44656daea1c0e2e3, Go11228b05fb1626bf41c4e1879ace10cd0a8d575c, cả ba0entries lúc đầu/cuối. Không fetch/index/config writes.
+- GitNexus list_repos qua gateway không có index project; không tự rebuild và không coi empty graph là an toàn. Đọc source hiện tại, diff và assertions làm bằng chứng. Không chia sẻ source lên dịch vụ bên thứ ba.
+- Đọc current build/wrapper: AGP9.5.0/Gradle9.8.2/checksum giữ nguyên, compile37.2/min21/source-target8. SDK platform source.properties revision2/ApiLevel37.2/PreviewSdkInt0. Child dùng Machine JAVA_HOME có java.exe, SDK D:\Android\Sdk; không đổi biến User/Machine/ExecutionPolicy, không package install.
+
+### Test tái hiện trước khi sửa
+
+Thêm Tbs5530ConcurrencyTest: fake transfer thread A bị CountDownLatch giữ; thread B nhận detach hoặc cancel. Hai tests đòi invalidation hoàn tất mà không đợi transfer. Chạy trên production core baseline chưa sửa:
+
+```powershell
+$env:JAVA_HOME = [Environment]::GetEnvironmentVariable('JAVA_HOME', 'Machine')
+$env:ANDROID_HOME = 'D:\Android\Sdk'
+.\gradlew.bat :drivers:testDebugUnitTest --tests '*Tbs5530ConcurrencyTest' --console plain --no-daemon --max-workers=1
+```
+
+**FAIL được tái hiện:2tests/2failures, exit1,36s/23tasks2executed.** Assertion tại invalidated.await không đạt. Đây là defect/giới hạn session monitor đã nêu ADR-011, không phải test hardware và không bỏ test để sửa kết quả.
+
+### Thay đổi và xử lý race
+
+- Sửa Tbs5530Session/Tbs5530Bridge: transactionLock riêng, state monitor ngắn; cả cặp0x90/91 vẫn atomic. Admission và active transaction tracking giữ tài nguyên tới physical completion, invalidation nhanh không đóng connection còn dùng. Check generation/state sau transfer và trước read publish; no retry/vendor recovery.
+- Close/detach/cancel đánh dấu pending cleanup; last transaction nhả cả hai khóa rồi cleanup cancel→release→close. Expose cancellationRequested/cleanupPending/cleanupFailure; deferred failures suppressed trên transfer error, immediate failures throw cho caller. Reopen bị chặn khi pending; concurrent close/callback chỉ một owner.
+- Thêm readiness events/getters firmwareUploaded/frontendInitialized, giữ ready/lock/stream khác nhau; lock yêu cầu frontend initialized. `failed` hỗ trợ permission/acquisition errors trước nhận connection. Bổ sung1Session test và tăng assertion cũ, không giảm coverage.
+- Thêm JVM-only Tbs5530LifecycleCoordinator và32tests: Request gắn attachment identity+generation; ports permission/open/claim; claim receipt; local lease cho rejected/partial acquisitions; callback đúng một lần; stale callback không đóng resource mới. Coordinator không giữ monitor qua callback vật lý, không tự READY. Không framework binding/transport concrete.
+- Concurrency suite cuối10methods, gồm blocked pointer detach/cancel; deferred errors; late timeout; queued stale transaction; reentrant detach; lỗi giữa0x90/91; join worker ngoài khóa; concurrent close trong cleanup;40vòng race có latch. Không sleeps tùy tiện hoặc tăng timeout để che flaky test.
+- Thêm ADR-012 và cập nhật năm hồ sơ; không sửa FirmwarePlan, protocol bytes, registry/XML, driver cũ/Retry, wire enums/Request, native/JNI hoặc dependencies.
+
+### Validation cuối
+
+Sau split locks: focused Bridge/Session/Concurrency PASS35methods trong42s. TBS package +debug sau coordinator PASS. Full regression đầu PASS125methods; sau thêm concurrent-close-during-cleanup test chạy lại toàn bộ, không dùng count125 làm kết quả cuối.
+
+VS Code task `Android: assembleDebug (Windows Gradle Wrapper)` trả Task not found; fallback Gradle wrapper cùng cwd, không sửa tasks/config. Lệnh cuối:
+
+```powershell
+$env:JAVA_HOME = [Environment]::GetEnvironmentVariable('JAVA_HOME', 'Machine')
+$env:ANDROID_HOME = 'D:\Android\Sdk'
+$env:ANDROID_AVD_HOME = 'D:\Android\AVD'
+.\gradlew.bat :drivers:testDebugUnitTest --rerun :usbxfer:testDebugUnitTest --rerun :dvbservice:testDebugUnitTest --rerun :app:assembleDebug :app:lintDebug --console plain --no-daemon --max-workers=1
+```
+
+**PASS exit0, BUILD SUCCESSFUL in2m23s;177actionable tasks:41executed/136up-to-date.** XML cuối drivers112/usbxfer1/dvbservice13=**126methods,0failure/0error**. TBS suites: Bridge17/Firmware19/Session17/Concurrency10/Coordinator32=95methods (43methods thêm so baseline). Debug APK PASS; lint XML0Error/0Fatal/11Warning. Warning Java8 obsolete/Gradle deprecated vẫn hiện, không suppress.
+
+Stress độc lập dùng JDK Machine, JUnit4.13.2/Hamcrest1.3 đã có trong Gradle cache, không tải dependency. Compile cả5corefiles và toàn TBS test package bằng `javac --release 8 -cp <JUnit;Hamcrest> -d drivers\build\p22-final-java8 <sources>`, exit0; `javap -verbose` Session major version52. Chạy5lượt:
+
+```powershell
+1..5 | ForEach-Object {
+    & "$jdk\java.exe" -cp "$out;$cp" org.junit.runner.JUnitCore info.martinmarinov.drivers.usb.tbs5530.Tbs5530ConcurrencyTest
+    if ($LASTEXITCODE -ne 0) { throw 'Stress failed' }
+}
+```
+
+Cả5lượt **OK(10tests)**, mỗi lượt có40detach/cancel iterations →200vòng; time0.173/0.148/0.152/0.219/0.179s. Trước đó5lượt9methods PASS khi chưa có test close đồng thời. Một invocation stress bị sai tên class do PowerShell argument, JUnit initializationError trước khi chạy tests; sửa command sang fully-qualified class name, không sửa assertion. Output compile riêng luôn dọn trong finally; không còn p22-final-java8/p22-concurrency-check. Không tạo script tạm cần giữ.
+
+Evidence local ở các module `build\test-results\testDebugUnitTest\TEST-*.xml`, lint `app\build\reports\lint-results-debug.xml`, APK `app\build\outputs\apk\debug\app-debug.apk`; không stage outputs/logs. IDE problems không errors. Bằng chứng83methods Phase2.1 giữ lịch sử riêng, không gọi là lượt test Phase2.2.
+
+### Giới hạn và bàn giao
+
+- Không instrumentation mới: thay đổi JVM-only chưa được nối vào Android runtime, không Android framework binding/manifest/JNI/registry changes. Native-load/registryXML/UI PASS trước là lịch sử, không PASS mới. Real USB/permission dialog/firmware/lock/TS/native cancel NOT RUN.
+- Google UsbDeviceConnection/USB Host guide được tra: controlTransfer EP0 synchronous, timeoutms/negative failure; không cancellation handle riêng bảo đảm ngắt call. Code không cưỡng bức close in-flight; call không trả thì pending/reopen bị chặn. Deferred cleanup có thể trên transaction thread; cancel không được join chính nó. Permission/open/claim timeout là caller/port contract, không thêm scheduler.
+- Cần review ADR-012 và Android attachment identity/receiver/PendingIntent/deadline/threading trước Phase2.3. Không firmware thật/production frontend hoặc hardware bring-up khi chưa có kế hoạch/phê duyệt riêng.
+- Kiểm cuối: git diff --check PASS; UTF-8 strict/relative links PASS cho11file, main core0Android/AndroidX imports;8tracked changes+3untracked Javafiles, staged diff rỗng. File concurrency mới được chuẩn hóa CRLF→LF sau gate EOL phát hiện, không đổi logic/assertion, không chạy lại tests cho EOL-only. Toàn bộ Javafiles mới/sửa cuối làLF. JDK Machine java -version25.0.5.0.3 xác nhận; các output kiểm tra tạm không còn.
+- Main vẫn6eb2353,6Javafiles mới/sửa và5hồ sơ cập nhật, chưa stage/commit/push. Dừng sau Phase2.2.
+
+## 2026-11-03 11:33 +07 — Checkpoint commit/push Phase2.2 theo yêu cầu
+
+- Người dùng phê duyệt commit toàn bộ thay đổi Phase2.2 và push nhánh hiện tại. Preflight Windows PowerShell/main repo: nhánh chore/modernize-android-build, HEAD6eb23537484a3e1dd263bd5a88f56914c7c5e313; live origin cùngSHA, staged diff rỗng, đúng11file (6Javafiles và5hồ sơ), diff --check PASS.
+- Staged diff check phát hiện một dòng trống thừa ở EOF của concurrencytest mới, commit chưa chạy. Chỉ bỏ dòng trống đó, không đổi logic/assertion; stage lại và staged diff --check PASS. Không đổi Git whitespace policy.
+- Message `feat: add TBS5530 lifecycle coordinator and safe cancellation`, kèm Co-authored-by trailer. Chỉ stage11file đã kiểm, không output/cache/firmware/reference. Sau commit push explicit origin/chore/modernize-android-build không force và xác minh SHA remote/working tree. Hash và kết quả thực báo sau kiểm tra, không khẳng định trước thành công.
+- Không chạy lại tests cho tác vụ Git/documentation checkpoint. Kết quả126unit methods/debug/lint/stress ở mục Phase2.2 là lần thực chạy gần nhất; không ghi như lần PASS mới. Không thay production logic, dependencies/toolchain/hardware, không bắt đầu Phase2.3.

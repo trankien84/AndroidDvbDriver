@@ -1,5 +1,26 @@
 # TBS5530 Android port — current status
 
+## Checkpoint phát hành Phase 2.2 — 2026-11-03 11:33 +07
+
+- Người dùng yêu cầu commit và push11file Phase2.2 trên `chore/modernize-android-build`. Preflight: HEAD local và live origin cùng `6eb23537484a3e1dd263bd5a88f56914c7c5e313`, staged diff rỗng; chỉ có6Javafiles mới/sửa và5hồ sơ.
+- Message: `feat: add TBS5530 lifecycle coordinator and safe cancellation`. Hash/kết quả push kiểm từ Git sau thao tác, không ghi trước thành công. Các mục “chưa commit/push” bên dưới là snapshot trước checkpoint.
+- Không đổi logic hoặc chạy lại tests trong tác vụ Git; bằng chứng gần nhất là126unit methods PASS/debug PASS/lint0errors11warnings và5lượt stress của Phase2.2. Không hardware/firmware hoặc mở Phase2.3.
+
+## Phase 2.2 — Lifecycle và fake adapter, 2026-11-03 11:25 +07
+
+**Đã hoàn tất phạm vi fake/JVM; chưa tích hợp transport Android hoặc phần cứng.** Nhánh `chore/modernize-android-build`, HEAD `6eb23537484a3e1dd263bd5a88f56914c7c5e313`. Phase2.1/ADR-011 đã commit, fast-forward và push ở chính baseline này; các nhánh feature/docs trước đã xóa local, docs đã xóa origin theo yêu cầu riêng. Không commit/push/merge trong Phase2.2.
+
+- **Hazard tái hiện trước sửa:** hai tests fake blocked transfer + detach/cancel đều FAIL trên baseline vì Bridge giữ session monitor. Sau sửa, lifecycle invalidation không phải đợi physical transfer hoàn tất; cleanup không đóng connection còn được transaction sử dụng.
+- **Kiến trúc:** Session có khóa giao dịch riêng và state lock ngắn; cặp0x90/0x91 vẫn atomic. Close/cancel/detach invalidate ngay, chặn giao dịch mới, defer cleanup tới last in-flight transaction và chạy ngoài cả hai khóa. `isCleanupPending`/`getCleanupFailure` phân biệt invalidate với cleanup hoàn tất. Không cưỡng bức hủy synchronous I/O.
+- **Coordinator mới:** JVM-only ports cho permission/open/claim; request gắn generation+attachment identity, không chỉ VID/PID. Callback trùng/sai/cũ không acquire. Lease thuộc coordinator cho tới khi Session nhận; rejected/partial acquisitions cleanup riêng đúng một lần. Không Android framework binding/permission dialog/USB transport, không tự READY.
+- **PASS thực:** **126 unit methods** (drivers112/usbxfer1/dvbservice13),0failures/errors; debug APK PASS; lint0errors/0fatal/11warnings. Final Gradle2m23s/177tasks41executed136up-to-date. Concurrency10methods chạy độc lập5lượt, cả5PASS, gồm200vòng detach/cancel có điều phối bằng latch. Core/tests compile `javac --release 8`, bytecode52. Xem [TEST-MATRIX.md](TEST-MATRIX.md) và [WORKLOG.md](WORKLOG.md).
+- **Readiness riêng biệt:** permission, connection, claim, firmware-upload event, bridge ready, frontend-initialized event, signal lock và streaming không tự thay thế nhau. Chưa có firmware executor/probe/frontend production; các event là fake/caller input.
+- **Không đổi:** protocol bytes, FirmwarePlan, JNI/native, driver cũ, registry/XML, TCP ordinals, toolchain/dependencies; ba references giữ SHA khóa/sạch. Instrumentation **NOT RUN** vì chỉ sửa JVM core chưa được nối vào Android runtime; PASS Phase2.1 là bằng chứng lịch sử, không phải lần chạy mới này.
+
+**Còn giới hạn:** synchronous control/open/claim không được API bảo đảm có thể cưỡng bức hủy; nếu không trả về thì giữ tài nguyên và chặn reopen thay vì use-after-close. Deferred cleanup có thể chạy trên transaction thread, cancel không được join chính thread đó. Attachment identity/permission receiver thực và negative return phân loại timeout cần được xác minh ở binding sau. Firmware/USB thật/lock/TS **NOT RUN**.
+
+**Bước trước Phase2.3:** review [ADR-012](DECISIONS.md), chốt Android identity/permission callback/threading/deadline contract, rồi xin duyệt phạm vi framework binding với mock/instrumentation không tuner. Không tự hardware bring-up, firmware upload hoặc production frontend. Working tree gồm6Javafiles mới/sửa và5hồ sơ; chưa stage/commit/push.
+
 ## Checkpoint tích hợp Phase 2.1 — 2026-11-03 10:46 +07
 
 - Người dùng yêu cầu commit toàn bộ thay đổi Phase2.1, merge sang `chore/modernize-android-build`, push đúng nhánh đó lên origin và xóa nhánh local `feat/tbs5530-offline-protocol` sau khi xác minh thành công.

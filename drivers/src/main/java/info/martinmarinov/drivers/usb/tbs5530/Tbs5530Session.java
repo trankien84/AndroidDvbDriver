@@ -14,11 +14,13 @@ public final class Tbs5530Session implements AutoCloseable {
     }
 
     public interface Resources {
+        /** Stop owned streaming work; must not join the calling thread or send vendor writes. */
         void cancel() throws IOException;
         void release() throws IOException;
         void close() throws IOException;
     }
 
+    private final Object transactionLock = new Object();
     private State state = State.DETECTED;
     private long generation;
     private Resources resources;
@@ -26,8 +28,46 @@ public final class Tbs5530Session implements AutoCloseable {
     private boolean cancelNeeded;
     private boolean streaming;
     private boolean frontendLocked;
+    private boolean frontendInitialized;
+    private boolean firmwareUploaded;
     private boolean cleaning;
+    private boolean cancellationRequested;
+    private int activeTransactions;
     private Throwable failure;
+    private IOException cleanupFailure;
+
+    interface Transaction { void run() throws TransferException; }
+
+    void transaction(long token, Transaction operation) throws TransferException {
+        TransferException problem = null;
+        Cleanup cleanup = null;
+        try {
+            synchronized (transactionLock) {
+                synchronized (this) {
+                    requireUsable(token);
+                    activeTransactions++;
+                }
+                try {
+                    operation.run();
+                } finally {
+                    synchronized (this) {
+                        activeTransactions--;
+                        if (cleaning && activeTransactions == 0) cleanup = takeCleanup();
+                    }
+                }
+            }
+        } catch (TransferException e) {
+            problem = e;
+        } finally {
+            // Cleanup may call back or join workers: neither lock may be held here.
+            IOException cleanupProblem = finishCleanup(cleanup);
+            if (cleanupProblem != null) {
+                if (problem != null) problem.addSuppressed(cleanupProblem);
+                else problem = new TransferException(SESSION_UNAVAILABLE, "Deferred cleanup failed", cleanupProblem);
+            }
+        }
+        if (problem != null) throw problem;
+    }
 
     public synchronized long requestPermission() {
         if (cleaning || resources != null || !(state == State.DETECTED
@@ -38,6 +78,10 @@ public final class Tbs5530Session implements AutoCloseable {
         generation++;
         state = State.WAIT_PERMISSION;
         failure = null;
+        cleanupFailure = null;
+        cancellationRequested = false;
+        firmwareUploaded = false;
+        frontendInitialized = false;
         return generation;
     }
 
@@ -63,7 +107,20 @@ public final class Tbs5530Session implements AutoCloseable {
     public synchronized void beginFirmwareTransition(long token) throws TransferException {
         requireUsable(token);
         if (state != State.CONNECTED) throw new IllegalStateException("Firmware transition requires connected state");
+        firmwareUploaded = false;
         state = State.FIRMWARE_TRANSITION;
+    }
+
+    public synchronized void firmwareUploaded(long token) throws TransferException {
+        requireUsable(token);
+        if (state != State.FIRMWARE_TRANSITION) throw new IllegalStateException("No firmware transition");
+        firmwareUploaded = true;
+    }
+
+    public synchronized void frontendInitialized(long token) throws TransferException {
+        requireUsable(token);
+        if (state != State.READY) throw new IllegalStateException("Bridge is not ready");
+        frontendInitialized = true;
     }
 
     /** Caller must establish readiness independently; this does not probe a device. */
@@ -84,7 +141,7 @@ public final class Tbs5530Session implements AutoCloseable {
 
     public synchronized void frontendLock(long token, boolean locked) throws TransferException {
         requireUsable(token);
-        if (state != State.READY) throw new IllegalStateException("Frontend is not ready");
+        if (state != State.READY || !frontendInitialized) throw new IllegalStateException("Frontend is not initialized");
         frontendLocked = locked;
     }
 
@@ -96,58 +153,80 @@ public final class Tbs5530Session implements AutoCloseable {
     }
 
     public synchronized boolean failed(long token, Throwable cause) {
-        if (token != generation || !(state == State.CONNECTED
-                || state == State.FIRMWARE_TRANSITION || state == State.READY)) return false;
+        if (token != generation || !(state == State.WAIT_PERMISSION || state == State.PERMISSION_GRANTED
+                || state == State.CONNECTED || state == State.FIRMWARE_TRANSITION || state == State.READY)) return false;
         state = state == State.FIRMWARE_TRANSITION ? State.UNCERTAIN : State.FAULTED;
         failure = cause;
         streaming = false;
         frontendLocked = false;
+        frontendInitialized = false;
+        firmwareUploaded = false;
         return true;
     }
 
     public boolean detached(long token) throws IOException { return terminate(token, State.DISCONNECTED); }
     public boolean cancel(long token) throws IOException { return terminate(token, State.CLOSED); }
 
+    /** Invalidates now; cleanup waits for the last in-flight transaction without closing its connection early. */
     @Override
     public void close() throws IOException { terminate(null, State.CLOSED); }
 
     private boolean terminate(Long token, State destination) throws IOException {
-        Resources owned;
-        boolean cancel;
-        boolean release;
+        Cleanup cleanup;
         synchronized (this) {
             if (token != null && token != generation) return false;
             if (cleaning) return false;
             if (resources == null && (state == State.CLOSED || state == State.DISCONNECTED)) return false;
-            owned = resources;
-            cancel = cancelNeeded;
-            release = claimed;
-            resources = null;
-            claimed = false;
-            cancelNeeded = false;
+            cancellationRequested = true;
             streaming = false;
             frontendLocked = false;
+            frontendInitialized = false;
+            firmwareUploaded = false;
             state = destination;
             cleaning = true;
+            cleanup = activeTransactions == 0 ? takeCleanup() : null;
         }
-        // Never hold the transfer monitor while cancellation may join a worker.
-        IOException problem = null;
-        try {
-            if (owned != null) {
-                if (cancel) {
-                    try { owned.cancel(); } catch (IOException e) { problem = e; }
-                    catch (RuntimeException e) { problem = new IOException("Cancel failed", e); }
-                }
-                if (release) {
-                    try { owned.release(); } catch (IOException | RuntimeException e) { problem = append(problem, e); }
-                }
-                try { owned.close(); } catch (IOException | RuntimeException e) { problem = append(problem, e); }
-            }
-        } finally {
-            synchronized (this) { cleaning = false; }
-        }
+        IOException problem = finishCleanup(cleanup);
         if (problem != null) throw problem;
         return true;
+    }
+
+    private static final class Cleanup {
+        final Resources owned;
+        final boolean cancel, release;
+        Cleanup(Resources owned, boolean cancel, boolean release) {
+            this.owned = owned; this.cancel = cancel; this.release = release;
+        }
+    }
+
+    private Cleanup takeCleanup() {
+        Cleanup result = new Cleanup(resources, cancelNeeded, claimed);
+        resources = null;
+        claimed = false;
+        cancelNeeded = false;
+        return result;
+    }
+
+    private IOException finishCleanup(Cleanup cleanup) {
+        if (cleanup == null) return null;
+        IOException problem = null;
+        try {
+            if (cleanup.owned != null) {
+                if (cleanup.cancel) {
+                    try { cleanup.owned.cancel(); } catch (IOException | RuntimeException e) { problem = append(problem, e); }
+                }
+                if (cleanup.release) {
+                    try { cleanup.owned.release(); } catch (IOException | RuntimeException e) { problem = append(problem, e); }
+                }
+                try { cleanup.owned.close(); } catch (IOException | RuntimeException e) { problem = append(problem, e); }
+            }
+        } finally {
+            synchronized (this) {
+                cleanupFailure = problem;
+                cleaning = false;
+            }
+        }
+        return problem;
     }
 
     private static IOException append(IOException first, Exception next) {
@@ -161,5 +240,12 @@ public final class Tbs5530Session implements AutoCloseable {
     public synchronized long getGeneration() { return generation; }
     public synchronized boolean isStreaming() { return streaming; }
     public synchronized boolean isFrontendLocked() { return frontendLocked; }
+    public synchronized boolean isInterfaceClaimed() { return claimed; }
+    public synchronized boolean isFirmwareUploaded() { return firmwareUploaded; }
+    public synchronized boolean isFrontendInitialized() { return frontendInitialized; }
     public synchronized Throwable getFailure() { return failure; }
+    public synchronized boolean isCleanupPending() { return cleaning; }
+    public synchronized boolean isCancellationRequested() { return cancellationRequested; }
+    /** Deferred failures are also suppressed on the transaction error; no exception is thrown on another thread. */
+    public synchronized IOException getCleanupFailure() { return cleanupFailure; }
 }

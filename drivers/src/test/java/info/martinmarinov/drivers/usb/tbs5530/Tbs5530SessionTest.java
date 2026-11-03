@@ -31,6 +31,29 @@ public class Tbs5530SessionTest {
         assertTrue(s.connected(token,owned));return token;
     }
 
+    @Test public void readinessMilestonesNeverAdvanceEachOtherImplicitly() throws Exception {
+        Tbs5530Session s = new Tbs5530Session();
+        assertEquals(Tbs5530Session.State.DETECTED, s.getState());
+        long token = s.requestPermission(); s.permissionResult(token, true);
+        assertEquals(Tbs5530Session.State.PERMISSION_GRANTED, s.getState());
+        assertFalse(s.isInterfaceClaimed()); assertFalse(s.isFirmwareUploaded());
+        assertThrows(TransferException.class, () -> s.ready(token));
+        assertTrue(s.connected(token, new Owned())); s.interfaceClaimed(token);
+        assertEquals(Tbs5530Session.State.CONNECTED, s.getState());
+        assertThrows(IllegalStateException.class, () -> s.frontendInitialized(token));
+        s.beginFirmwareTransition(token); s.firmwareUploaded(token);
+        assertTrue(s.isFirmwareUploaded());
+        assertEquals(Tbs5530Session.State.FIRMWARE_TRANSITION, s.getState());
+        assertThrows(IllegalStateException.class, () -> s.streamingStarted(token));
+        s.ready(token);
+        assertFalse(s.isFrontendInitialized()); assertFalse(s.isFrontendLocked()); assertFalse(s.isStreaming());
+        s.frontendInitialized(token); assertFalse(s.isFrontendLocked());
+        s.frontendLock(token, true); assertFalse(s.isStreaming());
+        s.streamingStarted(token); assertTrue(s.isStreaming());
+        s.frontendLock(token, false); assertTrue(s.isStreaming());
+        s.close(); assertFalse(s.isFrontendInitialized()); assertFalse(s.isInterfaceClaimed());
+    }
+
     @Test public void permissionDenialNeverAcquiresOrCallsTransport() throws Exception {
         Tbs5530Session s=new Tbs5530Session();ScriptedFakeControlIo io=new ScriptedFakeControlIo();
         long token=s.requestPermission();assertEquals(Tbs5530Session.State.WAIT_PERMISSION,s.getState());
@@ -44,7 +67,8 @@ public class Tbs5530SessionTest {
         assertThrows(IllegalStateException.class,()->s.streamingStarted(token));
         s.interfaceClaimed(token);s.ready(token);s.streamingStarted(token);
         assertTrue(s.isStreaming());assertFalse(s.isFrontendLocked());
-        s.frontendLock(token,true);assertTrue(s.isFrontendLocked());
+        assertThrows(IllegalStateException.class,()->s.frontendLock(token,true));
+        s.frontendInitialized(token);s.frontendLock(token,true);assertTrue(s.isFrontendLocked());
         s.frontendLock(token,false);assertTrue(s.isStreaming());s.close();
         assertFalse(s.isStreaming());assertFalse(s.isFrontendLocked());
         assertEquals(Arrays.asList("cancel","release","close"),owned.calls);
@@ -201,7 +225,7 @@ public class Tbs5530SessionTest {
 
     @Test public void transferFailureStillCancelsOwnedStreamingResources() throws Exception {
         Tbs5530Session s=new Tbs5530Session();Owned owned=new Owned();long token=connect(s,owned);
-        s.interfaceClaimed(token);s.ready(token);s.streamingStarted(token);s.frontendLock(token,true);
+        s.interfaceClaimed(token);s.ready(token);s.streamingStarted(token);s.frontendInitialized(token);s.frontendLock(token,true);
         IOException cause=new IOException("transport failed");assertTrue(s.failed(token,cause));
         assertFalse(s.isStreaming());assertFalse(s.isFrontendLocked());
         s.close();s.close();assertEquals(Arrays.asList("cancel","release","close"),owned.calls);
