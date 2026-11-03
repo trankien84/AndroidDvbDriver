@@ -1,5 +1,24 @@
 # TBS5530 Android port — current status
 
+## Checkpoint tích hợp Phase 2.1 — 2026-11-03 10:46 +07
+
+- Người dùng yêu cầu commit toàn bộ thay đổi Phase2.1, merge sang `chore/modernize-android-build`, push đúng nhánh đó lên origin và xóa nhánh local `feat/tbs5530-offline-protocol` sau khi xác minh thành công.
+- Preflight: feature ở `8588ee7`, target local/origin đều `4cf1b64`; target là tổ tiên nên có thể fast-forward, bao gồm cả checkpoint tài liệu Phase2.0. Phạm vi13file:8Javafiles và5hồ sơ; không outputs/reference/firmware.
+- Message commit: `feat: add offline TBS5530 USB protocol foundation`. Hash và kết quả merge/push/delete phải kiểm từ Git sau thao tác; mục này ghi yêu cầu và preflight, không khẳng định push trước khi chạy. Những trạng thái “chưa commit/push” bên dưới là lịch sử trước checkpoint.
+- Không chạy lại build/test cho tác vụ Git; bằng chứng gần nhất vẫn là83unit methods PASS/debug PASS/lint0errors11warnings của Phase2.1. Không thay code hoặc mở phạm vi hardware.
+
+## Phase 2.1 — Nền tảng giao thức USB offline, 2026-11-03 10:39 +07
+
+**Đã hoàn tất phạm vi offline, chưa hỗ trợ phần cứng TBS5530.** Nhánh `feat/tbs5530-offline-protocol`, HEAD nền `8588ee7661003052b7d1a0353e23bb3a3dcef8b5`. Nhánh được tạo từ checkpoint Phase 2.0 sạch; modernization giữ nguyên `4cf1b64`. Có tám file Java mới và năm hồ sơ cập nhật, **chưa stage/commit/push**.
+
+- **Đã triển khai:** `Tbs5530ControlIo` là giao diện thay thế được bằng fake; `Tbs5530Bridge` mã hóa EP0/I²C và chọn descriptor Bulk IN 0x82; `Tbs5530FirmwarePlan` kiểm dữ liệu giả và tạo kế hoạch bất biến; `Tbs5530Session` quản lý trạng thái, generation và quyền sở hữu tài nguyên. Không có implementation gọi Android USB/JNI, uploader hoặc registry entry.
+- **PASS thực:** 52 test methods mới (Bridge17/Firmware19/Session16), tổng **83 methods** trong drivers69/usbxfer1/dvbservice13, không failure/error; debug APK và lintDebug **0 errors, 11 warnings**. Lượt cuối Gradle exit0, 1m45s, 177 tasks:41 executed/136 up-to-date. Bốn core class compile riêng bằng `javac --release 8`, class version52; không cần Android SDK/JNI trên classpath. Chi tiết lệnh và kết quả ở [WORKLOG.md](WORKLOG.md), [TEST-MATRIX.md](TEST-MATRIX.md).
+- **An toàn đã kiểm bằng fake:** lỗi/timeout/short transfer không retry; session lỗi chặn I/O tiếp, cặp 0x90/0x91 không xen ngang, detach trong callback không gửi nửa read còn lại; firmware failure tại từng bước không READY; cleanup theo cancel → release → close đúng phần tài nguyên đã sở hữu, chỉ một lần.
+- **Nguồn giữ nguyên, working tree sạch khi kiểm lại:** TBS `2ce787de9f6e81b4294692a45de15596ae2e1322`; C `c5fa27eecbe80633cbb365cc44656daea1c0e2e3`; Go `11228b05fb1626bf41c4e1879ace10cd0a8d575c`. Không sửa references/toolchain/dependencies/driver cũ/API TCP.
+- **Giới hạn:** permission và READY là sự kiện do caller cung cấp, chưa có Android permission adapter hoặc readiness probe; cancellation không cưỡng bức ngắt một synchronous transfer đang chạy. Chip/PLP chỉ là policy fixtures, chưa có register programming. Firmware thật, reconnect Android, USB transfer/native cancellation, lock và TS đều **NOT RUN**; nguồn gốc/quyền phân phối firmware và bản đồ địa chỉ thật vẫn chưa duyệt.
+
+**Bước an toàn tiếp theo:** review để chốt core offline, sau đó chỉ mở Phase 2.2 riêng cho lifecycle adapter với fake/instrumentation không tuner. Cần thống nhất quyền sở hữu callback đến muộn, cancellation và identity sau reconnect trước khi nối transport Android. Chưa phê duyệt firmware thật, frontend production hay USB hardware. Các snapshot “chưa triển khai/NOT RUN Phase2.1” bên dưới là lịch sử trước lần thực thi này.
+
 ## Checkpoint Phase 2.0 — 2026-11-03 00:58 +07
 
 - Người dùng yêu cầu commit và push năm hồ sơ nghiên cứu/thiết kế cùng kết quả xác minh checkout NTFS đã phục hồi. Nhánh phát hành là `docs/tbs5530-source-architecture`, không merge vào modernization.

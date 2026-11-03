@@ -1,5 +1,46 @@
 # Research log (append-only)
 
+## 2026-11-03 10:39 +07 — Phase 2.1: hiện thực hóa protocol core, chỉ kiểm thử offline
+
+### Mốc nguồn và loại bằng chứng
+
+Nhánh mới `feat/tbs5530-offline-protocol` từ checkpoint sạch `8588ee7661003052b7d1a0353e23bb3a3dcef8b5`; không đổi baseline modernization hoặc ba references. TBS `2ce787de9f6e81b4294692a45de15596ae2e1322`, C `c5fa27eecbe80633cbb365cc44656daea1c0e2e3`, Go `11228b05fb1626bf41c4e1879ace10cd0a8d575c`, working tree của cả ba sạch khi kiểm lại. Không fetch/sync hoặc ghi index/config reference.
+
+Nguồn official vẫn là [tbs5530.c](https://github.com/tbsdtv/linux_media/blob/2ce787de9f6e81b4294692a45de15596ae2e1322/drivers/media/usb/dvb-usb/tbs5530.c): `tbs5530_op_rw`, `tbs5530_i2c_transfer`, `tbs5530_load_firmware`, `tbs5530_properties`; đối chiếu [C community](https://github.com/koreapyj/cxd28xx/blob/c5fa27eecbe80633cbb365cc44656daea1c0e2e3/tbs5530.c) và [Go tbs bridge](https://github.com/Till0196/coax/blob/11228b05fb1626bf41c4e1879ace10cd0a8d575c/internal/coaxd/usb/bridge/tbs/tbs.go). Chip/PLP đối chiếu official [cxd2878.c](https://github.com/tbsdtv/linux_media/blob/2ce787de9f6e81b4294692a45de15596ae2e1322/drivers/media/dvb-frontends/cxd2878.c) `cxd2878_init`, `cxd2878_set_dvbt2`, `cxd2878_set_frontend`, cùng khác biệt C/Go đã ghi Phase2.0.
+
+| Loại | Đã xác nhận trong phase | Không được suy ra |
+|---|---|---|
+| Source-grounded | EP0 types0x40/0xc0, timeout2000ms, 0x80/90/91/8a encoding, TS0x82; A0 reset/chunks64/delay100ms; official chip/PLP policy | Chip thực, giới hạn vật lý48/50, Android giữ connection sau firmware |
+| Implemented |4core classes thuần Java8, không Android/JNI imports, không concrete hardware transport; mọi state/ownership qua dependency injection | Có driver hoạt động hoặc Android permission handler |
+| Unit-tested |52 methods mới, exact bytes/order/error/state; tổng83 methods không failure/error; debug/lint thành công | Silicon timing, firmware thật, lock/TS hoặc native cancellation |
+| Chưa có bằng chứng |Firmware provenance/license/hash/address map, warm/cold identity, reconnect, USB Host, tuner/PLP registers |Không đánh dấu PASS chỉ vì fake hoặc build thành công |
+
+### Các component đã tạo
+
+Cùng nằm ở `drivers/src/main/java/info/martinmarinov/drivers/usb/tbs5530/`:
+
+- [Tbs5530ControlIo.java](../../drivers/src/main/java/info/martinmarinov/drivers/usb/tbs5530/Tbs5530ControlIo.java): interface nhận đủ control-transfer parameters; lỗi có loại SHORT_TRANSFER/TIMEOUT/IO_FAILURE/CANCELLED/SESSION_UNAVAILABLE và cause. Không implementation USB thật.
+- [Tbs5530Bridge.java](../../drivers/src/main/java/info/martinmarinov/drivers/usb/tbs5530/Tbs5530Bridge.java): validate trước I/O; write48/read50 là guard phần mềm; 0x90/0x91 dùng chung session lock. Sau transfer kiểm lại generation/state để callback detach không dẫn đến request tiếp. Read chỉ copy output sau đủ length, không retry. Descriptor giả phải khớp interface0, alternate đã chọn, Bulk IN0x82; reject ambiguity. Chip map0x197→Ascot3,0x19c/0x39a→Freia, ID khác reject; manualPLP0/range0..255, không ghi frontend register.
+- [Tbs5530FirmwarePlan.java](../../drivers/src/main/java/info/martinmarinov/drivers/usb/tbs5530/Tbs5530FirmwarePlan.java): SHA-256/size/ranges/overflow checks trước lập plan; start address0; không cho DATA chồng0x7f92/0xe600 dù caller thiếu reserved ranges. Mô hình stop1 ở cả hai CPU registers → chunks≤64/exact tail → restart0 → DELAY100ms, tất cả defensive copies. Không nhận file/path/firmware thật, không execute plan production.
+- [Tbs5530Session.java](../../drivers/src/main/java/info/martinmarinov/drivers/usb/tbs5530/Tbs5530Session.java): phân biệt permission/connected/firmware transition/ready/faulted/uncertain/disconnected/closed. Streaming và frontend lock độc lập. Generation cũ bị bỏ qua; permission deny không I/O; failure latch chặn các lần gọi sau. Resource cleanup một lần, đúng thứ tự theo phần đã sở hữu, vẫn release/close khi cancel lỗi; không corrective writes.
+
+Test package tương ứng có `ScriptedFakeControlIo`, `Tbs5530BridgeTest`, `Tbs5530FirmwarePlanTest`, `Tbs5530SessionTest`. Fake sao chép buffers, kiểm toàn bộ tham số và thứ tự; unexpected/missing call làm fail. Executor firmware chỉ ở test, kiểm failure tại từng bước kể cả delay, không thay uploader production. Cặp đọc concurrent được kiểm bằng thread/latches, không dùng USB.
+
+### Làm rõ ADR-010 và giới hạn
+
+Không đổi hướng ADR-010. ADR-011 ghi chi tiết: caller chịu tài nguyên của `connected` callback bị từ chối; permission timeout là event inject; READY cần explicit event từ phép kiểm độc lập tương lai; synchronous transfer không có cơ chế cưỡng bức hủy từ thread khác. Close thông thường cleanup ngoài monitor, nhưng phải đợi transfer đang giữ monitor kết thúc. Test worker join không chứng minh native USB cancel; adapter sau phải tuân timeout và không tự cleanup/join từ transport callback còn đang chạy.
+
+Không thêm TS reader nên các fixture packet188bytes/partial read/drain của kế hoạch Phase2.0 **NOT RUN/hoãn**; cũng chưa test ghi lại PLP registers khi retune. Trong Phase2.1 chỉ kiểm lựa chọn endpoint, policy values và streaming khác lock. Không thay driver cũ, Retry, DeliverySystem/TCP, registry hoặc USB XML filter. Không thêm dependency hoặc nâng toolchain.
+
+### Phase 2.2 đề xuất — chưa bắt đầu
+
+1. Review core offline và thống nhất contract callback/cancellation/ownership của ADR-011; giữ gate83methods cùng debug/lint.
+2. Chỉ khi được duyệt, thiết kế lifecycle adapter Android với fake connection/permission events; kiểm timeout, detach khi in-flight, callback cũ và exactly-once cleanup. Chưa đăng ký thiết bị hoặc có uploader mặc định.
+3. Dùng instrumentation không tuner nếu cần xác minh Android callback/threading; tiêu chí hoàn thành là không gọi transport thật khi deny/stale/fault, không resource leak, không làm sai registry/XML/native smoke hiện có.
+4. Tách approval firmware thật/USB writes/frontend thành bước sau: phải có license/provenance/hash/address map và kế hoạch phần cứng cụ thể. Fake PASS không mở các gate đó.
+
+Kết quả chạy và lệnh chính xác ở [WORKLOG.md](WORKLOG.md), bảng kiểm ở [TEST-MATRIX.md](TEST-MATRIX.md). Dừng sau Phase2.1, chưa commit/push.
+
 ## 2026-11-03 00:54 +07 — Xác nhận checkout TBS phục hồi bởi người dùng
 
 Windows PowerShell tại main repo, nhánh tài liệu `docs/tbs5530-source-architecture`, nền4cf1b64. Người dùng gửi screenshot script Apply PASS và yêu cầu kiểm lại. Đã kiểm source thực, không chỉ dựa screenshot.

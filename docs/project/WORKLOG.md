@@ -280,3 +280,56 @@
 - Validation: diff --check PASS, UTF8/relativeMarkdownlinks PASS, heuristicsecretpattern0match; không phải security audit. Không chạy build/unit/emulator/hardware trong tác vụ tài liệu.
 - Chuẩn bị commit `docs: finalize TBS5530 architecture and source readiness`, có Co-authored-by trailer, sau đó push explicit nhánh hiện tại với upstream tracking. Không merge, force-push hoặc thay nhánh modernization/master. Hash và kết quả push báo sau kiểm tra live remote; không ghi trước thành công.
 - Next: dừng trước Phase2.1, chỉ triển khai offline foundation khi được duyệt; không USB writes hoặc firmware.
+
+## 2026-11-03 10:39 +07 — Phase 2.1: TBS5530 offline USB protocol foundation
+
+### Preflight và phạm vi
+
+- Windows PowerShell, cwd `D:\API\TBS5530-DVB-Android\AndroidDvbDriver`. Đọc instructions/scoped build/hardware/records, skills tbs-research/project-handoff và hồ sơ Phase2.0/ADR-010. Git sạch tại `docs/tbs5530-source-architecture`/`8588ee7661003052b7d1a0353e23bb3a3dcef8b5`; tạo `feat/tbs5530-offline-protocol`, không đổi modernization.
+- Ba references kiểm lại bằng `git --no-lazy-fetch -C <reference> rev-parse HEAD` và `status --porcelain=v1 -uall`, với `GIT_NO_LAZY_FETCH=1`, `GIT_OPTIONAL_LOCKS=0`: TBS2ce787de9f6e81b4294692a45de15596ae2e1322, Cc5fa27eecbe80633cbb365cc44656daea1c0e2e3, Go11228b05fb1626bf41c4e1879ace10cd0a8d575c; cả ba0status entries. Đọc lại board/protocol/firmware/chip source, không fetch/sync/config/index write.
+- GitNexus được kiểm qua gateway: không có index của project; không tự analyze hoặc suy empty graph là không có callers. Thay bằng đọc source, search và unit/regression tests. Không gửi code lên dịch vụ bên thứ ba.
+- Toolchain pins giữ nguyên. Child build nạp Machine JAVA_HOME hợp lệ thay process cũ; không sửa User/Machine environment hoặc ExecutionPolicy, không cài/gỡ package/SDK.
+
+### Thay đổi
+
+- Tạo4main classes: `Tbs5530ControlIo`, `Tbs5530Bridge`, `Tbs5530FirmwarePlan`, `Tbs5530Session`; tạo fake `ScriptedFakeControlIo` và3test suites cùng package tbs5530. Tổng8Javafiles mới, SPDX GPL-2.0-or-later; không firmware blob hoặc source tables từ reference.
+- Bridge kiểm parameters/buffers/flags trước I/O, khóa cặp read, fault latch/no retry, đúng endpoint82. Phân loại return count lớn hơn length thành I/O failure, không short transfer. Kiểm state/generation sau transfer để detach callback không gửi read tiếp hoặc trả dữ liệu cũ.
+- Session giữ streaming khác lock, cleanup đúng ownership kể cả failure và exception; generation cũ không tác động session mới. Plan firmware immutable chỉ dùng synthetic bytes/hash/ranges/chunks; test executor không nằm trong production core.
+- Bổ sung ADR-011 cho caller-owned late callbacks, explicit READY/permission timeout và giới hạn synchronous cancellation. Hoãn packet-reader/PLP-retune register tests đến component tương ứng; không giả lập một driver hoàn chỉnh để có PASS.
+- Cập nhật STATUS/RESEARCH/DECISIONS/TEST-MATRIX/WORKLOG. Không sửa registry/XML, DvbDevice/DvbUsbDevice/Retry, TCP/enum, driver cũ, Gradle/native hoặc dependency manifests.
+
+### Lệnh kiểm thử thực và kết quả
+
+Các lệnh Gradle đều chạy ở cwd trên, chỉ sửa environment của child:
+
+```powershell
+$env:JAVA_HOME = [Environment]::GetEnvironmentVariable('JAVA_HOME', 'Machine')
+$env:ANDROID_HOME = 'D:\Android\Sdk'
+$env:ANDROID_AVD_HOME = 'D:\Android\AVD'
+```
+
+- Các lượt focused trong quá trình phát triển PASS; snapshot trước3tests cuối có49newmethods. Không dùng số này làm tổng cuối. Lượt regression đầu PASS80methods/2m20s; sau đó thêm assertion cleanup/runtime exception/detach callback và chạy lại toàn bộ.
+- **Lệnh cuối**, buộc chạy lại cả ba unit tasks:
+
+```powershell
+.\gradlew.bat :drivers:testDebugUnitTest --rerun :usbxfer:testDebugUnitTest --rerun :dvbservice:testDebugUnitTest --rerun :app:assembleDebug :app:lintDebug --console plain --no-daemon --max-workers=1
+```
+
+- **PASS exit0, BUILD SUCCESSFUL in1m45s;177actionable tasks:41executed/136up-to-date.** XML cuối: Bridge17/Firmware19/Session16 =**52methods mới**; drivers69/usbxfer1/dvbservice13 =**83methods**,0failures/0errors. Debug APK thành công. Lint XML0Error/0Fatal/11Warning; không thêm suppression hoặc bỏ assertion. Cảnh báo JDK25 source/target8 obsolete và Gradle deprecated features vẫn hiển thị.
+- Evidence local: `drivers\build\test-results\testDebugUnitTest\TEST-info.martinmarinov.drivers.usb.tbs5530.*.xml`, các XML module usbxfer/dvbservice, `app\build\reports\lint-results-debug.xml`, `app\build\outputs\apk\debug\app-debug.apk`. Không commit outputs/raw logs.
+- Kiểm độc lập Java8 sau thay đổi cuối: gọi JDK Machine `bin\javac.exe --release 8 -d drivers\build\tbs5530-java8-check <4corefiles>`, không Android/JNI classpath: exit0. `javap -verbose -classpath <output> info.martinmarinov.drivers.usb.tbs5530.Tbs5530Bridge` trả major version52. Search Android/AndroidX imports/native declarations0match; IDE problems0errors. Đã xóa riêng thư mục compile kiểm tra này, xác nhận không còn; không tạo script tạm cần giữ.
+
+### Bàn giao và điểm dừng
+
+- Kiểm cuối: `git diff --check` PASS; đọc UTF-8 strict cho8file mới/5hồ sơ, trailing-whitespace check file mới và relative Markdown links PASS. `git status --short --untracked-files=all` chỉ có5hồ sơ modified/8Javafiles untracked; `git diff --cached --name-only` rỗng. Modernization vẫn4cf1b64e03a563f66cfb2b2051fb6f4ed05eacbe. Không có lỗi IDE trong hai package mới.
+- Chưa stage/commit/push/merge. Năm hồ sơ modified và tám file Java mới; binaries/SDK/reference không đưa vào Git.
+- Không emulator/instrumentation mới, không Windows/WSL/Android USB access, firmware thật/vendor/I²C/LNB/reset/usbipd hoặc tuner tests. Native cancellation/Android permission/reconnect/lock/TS và firmware rights vẫn NOT RUN/chưa duyệt.
+- Review core và ADR-011 là bước kế tiếp. Phase2.2 chỉ đề xuất lifecycle adapter với fake/instrumentation không tuner, cần phạm vi được duyệt; chưa bắt đầu frontend hoặc transport hardware.
+
+## 2026-11-03 10:46 +07 — Checkpoint commit và tích hợp Phase2.1 theo yêu cầu
+
+- Người dùng phê duyệt add/commit, merge vào `chore/modernize-android-build`, push origin đúng nhánh đó và xóa nhánh feature local sau xác minh. Không xóa nhánh tài liệu hoặc remote branch.
+- Preflight Windows PowerShell/main repo: feature `feat/tbs5530-offline-protocol`/8588ee7661003052b7d1a0353e23bb3a3dcef8b5; target local và `git ls-remote --heads origin chore/modernize-android-build` cùng4cf1b64e03a563f66cfb2b2051fb6f4ed05eacbe. `rev-list --left-right --count target...HEAD` trả0/1: target là tổ tiên; fast-forward sẽ gồm checkpoint Phase2.0 và commit mới Phase2.1.
+- Status chỉ5hồ sơ modified và8Javafiles mới đã kiểm thử; `git diff --check` PASS. Không build/test/hardware lại trong tác vụ Git. Kết quả83unit methods/debug/lint ở mục Phase2.1 vẫn là lần chạy thực gần nhất, không ghi thành một lần PASS mới.
+- Staged diff check đầu tiên phát hiện CRLF/mixed EOL trong8Javafiles mới (core.autocrlf=false). Commit chưa chạy vì gate chặn. Chỉ chuẩn hóa8file này thành LF, kiểm nội dung không đổi ngoài EOL; stage lại, `git diff --cached --check` PASS và ls-files --eol đều i/lf,w/lf. Không sửa Git config hoặc bỏ whitespace gate; không chạy lại tests vì không đổi logic.
+- Commit dự kiến `feat: add offline TBS5530 USB protocol foundation`, có Co-authored-by trailer. Chỉ stage13file trong hai package tbs5530 và5hồ sơ. Sau commit: switch target, merge --ff-only feature, push explicit target không force; kiểm remote SHA/working tree rồi branch -d feature. Hash và kết quả thực báo sau thao tác, không ghi trước thành công.

@@ -1,5 +1,32 @@
 # TBS5530 test matrix
 
+## 2026-11-03 10:39 +07 — Phase 2.1: Java core và USB giả
+
+Windows PowerShell, nhánh `feat/tbs5530-offline-protocol`, HEAD nền `8588ee7661003052b7d1a0353e23bb3a3dcef8b5` cộng thay đổi chưa commit. Gradle9.8.2/AGP9.5.0/JDK25, compile37.2/target37/min21/Java8 giữ nguyên. Không emulator hoặc tuner; mọi giao dịch dưới đây chỉ qua fake.
+
+| Gate | Kết quả thực | Assertion/bằng chứng |
+|---|---|---|
+| Bridge protocol | PASS, 17 methods | Exact EP0 type/request/value/index/buffer/offset/length/2000ms; 0x80 write, 0x90→0x91 read, 0x8a terrestrial route |
+| I²C validation | PASS trong Bridge suite | Địa chỉ 0..127, write1..48/read1..50, một byte register pointer; từ chối flags/address/buffer sai trước I/O |
+| Atomicity/callback | PASS trong Bridge suite | Hai bridge cùng session không xen vào cặp read; detach trong pointer callback chặn nửa read, output caller không đổi |
+| Short/timeout/cancel/error | PASS trong Bridge suite | Đếm đúng số lần gọi, giữ nguyên cause; negative/overlong là I/O failure, 0..length-1 là short; lỗi chặn các lần gọi sau, không retry side effect |
+| Endpoint/chip/PLP policy | PASS trong Bridge suite | Descriptor đảo thứ tự vẫn chọn interface0/alternate đã chọn/Bulk IN0x82; missing/ambiguous reject; chip map explicit, manual PLP0 và range0..255 |
+| Firmware plan | PASS, 19 methods | Synthetic sizes1/63/64/65/128; exact tail/chunk≤64; stop1 ở 0x7f92/0xe600 → data → restart0 → delay100ms; metadata/hash/ranges/size/overflow/reserved/defensive copies |
+| Session/lifecycle | PASS, 16 methods | Permission deny/timeout event, detach, generation cũ, fault latch, streaming khác frontend lock, ownership một phần, reopen khi cleanup bị chặn |
+| Firmware failure từng bước | PASS trong Session suite | Executor chỉ có trong test: lỗi ở từng DATA hoặc DELAY khiến UNCERTAIN, không READY, không thêm requests; đường thành công vẫn đòi ready event riêng |
+| Cleanup | PASS trong Session suite | Cancel→release→close đúng tài nguyên đã acquire; close nhiều lần không lặp; IOException/RuntimeException không bỏ các bước tiếp; cancellation có thể join worker mà không giữ monitor của session trong đường close bình thường |
+| Scripted fake | PASS qua Bridge/Session suites | Bản sao payload trước/sau, exact parameters/order, unexpected call hoặc chưa dùng hết script làm test fail |
+| Regression unit toàn module | PASS, 83 methods, 0 failures/0 errors | XML: drivers69 (52 mới +17 cũ), usbxfer1, dvbservice13; các task đều có --rerun |
+| Debug APK | PASS | :app:assembleDebug, lượt Gradle cuối exit0/1m45s/177 tasks |
+| LintDebug | PASS có warnings | XML0Error/0Fatal/11Warning; không thêm baseline hoặc suppress kiểm tra |
+| Java8 core độc lập | PASS | javac --release 8 cho4core files không Android classpath, javap major version52; JDK25 cảnh báo source/target8 obsolete |
+| References | PASS chỉ đọc | Ba SHA khóa giữ nguyên; status0entries ở cả ba repositories |
+| Android permission/reconnect/native USB/firmware thật/DVB lock/TS | NOT RUN | Không có production adapter/uploader/frontend; fake PASS không chứng minh Android USB Host hoặc tuner hoạt động |
+| Emulator/instrumentation/release/16KiB runtime | NOT RUN mới | Không yêu cầu chạy lại trong Phase2.1; không tái sử dụng PASS Phase1.2 như kết quả mới |
+| TS packet fixture và PLP retune register sequence | NOT RUN, hoãn | Kế hoạch Phase2.0 rộng hơn phạm vi core hiện tại; chưa có TS reader/frontend để test đúng hành vi |
+
+Lệnh cuối và vị trí XML ghi ở [WORKLOG.md](WORKLOG.md). Các bảng “Phase2.1 planned assertions — tất cả NOT RUN” bên dưới giữ làm lịch sử thiết kế; bảng mới này là kết quả thực thi hiện tại.
+
 ## 2026-11-03 00:54 +07 — Xác minh sau phục hồi NTFS do người dùng thực hiện
 
 Windows PowerShell; TBS latest/2ce787de9f6e81b4294692a45de15596ae2e1322. Agent kiểm chỉ đọc với no-lazy-fetch/optional-locks0; không thực thi recovery.
