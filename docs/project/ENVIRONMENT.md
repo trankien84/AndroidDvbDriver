@@ -1,10 +1,20 @@
-# Environment inventory
+# Kiểm kê môi trường
+
+## 2026-11-03 — Phase 2.4B: kiểm kê chuyển tiếp USB từ Windows qua QEMU
+
+- Windows 10.0.19045, WHPX 10.0.19045 đã cài và dùng được theo emulator -accel-check, exit 0. Emulator **37.2.13.0/build 16740729**, QMP query-version trả **QEMU 2.12.0**, package `(v2.12.0-19097-g85fa07f04ef)`; không giả định đây là upstream QEMU 11 theo ghi chú phát hành preview.
+- SDK D:\Android\Sdk và AVD D:\Android\AVD; ANDROID_HOME/ANDROID_AVD_HOME trong process hiện đúng, khác giá trị cũ trong snapshot Phase 1.2. JAVA_HOME ở Process/Machine cùng là C:\Program Files\Java\latest\jdk-25, User trống. Không sửa môi trường toàn cục hoặc toolchain.
+- AVD TBS5530_Runtime_API37, image **android-37.0/google_apis/x86_64 revision 7**, runtime API 37/x86_64, kernel **6.12.81-android16-6-g4f69fc7b210c-ab16167562**. Giữ userdata, no-snapshot-load/no-snapshot-save, không wipe hoặc thay kernel/system image.
+- usbipd-win **5.3.0**; thiết bị TBS 734c:5530/BUSID 6-2 được tra trực tiếp, **Shared, không phải Attached** (BUSID chỉ là snapshot, không được ghim cố định). Ubuntu 22.04 WSL2 ở trạng thái Stopped. Không detach vì không cần, không bind/unbind/attach WSL. Tham số usb-host chỉ nhắm đúng TBS, không đổi thiết bị khác.
+- PnP **TBS5530DVBBDA/MEDIA/OK**, nhà cung cấp chữ ký TBS/**2.0.0.2**, service **tbsBDA.TBS5530**, INF **oem108.inf**. Không thay bằng WinUSB/Zadig/filter. Metadata phía host qua QMP cho thấy 480 Mb/s; **libusb_open=-12/unrecognized device driver**, chặn passthrough trước khi Android guest nhận diện TBS.
+- Guest `android.hardware.usb.host=false`; root USB rings/sysfs hubs không phải TBS. Quyền đọc `dmesg`/thuộc tính USB trong sysfs bị từ chối, không thay root/SELinux. `dumpsys usb` bị timeout khi khởi động với passthrough, còn service hoạt động trong lần khởi động đối chứng; chưa chứng minh image có thể cung cấp USB Host sau khi đổi driver phía host.
+- Log khởi động/libusb thô nằm trong thư mục tạm của công cụ local và chứa định danh thiết bị phía host, không commit hoặc đăng thành artifact. Chi tiết lệnh và các tầng kiểm chứng ở WORKLOG/RESEARCH/TEST-MATRIX. Các emulator hỗ trợ kiểm thử đã được điều phối theo PID/shell, không tác động phiên AVD khác.
 
 ## 2026-11-02 — Phase 1.2: kiểm kê sau dọn SDK và nâng riêng AGP
 
 **Nguồn:** Windows PowerShell 7.6.9 / Windows 10.0.19045; nhánh `chore/modernize-android-build`, HEAD nền `ace7e9f187d11a685975f707b6743d779fa847d9`. Có sáu thay đổi local do người dùng chuẩn bị trước phase (hai instructions sửa, instruction/skill kiểm kê mới và hai script mới); không reset hoặc commit chúng.
 
-### Packages thực còn lại
+### Các package thực còn lại
 
 `Inspect-TBS5530-Toolchain.ps1`, Android CLI `sdk list` và `source.properties` được đối chiếu, không suy từ inventory cũ:
 
@@ -12,50 +22,50 @@
 |---|---|---|
 | platforms/android-34 | revision 3 | Còn trên máy; không chọn để compile hiện tại |
 | platforms/android-37.2 | revision 2, API 37.2, PreviewSdkInt 0 | Compile SDK dự án |
-| build-tools/37.0.0 | 37.0.0 | Pin dự án |
-| ndk/30.0.16248370 | r30 | Pin dự án |
-| cmake/4.1.2 | 4.1.2 | Pin dự án |
-| cmdline-tools/latest | 23.0 | SDK command-line tools |
-| platform-tools | ADB 37.0.1 | CLI device access |
-| emulator | 37.2.13 | Emulator binary |
-| system-images/android-34/google-tv/x86 | metadata revision 3 | Giữ nguyên; không dùng trong smoke này |
+| build-tools/37.0.0 | 37.0.0 | Phiên bản dự án ghim |
+| ndk/30.0.16248370 | r30 | Phiên bản dự án ghim |
+| cmake/4.1.2 | 4.1.2 | Phiên bản dự án ghim |
+| cmdline-tools/latest | 23.0 | Công cụ dòng lệnh SDK |
+| platform-tools | ADB 37.0.1 | Truy cập thiết bị qua dòng lệnh |
+| emulator | 37.2.13 | Chương trình emulator |
+| system-images/android-34/google-tv/x86 | metadata revision 3 | Giữ nguyên; không dùng trong lần kiểm tra nhanh này |
 | system-images/android-37.0/google_apis/x86_64 | metadata revision 7 | Image của AVD đã có; CLI catalog hiện in revision 8, không coi đó là package đã cập nhật |
 
-Không còn platform37.0, Build-Tools36, NDK28 hoặc CMake3.22.1 trong inventory local. Image37.0 vẫn còn và độc lập với SDK platform37.0. Không uninstall/cài/update/xóa AVD hoặc SDK trong phase này. Review cleanup chỉ tạo CSV, platform34 là REVIEW chứ không tự kết luận vô dụng cho dự án khác.
+Không còn platform 37.0, Build-Tools 36, NDK 28 hoặc CMake 3.22.1 trong kiểm kê local. Image 37.0 vẫn còn và độc lập với SDK platform 37.0. Không uninstall/cài/update/xóa AVD hoặc SDK trong phase này. Review dọn dẹp chỉ tạo CSV; platform 34 là REVIEW chứ không tự kết luận vô dụng cho dự án khác.
 
-### JDK và AVD discovery
+### Dò tìm JDK và AVD
 
-- Process agent: JAVA_HOME cũ `C:\Program Files\Java\jdk-25` không tồn tại; User JAVA_HOME trống; Machine đúng `C:\Program Files\Java\latest\jdk-25`. Build commands nạp Machine JAVA_HOME vào child PowerShell, Gradle xác nhận Launcher25.0.5.0.3/daemon resolvedjdk25.0.5.0.3. Không sửa User/Machine environment hoặc restart VS Code.
-- ANDROID_HOME/ANDROID_AVD_HOME process thiếu, User đúng D:\Android\Sdk / D:\Android\AVD. Audit resolve được User AVD home nhưng trước sửa **không truyền home này vào emulator subprocess**, nên emulator list rỗng giả. Thư mục `.avd` dùng DirectoryInfo.BaseName còn nguyên suffix, gây thêm tên giả `TBS5530_Runtime_API37.avd` bên cạnh tên đăng ký thật.
-- Đã sửa audit: truyền AVD home chỉ trong lúc chạy listing, khôi phục environment ban đầu trong finally; bỏ suffix `.avd` đúng cho tên directory; hợp nhất metadata/emulator. Kết quả thật: **một AVD `TBS5530_Runtime_API37`, emulator=1, metadata=1**. Có regression cho cả variable vắng/có sẵn và emulator không tồn tại. Không tự boot AVD từ audit.
-- Audit JSON bổ sung các JAVA_HOME candidates hợp lệ và executable build gợi ý; vẫn báo rõ process stale, **không tự đổi JAVA_HOME**. `scripts/check-env.ps1` chuyển thành entrypoint gọi audit chung để tránh hai cách kiểm kê lệch nhau. `-NoReport -PassThru` hỗ trợ assertions/automation.
-- Cleanup-review parser CMake được giới hạn trong externalNativeBuild.cmake; không nhầm buildToolsVersion là CMake. Tất cả báo cáo local ở parent logs/toolchain, không commit machine/host metadata.
+- Process agent: JAVA_HOME cũ `C:\Program Files\Java\jdk-25` không tồn tại; User JAVA_HOME trống; Machine đúng `C:\Program Files\Java\latest\jdk-25`. Các lệnh build nạp Machine JAVA_HOME vào child PowerShell; Gradle xác nhận Launcher 25.0.5.0.3/daemon dùng resolved jdk 25.0.5.0.3. Không sửa biến môi trường User/Machine hoặc khởi động lại VS Code.
+- ANDROID_HOME/ANDROID_AVD_HOME thiếu ở Process, đúng ở User: D:\Android\Sdk / D:\Android\AVD. Audit xác định được User AVD home nhưng trước khi sửa **không truyền home này vào emulator subprocess**, nên danh sách emulator rỗng giả. Thư mục `.avd` dùng DirectoryInfo.BaseName còn nguyên suffix, gây thêm tên giả `TBS5530_Runtime_API37.avd` bên cạnh tên đăng ký thật.
+- Đã sửa audit: chỉ truyền AVD home trong lúc chạy lệnh liệt kê, khôi phục môi trường ban đầu trong finally; bỏ suffix `.avd` đúng cho tên thư mục; hợp nhất metadata/emulator. Kết quả thật: **một AVD `TBS5530_Runtime_API37`, emulator=1, metadata=1**. Có kiểm thử hồi quy cho cả trường hợp biến môi trường vắng/có sẵn và emulator không tồn tại. Không tự khởi động AVD từ audit.
+- Audit JSON bổ sung các giá trị JAVA_HOME hợp lệ và executable build gợi ý; vẫn báo rõ process dùng giá trị cũ, **không tự đổi JAVA_HOME**. `scripts/check-env.ps1` chuyển thành điểm vào gọi audit chung để tránh hai cách kiểm kê lệch nhau. `-NoReport -PassThru` hỗ trợ assertions/automation.
+- Parser review dọn CMake được giới hạn trong externalNativeBuild.cmake; không nhầm buildToolsVersion là CMake. Tất cả báo cáo local ở parent logs/toolchain, không commit metadata của máy/host.
 
-### Execution policy
+### Chính sách cho phép chạy script
 
 Lần đầu chạy script bị RemoteSigned chặn. Đã hỏi và người dùng **chỉ định rõ** `Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process`. Thực hiện đúng scope Process trong từng child, lưu policy cũ và restore trong finally; không `Unblock-File` hoặc đổi CurrentUser/LocalMachine. Kết quả sau lệnh Process=Undefined, User/Machine vẫn RemoteSigned. Không biến việc bỏ chặn được duyệt lần này thành mặc định tự bypass trong tooling.
 
 ### Phân biệt bốn trạng thái phiên bản
 
-| Thành phần | Declared | Installed | Published stable đã tra | Project verified / hành động |
+| Thành phần | Đã khai báo | Đã cài | Bản stable đã tra | Đã kiểm chứng cho dự án / hành động |
 |---|---|---|---|---|
-| AGP | 9.5.0 sau sửa root plugins | Resolve qua Gradle cache/build, không phải SDK package | Google Current Release 9.5.0 ngày kiểm 2026-11-02 | Chỉ nâng 9.4.1→9.5.0; kết quả gate cuối ở TEST-MATRIX |
-| Gradle/JDK | Wrapper9.8.2 / JVM25 | 9.8.2 / 25.0.5.0.3 | Không tái tìm mọi latest JDK/Gradle; ma trận9.8.2 xác nhận JVM25 được hỗ trợ | Giữ nguyên, wrapper checksum không đổi |
-| SDK/Build-Tools | 37.2 /37.0.0 | Đúng pins | Không có yêu cầu tìm/nâng toàn SDK | Giữ nguyên compile37.2/target37/min21 |
-| NDK/CMake |30.0.16248370 /4.1.2 | Đúng pins | Không dùng tuổi package để quyết định nâng/xóa | Giữ nguyên, kiểm ABI/native gates |
-| Android runtime | Không quyết định bởi compileSDK | AVDimage37.0 x86_64 | Không tra/tải image mới | API37/4KiB chỉ sau getprop/boot thật; không đại diện arm64/16KiB/API21 |
+| AGP | 9.5.0 sau khi sửa root plugins | Được phân giải qua Gradle cache/build, không phải SDK package | Google Current Release 9.5.0 ngày kiểm 2026-11-02 | Chỉ nâng 9.4.1 → 9.5.0; kết quả kiểm chứng cuối ở TEST-MATRIX |
+| Gradle/JDK | Wrapper 9.8.2 / JVM 25 | 9.8.2 / 25.0.5.0.3 | Không tìm lại mọi phiên bản JDK/Gradle mới nhất; ma trận 9.8.2 xác nhận JVM 25 được hỗ trợ | Giữ nguyên, wrapper checksum không đổi |
+| SDK/Build-Tools | 37.2 / 37.0.0 | Đúng phiên bản đã ghim | Không có yêu cầu tìm/nâng toàn SDK | Giữ nguyên compile 37.2/target 37/min 21 |
+| NDK/CMake | 30.0.16248370 / 4.1.2 | Đúng phiên bản đã ghim | Không dùng tuổi package để quyết định nâng/xóa | Giữ nguyên, kiểm ABI/native gates |
+| Android runtime | Không quyết định bởi compileSDK | AVD image 37.0 x86_64 | Không tra/tải image mới | API 37/4 KiB chỉ sau getprop/khởi động thật; không đại diện arm64/16 KiB/API 21 |
 
-Google AGP9.5 compatibility: Gradle min9.6.0, JDK min17, API max37; default NDK28.2/BT36 **không phải lệnh bắt buộc downgrade pins**. Gradle9.8.2 hỗ trợ JVM25 từ dòng9.1.0; vẫn cần thực thi regression của dự án. Nguồn chính thức được ghi trong WORKLOG/DECISIONS; versions không được coi là mãi latest.
+Tương thích Google AGP 9.5: Gradle tối thiểu 9.6.0, JDK tối thiểu 17, API tối đa 37; mặc định NDK 28.2/BT 36 **không phải yêu cầu bắt buộc hạ phiên bản đã ghim**. Gradle 9.8.2 hỗ trợ JVM 25 từ dòng 9.1.0; vẫn cần thực thi kiểm thử hồi quy của dự án. Nguồn chính thức được ghi trong WORKLOG/DECISIONS; không coi các phiên bản này là mới nhất mãi mãi.
 
-## 2026-11-02 — Phase1.1 runtime thực trên emulator, không tuner
+## 2026-11-02 — Phase 1.1: runtime thực trên emulator, không tuner
 
-**Host/cwd:** Windows10.0.19045, PowerShell7.6.9, AndroidDvbDriver root. Baseline commit `6da609ba49dd9f1f4d284291918f68a6378972ff` đã push theo người dùng, local origin-tracking ref cùng SHA. Nhánh `test/android-runtime-smoke` được tạo từ modernization, bảo toàn2local changes `.gitignore`/workspace.
+**Host/cwd:** Windows 10.0.19045, PowerShell 7.6.9, root AndroidDvbDriver. Baseline commit `6da609ba49dd9f1f4d284291918f68a6378972ff` đã push theo người dùng, local origin-tracking ref cùng SHA. Nhánh `test/android-runtime-smoke` được tạo từ modernization, bảo toàn 2 thay đổi local `.gitignore`/workspace.
 
-### Environment build giữ nguyên
+### Môi trường build giữ nguyên
 
-- Process agent còn JAVA_HOME cũ `C:\Program Files\Java\jdk-25` không tồn tại và thiếu ANDROID_HOME/ANDROID_AVD_HOME; Machine JAVA_HOME đúng `C:\Program Files\Java\latest\jdk-25`, User SDK/AVD đúng D:\Android. Mỗi PowerShell command build/emulator đặt env **trong process đó**, không sửa global/restartVSCode.
-- `gradlew.bat --version` xác nhận Gradle9.8.2, LauncherJVM25.0.5.0.3, DaemonJVMresolvedjdk25.0.5.0.3. Build scripts plugin9.4.1, compile37.2/target37/min21; NDK30.0.16248370/CMake4.1.2/BT37.0.0 source.properties xác nhận. Không nâng versions/dependencies.
-- Android CLI `--help/info sdk/sdk list`, ADB37.0.1 và Emulator37.2.13 `-version` chạy được. Androiddocs search/fetch dùng KB hiện có cho instrumentation/insets; không càiSDK/image.
+- Process agent còn JAVA_HOME cũ `C:\Program Files\Java\jdk-25` không tồn tại và thiếu ANDROID_HOME/ANDROID_AVD_HOME; Machine JAVA_HOME đúng `C:\Program Files\Java\latest\jdk-25`, User SDK/AVD đúng D:\Android. Mỗi lệnh PowerShell build/emulator đặt biến môi trường **trong process đó**, không sửa toàn cục/khởi động lại VS Code.
+- `gradlew.bat --version` xác nhận Gradle 9.8.2, Launcher JVM 25.0.5.0.3, Daemon JVM dùng resolved jdk 25.0.5.0.3. Build scripts dùng plugin 9.4.1, compile 37.2/target 37/min 21; source.properties xác nhận NDK 30.0.16248370/CMake 4.1.2/BT 37.0.0. Không nâng phiên bản/dependencies.
+- Android CLI `--help/info sdk/sdk list`, ADB 37.0.1 và Emulator 37.2.13 `-version` chạy được. Android docs search/fetch dùng Knowledge Base (bộ tài liệu tra cứu) hiện có cho instrumentation/insets; không cài SDK/image.
 
 ### AVD thử nghiệm đã được phê duyệt
 
@@ -63,57 +73,57 @@ Google AGP9.5 compatibility: Gradle min9.6.0, JDK min17, API max37; default NDK2
 |---|---|
 | AVD |`TBS5530_Runtime_API37`, tạo riêng qua avdmanager từ image đã cài |
 | Đường dẫn |`D:\Android\AVD\TBS5530_Runtime_API37.avd`; không chạm AVD khác |
-| Image |`system-images;android-37.0;google_apis;x86_64`; source.properties revision7 tại kiểm tra (catalog CLI trước đó báo8, ưu tiên metadata local và runtime) |
+| Image |`system-images;android-37.0;google_apis;x86_64`; source.properties revision 7 tại thời điểm kiểm tra (catalog CLI trước đó báo 8, ưu tiên metadata local và runtime) |
 | Profile |`medium_phone`; không cấu hình lại OS/hypervisor |
-| Emulator runtime |Android17, SDK37, ABIx86_64, serial thử nghiệm emulator-5554 |
-| Page size |`adb ... shell getconf PAGE_SIZE` =4096, **không phải16KiB** |
+| Emulator runtime |Android 17, SDK 37, ABI x86_64, serial thử nghiệm emulator-5554 |
+| Page size |`adb ... shell getconf PAGE_SIZE` = 4096, **không phải 16 KiB** |
 | USB Host |pm list features không có usb.host; không có tuner chuyển vào emulator |
 | Startup flags |`-avd TBS5530_Runtime_API37 -port 5554 -no-snapshot -no-boot-anim -no-audio -no-window -gpu swiftshader_indirect` |
-| UI automation |ADB MCP qua Proxy: list_avds/describe_ui/screenshot/tap; serial luôn explicit; direct ADB cho install/am/dumpsys/logcat và Gradle instrumentation |
+| UI automation |ADB MCP qua Proxy: list_avds/describe_ui/screenshot/tap; luôn chỉ định serial; dùng ADB trực tiếp cho install/am/dumpsys/logcat và Gradle instrumentation |
 
-Ban đầu CLI/ADB/MCP đều không thấy AVD/device; sau user approval tạo AVD bằng avdmanager vì AndroidCLIcreate chỉ nhận profile, không có chọn chính xác image/path/name. `android emulator list` không in mục ở lần đầu nhưng emulator -list-avds và MCP sau đó thấy tên; không giả định output rỗng là image thiếu. Không download system image mới. AVDdata dùng mặc định profile, không wipe; sau test gửi `adb -s emulator-5554 emu kill` chỉ đúng AVD này, không xóa file/dữ liệu.
+Ban đầu CLI/ADB/MCP đều không thấy AVD/device; sau khi người dùng phê duyệt, đã tạo AVD bằng avdmanager vì Android CLI create chỉ nhận profile, không cho chọn chính xác image/path/name. `android emulator list` không in mục ở lần đầu nhưng emulator -list-avds và MCP sau đó thấy tên; không giả định output rỗng nghĩa là thiếu image. Không tải system image mới. Dữ liệu AVD dùng mặc định của profile, không wipe; sau kiểm thử gửi `adb -s emulator-5554 emu kill` chỉ tới đúng AVD này, không xóa file/dữ liệu.
 
-**SystemUI caveat:** firstboot có hộp `System UI isn't responding`; screenshot/hierarchy xác định package com.android.systemui, chọn Wait, overlay biến mất và app test tiếp. Không gộp lỗi này thành app ANR hoặc bỏ qua trong báo cáo. Runtime app no-tuner không yêu cầu storage permissions; dumpsyspackage READ/WRITE_EXTERNAL_STORAGE=false nhưng Welcome/Diagnostic/chooser vẫn chạy; foregroundpermissions khai báo/granted, DvbService chưa active.
+**Lưu ý SystemUI:** lần khởi động đầu có hộp `System UI isn't responding`; screenshot/hierarchy xác định package com.android.systemui, đã chọn Wait, lớp phủ biến mất và tiếp tục kiểm thử app. Không gộp lỗi này thành app ANR hoặc bỏ qua trong báo cáo. Runtime app không tuner không yêu cầu quyền lưu trữ; dumpsys package cho thấy READ/WRITE_EXTERNAL_STORAGE=false nhưng Welcome/Diagnostic/chooser vẫn chạy; quyền foreground đã khai báo/được cấp, DvbService chưa hoạt động.
 
-**Evidence ngoài Git:** session files/phase-1-1 chứa before/after screenshots, no-tuner screenshot, instrumentation-results.xml và app-logcat-filtered.txt. Không commit raw Logcat/system UI/AVD state. APKdebug mới SHA2568B4E47A9E60D6153CC3B97F244C45771AD0108BA0C1CA785F72332DA31FE38F6; testAPK F85C7D2ADE771570018623D4BD9163AB358D9B4A2530697FEA2F8D484FAB9872.
+**Bằng chứng ngoài Git:** session files/phase-1-1 chứa screenshot trước/sau, screenshot không tuner, instrumentation-results.xml và app-logcat-filtered.txt. Không commit Logcat thô/system UI/trạng thái AVD. APK debug mới có SHA256 8B4E47A9E60D6153CC3B97F244C45771AD0108BA0C1CA785F72332DA31FE38F6; test APK F85C7D2ADE771570018623D4BD9163AB358D9B4A2530697FEA2F8D484FAB9872.
 
-## 2026-11-02 — Toolchain migration thực trên JDK25
+## 2026-11-02 — Nâng toolchain thực trên JDK 25
 
-**Host:** Windows10.0.19045 / PowerShell7.6.9; nhánh `chore/modernize-android-build`, HEAD nền `e4c13a5b86ad5ef9be887df58226046dcb42dcd5`, thay đổi chưa commit. Người dùng cho nâng stable mới nhất nhưng xác nhận giữ minSdk21 và references read-only.
+**Host:** Windows 10.0.19045 / PowerShell 7.6.9; nhánh `chore/modernize-android-build`, HEAD nền `e4c13a5b86ad5ef9be887df58226046dcb42dcd5`, thay đổi chưa commit. Người dùng cho nâng bản stable mới nhất nhưng xác nhận giữ minSdk 21 và references read-only.
 
 | Thành phần | Phiên bản cấu hình/kiểm chứng mới |
 |---|---|
-| JDK chạy wrapper/daemon/compiler | Oracle25.0.5.0.3; JAVA_HOME Machine hợp lệ `C:\Program Files\Java\latest\jdk-25`, resolved daemon `jdk-25.0.5.0.3` |
-| Gradle |9.8.2; wrapper --version PASS trên JVM25; regenerated scripts/JAR bằng wrapper task chính thức |
-| AGP |9.4.1, plugin resolve/configure và debug build đã chạy |
-| SDK |compile37.2 (`minorApiLevel=2`), target37, min21 |
-| Build-Tools |37.0.0, đọc source.properties xác nhận |
-| NDK |30.0.16248370 / r30; meta/platforms.json min21/max37; build debug4ABIs đã chạy |
-| CMake |4.1.2 từ Android SDK; CMakeLists minimum3.22.1 để không dùng policy cũ bị CMake4 bỏ |
-| Java source/target |1.8 (không25); javac25 báo obsolete warning, chưa ẩn warning |
-| AppCompat / Material |1.7.1 /1.13.0: giữ API21; latest1.8.0/1.14.0 yêu cầu23 nên không chọn |
-| Unit tests |JUnit4.13.2, Mockito5.24.0; bỏ Mockito1/mockito-all/PowerMock |
-| Instrumentation dependencies |AndroidX test-ext1.3.0 / Espresso3.7.0, latest stable còn API21 |
-| Broadcast dependency |localbroadcastmanager1.1.0 khai báo trực tiếp trong dvbservice thay dựa transitive |
+| JDK chạy wrapper/daemon/compiler | Oracle 25.0.5.0.3; JAVA_HOME Machine hợp lệ `C:\Program Files\Java\latest\jdk-25`, resolved daemon `jdk-25.0.5.0.3` |
+| Gradle |9.8.2; wrapper --version PASS trên JVM 25; tạo lại scripts/JAR bằng wrapper task chính thức |
+| AGP |9.4.1, đã chạy plugin resolve/configure và build debug |
+| SDK |compile 37.2 (`minorApiLevel=2`), target 37, min 21 |
+| Build-Tools |37.0.0, đọc source.properties để xác nhận |
+| NDK |30.0.16248370 / r30; meta/platforms.json min 21/max 37; đã build debug cho 4 ABI |
+| CMake |4.1.2 từ Android SDK; CMakeLists minimum 3.22.1 để không dùng policy cũ bị CMake 4 bỏ |
+| Java source/target |1.8 (không phải 25); javac 25 báo obsolete warning, chưa ẩn cảnh báo |
+| AppCompat / Material |1.7.1 / 1.13.0: giữ API 21; bản latest 1.8.0/1.14.0 yêu cầu 23 nên không chọn |
+| Unit tests |JUnit 4.13.2, Mockito 5.24.0; bỏ Mockito 1/mockito-all/PowerMock |
+| Instrumentation dependencies |AndroidX test-ext 1.3.0 / Espresso 3.7.0, bản stable mới nhất còn hỗ trợ API 21 |
+| Broadcast dependency |localbroadcastmanager 1.1.0 khai báo trực tiếp trong dvbservice thay vì dựa vào dependency bắc cầu |
 
-Lệnh nào chạy Gradle cũng set JAVA_HOME từ Machine và ANDROID_HOME=D:\Android\Sdk/ANDROID_AVD_HOME=D:\Android\AVD **trong process đó**, không thay registry/global PATH. VS Code task assembleDebug cập nhật cùng cơ chế; runTask không tìm thấy task trong host nên terminal chạy cùng command.
+Mọi lệnh chạy Gradle đều đặt JAVA_HOME từ Machine và ANDROID_HOME=D:\Android\Sdk/ANDROID_AVD_HOME=D:\Android\AVD **trong process đó**, không thay registry/PATH toàn cục. VS Code task assembleDebug cập nhật cùng cơ chế; runTask không tìm thấy task trong host nên terminal chạy cùng lệnh.
 
-**Cài package có giới hạn:** sau manifest build thay đổi và validation `gradlew help` FAIL vì NDK chưa cấu hình, chạy `android --sdk=D:\Android\Sdk sdk install <package>` cho đúng4package: ndk/30.0.16248370, cmake/4.1.2, build-tools/37.0.0, platforms/android-37.2; tất cả exit0 và source.properties được đọc lại. Không update toàn SDK, không tải emulator/system images/firmware, không tạo SDK thứ hai. `android.builder.sdkDownload=false` ngăn build tự cài SDK khác.
+**Cài package có giới hạn:** sau khi thay đổi khai báo build và bước xác minh `gradlew help` FAIL vì NDK chưa cấu hình, đã chạy `android --sdk=D:\Android\Sdk sdk install <package>` cho đúng 4 package: ndk/30.0.16248370, cmake/4.1.2, build-tools/37.0.0, platforms/android-37.2; tất cả exit 0 và source.properties được đọc lại. Không update toàn SDK, không tải emulator/system images/firmware, không tạo SDK thứ hai. `android.builder.sdkDownload=false` ngăn build tự cài SDK khác.
 
-**Wrapper integrity:** distributionSha256Sum9.8.2=`21bd5da2de49b642904077f38c0efdc7778e92b3ed0889392dca61b97e389607`, lấy từ official downloads.gradle.org. Cài binary-only distribution thay vì all. Không chép JDK path cá nhân vào build scripts. Package37.2 có metadata Platform.Version placeholder `${PLATFORM_VERSION}` nhưng AndroidVersion.ApiLevel37.2/PreviewSdkInt0; compile dùng được, không suy diễn tên Android từ placeholder.
+**Tính toàn vẹn wrapper:** distributionSha256Sum của 9.8.2=`21bd5da2de49b642904077f38c0efdc7778e92b3ed0889392dca61b97e389607`, lấy từ nguồn chính thức downloads.gradle.org. Cài binary-only distribution thay vì all. Không chép JDK path cá nhân vào build scripts. Package 37.2 có metadata Platform.Version dùng placeholder `${PLATFORM_VERSION}` nhưng AndroidVersion.ApiLevel 37.2/PreviewSdkInt 0; compile dùng được, không suy diễn tên Android từ placeholder.
 
-**Không đổi hardware/reference ownership:** không chạy script Apply khôi phục TBS, không tải572 ancestor objects. C/Go vẫn sạch, SHA cả3refs giữ nguyên, TBS vẫn81399D. Mọi USB/lock/TS thật và runtime Android/AVD vẫn NOT RUN. Kết quả build/test cuối xem TEST-MATRIX/WORKLOG, không dùng snapshot Phase0 bên dưới làm hiện trạng mới.
+**Không đổi quyền sở hữu hardware/reference:** không chạy script Apply khôi phục TBS, không tải 572 ancestor objects. C/Go vẫn sạch, SHA cả 3 reference giữ nguyên, TBS vẫn có 81399 D. Mọi USB/lock/TS thật và runtime Android/AVD vẫn NOT RUN. Kết quả build/test cuối xem TEST-MATRIX/WORKLOG, không dùng snapshot Phase 0 bên dưới làm hiện trạng mới.
 
 ## 2026-11-02 12:52 +07 — Kiểm tra lại JAVA_HOME sau khi người dùng sửa
 
 Windows PowerShell / main HEAD `e4c13a5b86ad5ef9be887df58226046dcb42dcd5`.
 
-- **Machine JAVA_HOME đã đúng:** `C:\Program Files\Java\latest\jdk-25`; `Test-Path` thư mục và `bin\java.exe` đều true; chạy executable này trả Java `25.0.5.0.3`, exit0.
+- **Machine JAVA_HOME đã đúng:** `C:\Program Files\Java\latest\jdk-25`; `Test-Path` thư mục và `bin\java.exe` đều true; chạy executable này trả Java `25.0.5.0.3`, exit 0.
 - **Process agent vẫn giữ giá trị cũ:** `C:\Program Files\Java\jdk-25`, không tồn tại; User JAVA_HOME không có. Đây là môi trường được tiến trình cha truyền lại, không phải người dùng sửa thất bại.
 - Đã kiểm tra trong một PowerShell child bằng `$env:JAVA_HOME=[Environment]::GetEnvironmentVariable('JAVA_HOME','Machine')`, rồi chạy `bin\java.exe -version`: PASS. Thay đổi chỉ tồn tại trong child đó, không sửa User/Machine hoặc tiến trình VS Code đang chạy.
-- Các lệnh sau nếu cần JDK này phải đọc lại Machine JAVA_HOME trong chính process chạy lệnh; hoặc người dùng khởi động lại VS Code để nhận environment mới. **Không tự restart VS Code hoặc thay global settings.**
+- Các lệnh sau nếu cần JDK này phải đọc lại Machine JAVA_HOME trong chính process chạy lệnh; hoặc người dùng khởi động lại VS Code để nhận môi trường mới. **Không tự khởi động lại VS Code hoặc thay cài đặt toàn cục.**
 - ANDROID_HOME/ANDROID_AVD_HOME vẫn thiếu Process nhưng đúng ở User (`D:\Android\Sdk`, `D:\Android\AVD`). Chưa đổi biến.
-- **Giới hạn vẫn còn:** JDK25 hợp lệ không làm Gradle8.7 tương thích. Chưa chạy wrapper/build; đề xuất baseline JDK17 vẫn giữ nguyên.
+- **Giới hạn vẫn còn:** JDK 25 hợp lệ không làm Gradle 8.7 tương thích. Chưa chạy wrapper/build; đề xuất baseline JDK 17 vẫn giữ nguyên.
 
 ## 2026-11-02 — Kiểm chứng trực tiếp trong Phase 0
 
@@ -178,18 +188,18 @@ Có system image **không** có nghĩa đã tạo/boot AVD. Lần thăm dò `emu
 - Truy vấn lịch sử phiên 7 ngày theo identity GitHub dự án không trả dòng nào. Tài liệu trên đĩa là nguồn lịch sử chính.
 - Chưa kiểm tra `chrome-devtools`: không cần browser/UI cho audit source. Không sửa MCP config hoặc global settings.
 
-## Historical inventory — observed 2026-11-01 (giữ nguyên)
+## Kiểm kê lịch sử — quan sát ngày 2026-11-01 (giữ nguyên bằng chứng)
 
 Phần dưới là ghi chép người dùng cung cấp trước Phase 0, không thay cho các kết quả kiểm chứng trực tiếp ở trên.
 
 ## Windows / Android
 
-| Item | Observed |
+| Hạng mục | Quan sát |
 |---|---|
-| Windows host | Windows 10 `10.0.19045` (per ADB output; verify this remains current) |
-| Primary project root | `D:\API\TBS5530-DVB-Android\AndroidDvbDriver` (planned; check actual clone) |
-| SDK root | `D:\Android\Sdk` |
-| Android CLI | Official Google `android` CLI; version NOT captured (run `android -V`) |
+| Windows host | Windows 10 `10.0.19045` (theo output ADB; cần kiểm tra lại hiện trạng) |
+| Root dự án chính | `D:\API\TBS5530-DVB-Android\AndroidDvbDriver` (dự kiến; cần kiểm tra clone thực) |
+| Root SDK | `D:\Android\Sdk` |
+| Android CLI | Google `android` CLI chính thức; chưa ghi phiên bản (chạy `android -V`) |
 | Java | Oracle JDK `25.0.5` LTS; `JAVA_HOME=C:\Program Files\Java\jdk-25` |
 | Build-Tools | `36.0.0` |
 | SDK platforms | `android-34`, `android-37.0` |
@@ -197,34 +207,34 @@ Phần dưới là ghi chép người dùng cung cấp trước Phase 0, không 
 | CMake | `3.22.1` |
 | Platform-Tools / ADB | `37.0.1` |
 | cmdline-tools | `23.0.0` (`latest`) |
-| Emulator | `37.2.13`; WHPX reported installed and usable; no actual AVD boot demonstrated |
+| Emulator | `37.2.13`; WHPX được báo đã cài và dùng được; chưa có bằng chứng AVD khởi động thực |
 | Emulator images | `android-34/google-tv/x86`; `android-37.0/google_apis/x86_64` |
 
-Use `android --sdk=D:\Android\Sdk sdk list` for inventory; `android info sdk` and `android -V` for active SDK and CLI version. Do not assume packages are the latest based solely on folder names. SDK updates require approval.
+Dùng `android --sdk=D:\Android\Sdk sdk list` để kiểm kê; dùng `android info sdk` và `android -V` để kiểm tra SDK đang dùng và phiên bản CLI. Không mặc định package là mới nhất chỉ từ tên thư mục. Cập nhật SDK cần được phê duyệt.
 
 ## WSL2 / USB
 
-| Item | Observed |
+| Hạng mục | Quan sát |
 |---|---|
 | Distro | `Ubuntu-22.04`, WSL2 |
 | Kernel | `6.18.54.1-microsoft-standard-WSL2` |
-| USB/IP | `usbipd-win`, TBS device BUSID `6-2` during test; BUSID may change |
+| USB/IP | `usbipd-win`, thiết bị TBS có BUSID `6-2` lúc kiểm thử; BUSID có thể thay đổi |
 | USB ID | `734c:5530` |
 | Configuration / Interface | `1` / `0` |
-| Bulk input endpoints | `0x82`, `0x81`; each 512-byte max packet size |
-| Speed | USB 2.0 High Speed / 480 Mbps |
-| USB enumeration / interface claim | PASS on WSL2/PyUSB; no DVB driver attached |
-| `/dev/dvb` | Not present during WSL test, expected without DVB driver |
+| Bulk input endpoints | `0x82`, `0x81`; mỗi endpoint có max packet size 512 byte |
+| Tốc độ | USB 2.0 High Speed / 480 Mbps |
+| USB enumeration / interface claim | PASS trên WSL2/PyUSB; không có DVB driver gắn với thiết bị |
+| `/dev/dvb` | Không tồn tại trong lần kiểm thử WSL, phù hợp khi không có DVB driver |
 
-The same project files are available via `/mnt/d/API/TBS5530-DVB-Android/AndroidDvbDriver`. The reference checkouts under sibling `references/` should remain read-only.
+Cùng các file dự án có thể được truy cập qua `/mnt/d/API/TBS5530-DVB-Android/AndroidDvbDriver`. Các checkout tham khảo dưới thư mục cùng cấp `references/` phải giữ read-only.
 
-## Tool boundaries
+## Ranh giới sử dụng công cụ
 
-- Windows PowerShell: Android builds with `gradlew.bat`, Android CLI, ADB, Git.
-- WSL2: `lsusb`, PyUSB, Linux-only diagnostics. Invoke from Windows with `wsl.exe -d Ubuntu-22.04 -- ...`.
-- No second Android SDK inside WSL2. No Linux kernel driver/firmware flash required for initial Android build.
-- Active TBS5530 USB passthrough prevents simultaneous use with Windows' BDA driver.
+- Windows PowerShell: build Android bằng `gradlew.bat`, Android CLI, ADB, Git.
+- WSL2: `lsusb`, PyUSB, chẩn đoán chỉ dành cho Linux. Gọi từ Windows bằng `wsl.exe -d Ubuntu-22.04 -- ...`.
+- Không có Android SDK thứ hai trong WSL2. Build Android ban đầu không cần Linux kernel driver/nạp firmware.
+- Khi TBS5530 đang được chuyển tiếp USB, không thể đồng thời dùng driver BDA trên Windows.
 
-## Baseline project (source inspection only, not local build verification)
+## Baseline dự án (chỉ đọc source, chưa xác minh build local)
 
-Original upstream AndroidDvbDriver uses AGP `8.5.2`, Gradle wrapper `8.7`, `compileSdk 34`; JDK 25 must not be assumed compatible with this old wrapper. Modernization is a separate tracked step after source baseline and dependency audit. Never claim `assembleDebug` passes without executing it locally.
+AndroidDvbDriver upstream gốc dùng AGP `8.5.2`, Gradle wrapper `8.7`, `compileSdk 34`; không được mặc định JDK 25 tương thích với wrapper cũ này. Hiện đại hóa là bước riêng được theo dõi sau khi chốt baseline source và kiểm kê dependencies. Không khẳng định `assembleDebug` đạt nếu chưa thực thi trên máy local.
