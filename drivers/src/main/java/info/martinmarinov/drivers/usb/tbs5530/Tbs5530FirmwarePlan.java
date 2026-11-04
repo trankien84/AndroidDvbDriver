@@ -10,8 +10,8 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Immutable, offline description of a synthetic firmware transfer. This class performs no IO.
- * A policy and digest for synthetic data do not authorize use of a real firmware image.
+ * Immutable, offline description of a firmware transfer. This class performs no IO.
+ * A matching policy and digest do not authorize hardware execution or prove reset-register safety.
  *
  * Protocol provenance: official linux_media 2ce787de9f6e81b4294692a45de15596ae2e1322,
  * drivers/media/usb/dvb-usb/tbs5530.c, tbs5530_load_firmware; cxd28xx

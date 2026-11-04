@@ -1,5 +1,24 @@
 # Port TBS5530 sang Android — trạng thái hiện tại
 
+## Checkpoint phát hành Phase 2.7 — 2026-11-04
+
+- Người dùng yêu cầu commit và push toàn bộ thay đổi Phase 2.7 cùng đợt sửa thứ tự, cách diễn đạt tài liệu lên `origin/chore/modernize-android-build`. Preflight xác nhận HEAD và live origin cùng `f03e092702edac5134efea633d8a30a51e1716e4`, stage trống, đúng 18 file; không đưa firmware, APK, logs hoặc định danh thiết bị vào Git.
+- Message dự kiến: `feat: add offline TBS5530 FX2 bootstrap validation`. Hash và kết quả push được kiểm từ Git sau thao tác; các ghi chú “chưa stage/commit/push” bên dưới mô tả trạng thái lịch sử trước checkpoint này.
+- Tác vụ Git không chạy lại build/tests hoặc thao tác USB. Bằng chứng gần nhất vẫn là 218 phương thức JVM, 49 instrumentation tests, build debug/release và lint 0 errors/9 warnings của Phase 2.7. Upload phần cứng vẫn BLOCKED/NOT RUN; commit/push không phải phê duyệt nạp firmware.
+
+## Phase 2.7 — Hoàn tất kiểm thử offline; chưa cho phép nạp firmware, 2026-11-04
+
+**Đã đối chiếu mô tả USB và ảnh firmware TBS chính hãng; chưa đủ cơ sở nạp lên phần cứng.** Nhánh `chore/modernize-android-build`, HEAD và remote-tracking cùng ở `f03e092702edac5134efea633d8a30a51e1716e4`, là checkpoint Phase 2.6 đã push. Thay đổi Phase 2.7 chưa stage/commit/push. Ba repository tham khảo giữ đúng SHA đã khóa và không có thay đổi.
+
+- **FX2:** bản chụp mô tả USB dài 189 byte của Phase 2.6 khớp mục 3.3 và Appendix B trong TRM v2.2, gồm 4 alternate settings và 18 endpoint. Fingerprint (bộ đặc điểm dùng để đối chiếu thiết bị) trả `MATCH` → `BOOTSTRAP_CANDIDATE`. Kết quả này không chứng minh EEPROM dùng C0, CPU đang chạy, trạng thái RENUM, tốc độ thực hoặc alternate đang active. Không có endpoint `0x82`; giữ nguyên điều kiện kiểm tra trước khi dùng thiết bị, không chọn `0x88` làm TS.
+- **Firmware:** archive chính hãng v1.0 qua HTTPS có `dvb-usb-id5530.fw`, dài 8192 byte, SHA-256 `b97cf208bb586f706b26aa5450de6bb97375a3e3eabe833cddb0ae3a4f69d0dc`. Ảnh tuyến tính tại vùng 0000–1FFF phù hợp với loader và Main RAM. Chưa có quyền tái phân phối rõ ràng; file nhị phân chỉ lưu ngoài Git/APK. Nguồn, hash và giấy phép được ghi tại [RESEARCH.md](RESEARCH.md).
+- **Điểm chặn quyết định:** FX2 TRM xác định CPUCS tại E600, nhưng không xác nhận 7F92 là địa chỉ tương đương hoặc có thể ghi an toàn. Source TBS/C/Go dùng cả hai; chưa xác minh cách ánh xạ địa chỉ trên chip/board thực và phương án khôi phục. `hardwareUploadAllowed=false`; **chưa hỏi và chưa nhận phê duyệt nạp firmware**. Firmware/CPU/vendor/I²C/TS thật đều `NOT RUN`. Không tạo bộ nạp Android hoặc giao diện upload để tránh kích hoạt nhầm.
+- **Mã nguồn:** thêm fingerprint, kiểm tra firmware và dry-run (chạy thử không dùng USB thật) chỉ dành cho debug. Nhận connection EP0 mà không claim interface qua cùng Binding/Coordinator/Session/Transport; giữ số phiên gắn thiết bị, kiểm quyền và định danh ở mỗi transfer, vô hiệu hóa và dọn tài nguyên trì hoãn. Facade bootstrap mặc định từ chối; profile `0x82`, claim, registry và XML của đường operational giữ nguyên. Hoàn tất trên fake chỉ là `TRANSITIONING`, không phải `READY`. [ADR-018](DECISIONS.md) ghi ranh giới và điều kiện mở lại.
+- **Kết quả mới:** 218 phương thức kiểm thử JVM (204 + 1 + 13), 49 instrumentation tests (17 + 30 + 2) trên OnePlus GM1900/API 30; không có failure/error/skipped. Build debug/release và lint đạt; lint có 0 errors, 9 warnings. Kiểm Java 8, bytecode major 52 và minSdk 21; release không chứa 9 nhóm class debug. Lượt mã cuối mất 7 phút 55 giây, gồm 419 tasks. Kiểm tra ảnh thật offline đạt `PASS`, không gọi USB thật. Xem [TEST-MATRIX.md](TEST-MATRIX.md) và [WORKLOG.md](WORKLOG.md).
+- **Bảo vệ Wireless ADB:** đã dừng một lần khi target biến mất. Chỉ tiếp tục sau xác nhận của người dùng và kiểm lại serial, model, API, USB Host, ứng dụng và tài nguyên đang chờ xử lý. Không tự reconnect/pair hoặc đổi emulator. Cuối phiên, debug khởi động lạnh chỉ đọc metadata: VID:PID `734c:5530`, không có `0x82`, permission=false, generation=0, state=DETECTED, pending/cleanup=false và open/claim/close đều bằng 0. Không lặp lại phép đọc raw descriptors.
+
+**Bước kế tiếp duy nhất:** lấy xác nhận TBS về 7F92, chip và revision của board, ảnh firmware, phương án khôi phục và quyền sử dụng/phân phối. Sau đó mới rà soát lại kế hoạch và điều kiện trước một đề nghị nạp firmware riêng. Không tự chuyển sang CXD2878/tuning/MPEG-TS. Các mục Phase 2.6/2.5 bên dưới là lịch sử, không được đổi thành kết quả `PASS` mới.
+
 ## Checkpoint phát hành Phase 2.6 — 2026-11-04 00:18 +07
 
 - Người dùng yêu cầu commit và push 16 file Phase 2.6 trên nhánh `chore/modernize-android-build`. Preflight xác nhận HEAD và live origin cùng `df076d28dd8100d5caa363f1d866a274e3f2b636`, stage trống; không đưa JSON đính kèm ngoài repository, APK, raw logs hoặc firmware vào Git.

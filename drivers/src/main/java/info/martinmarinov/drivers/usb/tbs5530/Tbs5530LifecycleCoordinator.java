@@ -141,6 +141,11 @@ public final class Tbs5530LifecycleCoordinator implements AutoCloseable {
 
     public boolean permissionResult(Request request, AttachmentIdentity identity, boolean granted, boolean acquire)
             throws IOException {
+        return permissionResult(request, identity, granted, acquire, true);
+    }
+
+    boolean permissionResult(Request request, AttachmentIdentity identity, boolean granted,
+                             boolean acquire, boolean claimInterface) throws IOException {
         synchronized (session) {
             if (!matches(request) || !request.identity.equals(identity) || !request.pending
                     || session.getState() != Tbs5530Session.State.WAIT_PERMISSION) return false;
@@ -149,11 +154,11 @@ public final class Tbs5530LifecycleCoordinator implements AutoCloseable {
             if (!granted || !acquire) return true;
             acquiring++;
         }
-        acquire(request);
+        acquire(request, claimInterface);
         return true;
     }
 
-    private void acquire(Request request) throws IOException {
+    private void acquire(Request request, boolean claimInterface) throws IOException {
         Lease local = null;
         Throwable failure = null;
         try {
@@ -162,17 +167,19 @@ public final class Tbs5530LifecycleCoordinator implements AutoCloseable {
             }
             Connection connection = connections.open(request.identity);
             if (connection == null) throw new IOException("Connection port returned no connection");
-            local = new Lease(connection);
+            local = new Lease(connection, !claimInterface);
             synchronized (session) {
                 if (!canConnect(request)) return;
             }
-            connection.claim(local.claim);
-            if (!local.claim.claimed.get()) throw new IOException("Claim did not confirm ownership");
+            if (claimInterface) {
+                connection.claim(local.claim);
+                if (!local.claim.claimed.get()) throw new IOException("Claim did not confirm ownership");
+            }
             synchronized (session) {
                 if (canConnect(request) && session.connected(request.token, local)) {
                     owned = local;
                     local = null;
-                    session.interfaceClaimed(request.token);
+                    if (claimInterface) session.interfaceClaimed(request.token);
                 }
             }
         } catch (IOException | RuntimeException e) {
@@ -204,6 +211,16 @@ public final class Tbs5530LifecycleCoordinator implements AutoCloseable {
             }
             session.requireOwned(request.token, owned);
             return new Tbs5530ControlTransport(session, request.token, owned);
+        }
+    }
+
+    Tbs5530ControlIo bootstrapControlIo(Request request) throws IOException {
+        synchronized (session) {
+            if (!matches(request) || owned == null || !owned.bootstrap) {
+                throw new IOException("No bootstrap connection for request");
+            }
+            session.requireConnectionOwned(request.token, owned);
+            return new Tbs5530ControlTransport(session, request.token, owned, false);
         }
     }
 
@@ -278,7 +295,7 @@ public final class Tbs5530LifecycleCoordinator implements AutoCloseable {
         @Override public void requireControlWorker() throws IOException { connection.requireControlWorker(); }
         @Override public int controlTransfer(int requestType, int request, int value, int index,
                                              byte[] buffer, int offset, int length, int timeoutMillis) throws IOException {
-            if (closed.get() || !claim.claimed.get()) throw new IOException("Managed connection is closed or unclaimed");
+            if (closed.get() || !bootstrap && !claim.claimed.get()) throw new IOException("Managed connection is closed or unclaimed");
             return connection.controlTransfer(requestType, request, value, index, buffer, offset, length, timeoutMillis);
         }
         final Connection connection;
@@ -286,7 +303,12 @@ public final class Tbs5530LifecycleCoordinator implements AutoCloseable {
         final AtomicBoolean closed = new AtomicBoolean();
         final AtomicBoolean cancelled = new AtomicBoolean();
 
-        Lease(Connection connection) { this.connection = connection; }
+        final boolean bootstrap;
+
+        Lease(Connection connection, boolean bootstrap) {
+            this.connection = connection;
+            this.bootstrap = bootstrap;
+        }
 
         @Override public void cancel() throws IOException {
             if (cancelled.compareAndSet(false, true)) connection.cancel();

@@ -1,5 +1,32 @@
 # TBS5530 test matrix
 
+## 2026-11-04 — Phase 2.7: bootstrap offline, hardware upload BLOCKED
+
+Baseline Phase 2.6 đã push `f03e092702edac5134efea633d8a30a51e1716e4`, nhánh `chore/modernize-android-build`, cộng working tree chưa commit. Không dùng kết quả lịch sử 199/47 làm `PASS` mới. Toolchain khai báo và đã kiểm local giữ AGP 9.5.0, Gradle 9.8.2, JDK 25.0.5.0.3, compileSdk 37.2, targetSdk 37, minSdk 21, Java 8, NDK 30 và CMake 4.1.2. Runtime là GM1900/API 30/arm64; chỉ dùng serial Wireless TCP đã chọn tường minh.
+
+| Gate | Kết quả mới | Bằng chứng / giới hạn |
+|---|---|---|
+| Wireless guard | PASS theo phạm vi; 1 lần STOP | Kiểm mỗi 10 giây; phát hiện target mất khi sửa core và dừng mọi việc. Sau xác nhận của người dùng mới tra cổng và kiểm lại model/API/USB Host/ứng dụng/tài nguyên đang chờ. Không pair/reconnect tự động hoặc dùng USB handle cũ |
+| FX2 fingerprint | UNIT-TESTED: 6 methods PASS | Dựng lại 189 byte từ trường số trong hồ sơ; khớp default HS, thay từng nhóm trường, kiểm PARTIAL/NO_MATCH, operational với `0x82` và unknown với `0x88`, mọi điểm cắt dữ liệu; không phụ thuộc VID/PID/bcdDevice/model/API |
+| Bootstrap dry-run | UNIT-TESTED: 13 methods PASS | Fake EP0 kiểm type=40, request=A0, index=0, value/payload, timeout=2000 ms, thứ tự và delay=100 ms; kích thước 1/63/64/65/128/8192 byte. Không claim/release/retry hoặc ghi khắc phục. Bao phủ lỗi từng bước ghi, short/negative/timeout/IO/cancel, quyền/định danh/detach/ID tái dùng/epoch, I/O đang chạy, cleanup trì hoãn và cleanup lỗi |
+| Firmware policy regression | PASS toàn suite cũ | `Tbs5530FirmwarePlanTest` vẫn kiểm null/empty/hash/size/ranges, địa chỉ dành riêng 7F92/E600, tràn địa chỉ và khối cuối; không nới vùng cho phép theo giới hạn E200 của Go |
+| Ảnh TBS thật, chỉ offline | PASS validation/planning | 8192 byte, hash `b97cf208bb586f706b26aa5450de6bb97375a3e3eabe833cddb0ae3a4f69d0dc`; chương trình Java xác nhận 133 bước = 132 writes + delay, gồm 128 × 64 byte DATA tại 0000–1FFF. Fake port kiểm từng byte/request/thứ tự trong 132 calls, 1 open/1 close/0 claim; sửa byte cuối bị từ chối; 0 calls tới UsbDeviceConnection |
+| JVM toàn bộ | PASS: 218 methods | drivers 204, usbxfer 1, dvbservice 13; 0 failures/errors/skipped. Riêng TBS có 187 methods. Ba task `testDebugUnitTest --rerun` chạy trong lượt cuối |
+| Instrumentation app | PASS: 17 tests | Diagnostic dùng fake trên GM1900/API 30; không mở tuner |
+| Instrumentation drivers | PASS: 30 tests | 28 tests facade cũ + 2 tests bootstrap isolation mới: production facade từ chối bootstrap trước manager; fake EP0 không claim dùng cùng worker/owner, không có operational stream |
+| Instrumentation native/XML | PASS: 2 tests | Load UsbXfer trên arm64 và kiểm registry/XML tương đương; không gọi native USB ioctl |
+| Tổng instrumentation | PASS: 49 tests | 17 + 30 + 2; 0 failures/errors/skipped. Connected tasks chạy với `--rerun`; đếm từng testsuite/testcase lồng trong XML, không chỉ dựa vào exit 0 |
+| Debug/release APK và lint | PASS trên mã cuối | Lượt cuối mất 7 phút 55 giây, gồm 419 tasks: 86 executed, 333 up-to-date. Lint có 0 Error/0 Fatal/9 Warning; không thêm baseline hoặc suppress |
+| Java 8/minSdk | PASS static | `javac --release 8` biên dịch 13 source core/debug; BootstrapDryRun có bytecode major 52; manifest release dùng minSdk 21/targetSdk 37. Runtime API 21: NOT RUN |
+| Debug/release isolation | PASS static | 9 nhóm class có trong debug, không có trong release; release manifest không có Activity diagnostic. Debug/release chứa 4 ABI native. Không sửa registry/XML/filter production |
+| Metadata OnePlus cuối | RUNTIME-OBSERVED | Cài lại debug sau UTP, cold launch 716 ms. Host=true, VID:PID `734c:5530`, alt 0–3, không có `0x82`; permission=false, generation=0, state=DETECTED, pending/cleanup=false, open/claim/close đều bằng 0 |
+| Raw descriptors mới / alternate đang active / tốc độ | NOT RUN / UNKNOWN | Không lặp raw cycle; dùng snapshot Phase 2.6 đã có. Metadata cuối không chứng minh tốc độ, trạng thái CPU hoặc firmware |
+| Firmware upload/CPU reset/vendor/I²C/LNB/tune/TS | NOT RUN | Điều kiện phần cứng BLOCKED do chưa xác minh 7F92 và phương án khôi phục board; không xin phê duyệt upload khi thiếu điều kiện, không ghi phần cứng |
+| Re-enumeration/descriptors/`0x82`/bridge readiness sau nạp | NOT RUN | Không upload nên không có bằng chứng trước/sau mới hoặc READY; hoàn tất trên fake chỉ là TRANSITIONING |
+| Toolchain inventory script | BLOCKED bởi execution policy | Script chưa ký số bị policy chặn; không bypass/unblock hoặc đổi policy User/Machine. Đọc build/wrapper/source.properties/executables trực tiếp, không đổi package |
+
+Lượt focused có 18 methods `PASS`, debug build mất 1 phút 48 giây. Lượt full đầu có 217 phương thức JVM và 49 instrumentation tests `PASS` trong 7 phút 39 giây, trên mã trước khi bổ sung epoch guard và report. Lượt cuối 218/49 ở bảng trên mới là mã hoàn tất; không gộp lượt đầu thành chứng cứ mã cuối. Giữ các cảnh báo source 8, deprecated API, Unsafe và việc không tương thích Gradle 10; không che cảnh báo. Chi tiết lệnh ở [WORKLOG.md](WORKLOG.md), source/firmware ở [RESEARCH.md](RESEARCH.md), ranh giới sở hữu tài nguyên ở [ADR-018](DECISIONS.md).
+
 ## 2026-11-04 00:06 +07 — Phase 2.6: raw descriptor chỉ đọc, OnePlus/API30
 
 Baseline đã push `df076d28dd8100d5caa363f1d866a274e3f2b636`, nhánh `chore/modernize-android-build`, cộng thay đổi working tree chưa commit. 180/44 của Phase2.5 giữ nguyên lịch sử bên dưới, không chuyển thành kết quả mới. Runtime GM1900/Android11/API30/arm64, Wireless ADB serial TCP tường minh, không emulator.

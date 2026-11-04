@@ -17,11 +17,22 @@ public final class Tbs5530ControlTransport implements Tbs5530ControlIo {
     private final Tbs5530Session session;
     private final long generation;
     private final Connection connection;
+    private final boolean claimedRequired;
 
     Tbs5530ControlTransport(Tbs5530Session session, long generation, Connection connection) {
+        this(session, generation, connection, true);
+    }
+
+    Tbs5530ControlTransport(Tbs5530Session session, long generation, Connection connection, boolean claimedRequired) {
         this.session = Objects.requireNonNull(session);
         this.generation = generation;
         this.connection = Objects.requireNonNull(connection);
+        this.claimedRequired = claimedRequired;
+    }
+
+    private void requireOwner() throws TransferException {
+        if (claimedRequired) session.requireOwned(generation, connection);
+        else session.requireConnectionOwned(generation, connection);
     }
 
     @Override public int controlTransfer(int type, int request, int value, int index,
@@ -35,18 +46,18 @@ public final class Tbs5530ControlTransport implements Tbs5530ControlIo {
         boolean input = (type & 0x80) != 0;
         byte[] scratch = buffer == null ? null : buffer.clone();
         session.transaction(generation, () -> {
-            session.requireOwned(generation, connection);
+            requireOwner();
             try {
                 if (Thread.currentThread().isInterrupted()) throw new InterruptedIOException("Control thread interrupted");
                 int count = connection.controlTransfer(type, request, value, index, scratch, offset, length, timeout);
-                session.requireOwned(generation, connection);
+                requireOwner();
                 if (count < 0 || count > length) {
                     throw new TransferException(FailureKind.IO_FAILURE, "USB control returned " + count + " for " + length);
                 }
                 if (count != length) throw new TransferException(FailureKind.SHORT_TRANSFER,
                         "USB control transferred " + count + " of " + length);
                 if (input && length > 0) synchronized (session) {
-                    session.requireOwned(generation, connection);
+                    requireOwner();
                     System.arraycopy(scratch, offset, buffer, offset, length);
                 }
             } catch (IOException | RuntimeException error) {

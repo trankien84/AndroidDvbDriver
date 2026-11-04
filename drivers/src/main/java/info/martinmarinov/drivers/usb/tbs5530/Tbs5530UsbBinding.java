@@ -37,6 +37,9 @@ public final class Tbs5530UsbBinding implements AutoCloseable {
         Registration requestPermission(Device device, String correlation, PermissionCallback callback) throws IOException;
         Registration listen(Events events) throws IOException;
         Tbs5530LifecycleCoordinator.Connection open(Device device) throws IOException;
+        default Tbs5530LifecycleCoordinator.Connection openBootstrap(Device device) throws IOException {
+            throw new IOException("Bootstrap EP0 connection is disabled");
+        }
     }
     public interface Cancellation { void cancel(); }
     public interface Scheduler { Cancellation schedule(Runnable task, long delayMillis); }
@@ -63,7 +66,7 @@ public final class Tbs5530UsbBinding implements AutoCloseable {
         Registration permission;
         Cancellation deadline;
         long deadlineId;
-        boolean invalid, callbackConsumed, acquiring, permissionOnly;
+        boolean invalid, callbackConsumed, acquiring, permissionOnly, bootstrap;
         Attempt(Device device, long epoch) { this.device = device; this.epoch = epoch; }
     }
 
@@ -87,14 +90,25 @@ public final class Tbs5530UsbBinding implements AutoCloseable {
     public void requestPermissionOnly(Device device) throws IOException { start(device, true); }
 
     private void start(Device device, boolean permissionOnly) throws IOException {
+        start(device, permissionOnly, false);
+    }
+
+    void startBootstrap(Device device) throws IOException { start(device, false, true); }
+
+    private void start(Device device, boolean permissionOnly, boolean bootstrap) throws IOException {
         Objects.requireNonNull(device);
+        if (bootstrap && (device.vendorId != 0x734c || device.productId != 0x5530)) {
+            throw new IllegalArgumentException("Bootstrap requires TBS5530 identity");
+        }
         Attempt attempt;
         synchronized (this) {
             if (closed) throw new IllegalStateException("Binding closed");
             if (jobs != 0 || coordinator.isAcquiring() || session.isCleanupPending()
                     || current != null && !current.invalid) throw new IllegalStateException("Previous attachment is pending");
             if (epoch == Long.MAX_VALUE) throw new IllegalStateException("Attachment epochs exhausted");
-            attempt = new Attempt(device, ++epoch); attempt.permissionOnly = permissionOnly; current = attempt;
+            if (bootstrap && session.getCleanupFailure() != null) throw new IllegalStateException("Previous cleanup failed");
+            attempt = new Attempt(device, ++epoch); attempt.permissionOnly = permissionOnly;
+            attempt.bootstrap = bootstrap; current = attempt;
         }
         try {
             arm(attempt, permissionTimeout);
@@ -154,7 +168,8 @@ public final class Tbs5530UsbBinding implements AutoCloseable {
         }
         try {
             if (permitted && !attempt.permissionOnly) arm(attempt, acquisitionTimeout);
-            coordinator.permissionResult(attempt.request, attempt.request.getIdentity(), permitted, !attempt.permissionOnly);
+            coordinator.permissionResult(attempt.request, attempt.request.getIdentity(), permitted,
+                    !attempt.permissionOnly, !attempt.bootstrap);
         } finally {
             synchronized (this) { attempt.acquiring = false; }
             disarm(attempt);
@@ -167,7 +182,8 @@ public final class Tbs5530UsbBinding implements AutoCloseable {
         synchronized (this) { attempt = current; }
         if (!active(attempt) || identity.getAttachmentId() != attempt.epoch
                 || !present(attempt.device) || !facade.hasPermission(attempt.device)) throw new IOException("Attachment or permission changed");
-        Tbs5530LifecycleCoordinator.Connection connection = facade.open(attempt.device);
+        Tbs5530LifecycleCoordinator.Connection connection = attempt.bootstrap
+                ? facade.openBootstrap(attempt.device) : facade.open(attempt.device);
         if (connection == null) throw new IOException("openDevice returned null");
         try {
             if (!active(attempt) || !present(attempt.device) || !facade.hasPermission(attempt.device)) {
@@ -186,7 +202,10 @@ public final class Tbs5530UsbBinding implements AutoCloseable {
             public void requireControlWorker() throws IOException { connection.requireControlWorker(); }
             public int controlTransfer(int type, int request, int value, int index, byte[] buffer,
                                        int offset, int length, int timeout) throws IOException {
-                return connection.controlTransfer(type, request, value, index, buffer, offset, length, timeout);
+                ensureCurrent(attempt);
+                int count = connection.controlTransfer(type, request, value, index, buffer, offset, length, timeout);
+                ensureCurrent(attempt);
+                return count;
             }
             public Tbs5530Descriptors.Endpoint streamEndpoint() throws IOException { return connection.streamEndpoint(); }
             public void cancel() throws IOException { connection.cancel(); }
@@ -310,6 +329,22 @@ public final class Tbs5530UsbBinding implements AutoCloseable {
         }
     }
 
+    synchronized long bootstrapEpoch() throws IOException {
+        if (current == null || !current.bootstrap) throw new IOException("No bootstrap attempt");
+        return current.epoch;
+    }
+
+    Tbs5530ControlIo bootstrapControlIo() throws IOException { return bootstrapControlIo(bootstrapEpoch()); }
+
+    Tbs5530ControlIo bootstrapControlIo(long expectedEpoch) throws IOException {
+        synchronized (this) {
+            if (!active(current) || current.epoch != expectedEpoch || !current.bootstrap || current.request == null || current.acquiring) {
+                throw new IOException("No bootstrap attachment");
+            }
+            return coordinator.bootstrapControlIo(current.request);
+        }
+    }
+
     public Tbs5530Descriptors.Endpoint streamEndpoint() throws IOException {
         Tbs5530LifecycleCoordinator.Request request;
         synchronized (this) {
@@ -317,6 +352,15 @@ public final class Tbs5530UsbBinding implements AutoCloseable {
             request = current.request;
         }
         return coordinator.streamEndpoint(request);
+    }
+
+    void cancelBootstrap(long expectedEpoch) {
+        Attempt attempt;
+        synchronized (this) {
+            attempt = current;
+            if (attempt == null || !attempt.bootstrap || attempt.epoch != expectedEpoch) return;
+        }
+        invalidate(attempt, false);
     }
 
     public void cancel() {

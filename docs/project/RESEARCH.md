@@ -1,5 +1,69 @@
 # Research log (append-only)
 
+## 2026-11-04 — Phase 2.7: fingerprint mặc định FX2, firmware chính hãng và giới hạn nạp
+
+### Baseline và nguồn
+
+Baseline Phase 2.6 đã push: `f03e092702edac5134efea633d8a30a51e1716e4`, nhánh `chore/modernize-android-build`; local/remote-tracking cùng SHA, working tree sạch lúc bắt đầu. Không fetch/sync/checkout/sửa references, không stage/commit/push. Official Linux vẫn `2ce787de9f6e81b4294692a45de15596ae2e1322`, C `c5fa27eecbe80633cbb365cc44656daea1c0e2e3`, Go `11228b05fb1626bf41c4e1879ace10cd0a8d575c`.
+
+GitNexus không có index cho repository này; không dùng graph của dự án khác hoặc tự chạy index tốn kém. AgentMemory recall không có kết quả liên quan. Research agent không khởi chạy được vì model cấu hình không khả dụng; nghiên cứu được thực hiện trực tiếp, không có báo cáo agent để nhận là chứng cứ.
+
+### SOURCE-CONFIRMED — descriptor FX2 và ý nghĩa của fingerprint
+
+URL PDF người dùng đưa (`/24/44/`) trả nội dung rỗng khi tải. Bản cùng tên **EZ-USB FX2 TRM v2.2**, 462 trang, có tại [Infineon `/30/44/`](https://www.infineon.com/assets/row/public/documents/30/44/infineon-ez-usb-fx2-trm-version2-2-usermanual-en.pdf), tải HTTP 200, 5790150 byte bằng `Invoke-WebRequest`. `curl.exe` trả file rỗng ngay cả URL này nên không dùng exit 0 làm bằng chứng nội dung. Trích text bằng `pdftotext.exe -raw` và `-layout` đã có trên máy, không cài package.
+
+Mục 3.3/Table 3-2 và Appendix B/B-1–B-25 khớp các trường tiêu chuẩn trong snapshot OnePlus Phase 2.6, không chỉ VID/PID hoặc hash. Đây là **đối chiếu mới với runtime-observed lịch sử**, không phải một lần đọc USB mới.
+
+| Alternate / interface 0 | Address, hướng, loại, packet, interval: TRM và snapshot OnePlus cùng giá trị |
+|---|---|
+| 0 | Không endpoint ngoài EP0 |
+| 1 | 01 OUT Bulk 512/0; 81 IN Bulk 512/0; 02 OUT Bulk 512/0; 04 OUT Bulk 512/0; 86 IN Bulk 512/0; 88 IN Bulk 512/0 |
+| 2 | 01 OUT Interrupt 64/1; 81 IN Interrupt 64/1; 02 OUT Interrupt 512/1; 04 OUT Bulk 512/0; 86 IN Interrupt 512/1; 88 IN Bulk 512/0 |
+| 3 | 01 OUT Interrupt 64/1; 81 IN Interrupt 64/1; 02 OUT Isochronous 512/1; 04 OUT Bulk 512/0; 86 IN Isochronous 512/1; 88 IN Bulk 512/0 |
+
+Các trường device đều khớp: bcdUSB=0200, class/subclass/protocol=FF, packet EP0=64 byte và 1 configuration. Configuration có độ dài 171 byte, value=1, 1 interface, attributes=80 và power=50. Interface có class/subclass/protocol=FF, với alt 0–3. Không so VID/PID, bcdDevice hoặc string indices với ID mặc định Cypress: mục 3.4.2 cho phép EEPROM C0 thay VID/PID/DID. TRM lưu ý EP1 có bộ đệm vật lý 64 byte dù descriptor HS alt 1 khai báo 512 byte; không dùng bảng này để bắt đầu bulk transfer.
+
+`Tbs5530Fx2Fingerprint` trả `MATCH`/`PARTIAL_MATCH`/`NO_MATCH` và liệt kê từng trường khác. `MATCH` chỉ gán `BOOTSTRAP_CANDIDATE`. Descriptor hoàn chỉnh có profile Bulk IN `0x82`, interface 0 và alternate 0 mới có thể là `OPERATIONAL_CANDIDATE`, **không phải READY**. Cây mô tả sai định dạng hoặc bị cắt không đủ bằng chứng. Fixture (dữ liệu mẫu kiểm thử) được dựng lại từ trường số đã ghi trong hồ sơ; không lưu chuỗi USB hoặc raw bytes đã thu từ thiết bị. Không có tham số Android model/API, nên cùng descriptor cho cùng kết quả.
+
+**INFERRED, không chứng minh:** fingerprint phù hợp Default High-speed Device, nhưng không xác nhận chip revision, EEPROM C0 thay vì C2/firmware mô phỏng descriptors, RENUM hiện tại, CPU đang chạy, alternate active hoặc negotiated speed. Mục 3.4: C0 chỉ tải ID/config; C2 có các record length/address/data và chạy firmware từ RAM, không phải ảnh tuyến tính. Mục 3.8/3.9: A0 là firmware request, RENUM/DISCON quyết định phản hồi và tái nhận diện. Không suy `.no_reconnect=1` của Linux bảo đảm Android giữ attachment/quyền.
+
+### SOURCE-CONFIRMED — archive và ảnh thật, ngoài Git
+
+Ngày truy cập 2026-11-04. [TBS Linux installation](https://www.tbsiptv.com/help_center/tbs_driver_installation/linux.html) vẫn công bố gói v1.0 qua HTTP. Đã chọn **HTTPS cùng hostname/path**, không thay nhà cung cấp: [archive TBS](https://www.tbsdtv.com/download/document/linux/tbs-tuner-firmwares_v1.0.tar.bz2). Download center và tìm kiếm official không cho thấy một firmware 5530 mới hơn có version/hash được nhà sản xuất xác thực; không gọi gói v1.0 là bản mới nhất tuyệt đối.
+
+| Nội dung | Kích thước | SHA-256 |
+|---|---:|---|
+| Archive v1.0 | 566825 byte | `23ecf817383dc29881ac9cb6f704239969e5f711270ad2073497653ba08791cc` |
+| Entry `./dvb-usb-id5530.fw` | 8192 byte | `b97cf208bb586f706b26aa5450de6bb97375a3e3eabe833cddb0ae3a4f69d0dc` |
+
+Archive có 54 entries; không thấy LICENSE/COPYING/README/NOTICE. Chỉ trích đúng entry cho TBS5530 vào session local ngoài repository bằng `tar -xjf <ARCHIVE> -C <LOCAL_OUT> ./dvb-usb-id5530.fw`; tính hash bằng `Get-FileHash -Algorithm SHA256`. Không đổi tên HEX/IIC thành firmware, không thực thi blob hoặc đưa vào assets/APK/Git. Tên ảnh do driver TBS5530 chỉ định xác nhận họ board ở mức source; không có manifest, chữ ký, version hoặc revision đủ để khẳng định đúng revision vật lý. SHA là dấu nhận diện của nội dung tải, không phải chữ ký TBS.
+
+**Format:** source Linux/C/Go đọc toàn ảnh tuyến tính từ offset 0, không dùng parser Intel HEX/EEPROM. Ảnh dài 8192 byte; lệnh đầu tại reset vector là 8051 LJMP đến địa chỉ 08FE. Dữ liệu phù hợp ảnh RAM tuyến tính, không phải record C0/C2 hoặc văn bản HEX. Không coi reset vector hoặc tên file là bằng chứng xác thực ý nghĩa của mọi lệnh firmware. Toàn bộ địa chỉ dự kiến ghi là 0000–1FFF, gồm 128 khối × 64 byte; khối cuối tại 1FC0 dài 64 byte. Không chèn padding hoặc bỏ phần đuôi. Với dữ liệu tổng hợp dài 1/63/64/65/128 byte, planner/executor kiểm khối cuối đúng độ dài.
+
+**License/distribution: BLOCKED/NOT VERIFIED.** Trang TBS hướng dẫn tải/cài cho DVB adapters, là cơ sở cho bản tải phục vụ phân tích và sử dụng dự kiến; không có giấy phép riêng xác nhận quyền tái phân phối/nhúng APK. GPL của loader không cấp phép blob. Không đưa image/archive vào Git hoặc bản phát hành; cần TBS xác nhận quyền và board revision trước kế hoạch phân phối.
+
+### Address map, CPU reset và hardware gate
+
+[Official `tbs5530_load_firmware`](https://github.com/tbsdtv/linux_media/blob/2ce787de9f6e81b4294692a45de15596ae2e1322/drivers/media/usb/dvb-usb/tbs5530.c), [C cùng hàm](https://github.com/koreapyj/cxd28xx/blob/c5fa27eecbe80633cbb365cc44656daea1c0e2e3/tbs5530.c), [Go `Bridge.LoadFirmware`](https://github.com/Till0196/coax/blob/11228b05fb1626bf41c4e1879ace10cd0a8d575c/internal/coaxd/usb/bridge/tbs/tbs.go) đều có trình tự ghi cả hai địa chỉ. C không kiểm kết quả trả về khi giữ CPU ở reset và luôn yêu cầu 64 byte ở vòng cuối. Go kiểm đủ byte và phần đuôi, nhưng giới hạn E200 và comment không phải bằng chứng về bản đồ RAM FX2. Android không sao chép giới hạn này làm vùng địa chỉ cho phép.
+
+TRM mục 3.8 xác định **E600 là CPUCS của FX2**, bit 0 điều khiển 8051RES. A0 là request đặc biệt luôn do FX2 xử lý bất kể RENUM; CPUCS là thanh ghi FX2 duy nhất được tài liệu cho phép ghi bằng lệnh firmware download. Chương 5 xác định Main RAM tại 0000–1FFF và scratch RAM tại E000–E1FF; scratch RAM không thực thi code. Các vùng E200–E3FF/E480–E5FF/E700–E73F/E800–EFFF được dành riêng; control/status tại E600–E6FF, GPIF tại E400–E47F và các buffer khác không phải vùng nạp ảnh RAM. Ảnh 8192 byte vừa đúng Main RAM; không byte DATA nào chạm 7F92/E600 hoặc vùng ngoài 0000–1FFF. Planner vẫn cấm cả hai địa chỉ trong DATA, kiểm giới hạn, tràn địa chỉ và hash trước khi xây trình tự.
+
+[Infineon knowledge-base về memory](https://community.infineon.com/t5/Knowledge-Base-Articles/Read-and-Write-to-EZ-USB-Internal-Memory-AN21xx-FX-FX1-FX2-FX2LP/ta-p/259431) và [older FX/AN21xx scripting](https://community.infineon.com/t5/Knowledge-Base-Articles/Generating-script-file-for-the-older-EZ-USB-series-FX-AN21xx/ta-p/248487) phân biệt 7F92 của họ FX/AN21xx cũ với E600 của FX1/FX2/FX2LP. Công cụ tìm kiếm trả nội dung, nhưng tải trực tiếp bài đầu nhận lỗi 403. Đây là giới hạn truy cập nguồn, không phải phép đo trên board. **Chưa chứng minh 7F92 là địa chỉ CPUCS tương đương trên FX2; chưa biết hậu quả khi gửi request A0 đến 7F92 trên board thực.** Không âm thầm bỏ 7F92, cũng không gửi cả hai chỉ vì source làm vậy. Cần bằng chứng về chip/board từ TBS và phương án khôi phục đã được rà soát trước khi cho phép thực thi.
+
+Trình tự **mô hình offline theo source**, không được phép gửi lên phần cứng:
+
+1. bmRequestType=40, bRequest=A0, wIndex=0, timeout=2000 ms; wValue=7F92, payload=01 dài 1 byte.
+2. Cùng request, địa chỉ E600, payload=01 dài 1 byte.
+3. 128 requests, wValue `64*n` với n=0..127; payload là đúng phần ảnh tương ứng, dài 64 byte; địa chỉ bắt đầu các khối từ 0000 đến 1FC0.
+4. Ghi payload=00 dài 1 byte đến 7F92, rồi đến E600, với cùng các trường request.
+5. Delay 100 ms. Tổng cộng 132 control writes và 1 delay; fake kiểm đầy đủ từng byte, không gọi API USB thật.
+
+Mọi lỗi đều dừng ngay; không retry, tự khắc phục, reset hoặc release CPU sau lỗi. Kể cả khi API trả đủ mọi byte, trạng thái chỉ là `TRANSITIONING`. Chưa có bằng chứng độc lập từ attachment/descriptors mới hoặc bridge, nên không báo `READY` hay operational hardware `PASS`. Sau download, USB có thể disconnect hoặc không; VID/PID có thể giữ nguyên. Không được dùng lại handle, số phiên gắn thiết bị hoặc quyền cũ. Nếu lỗi giữa trình tự, tình trạng RAM/CPU là `UNCERTAIN`; không gửi thêm lệnh ghi khắc phục. Việc tháo/cấp nguồn thủ công phải thuộc kế hoạch khôi phục được đánh giá riêng sau này. Không giả định power cycle luôn khôi phục đúng board khi EEPROM/mode chưa được xác minh.
+
+### Kết luận Phase 2.7
+
+Kiểm tra ảnh thật và dry-run trên fake đều là **offline**, không cấp quyền upload. Chương trình local chạy chính ảnh TBS qua fake port: 132 calls kiểm từng byte/request/thứ tự, 1 open/1 close/0 claim và delay giả lập 100 ms; không dùng UsbDeviceConnection. `hardwareUploadAllowed=false`; production facade `openBootstrap` mặc định từ chối. Không có bộ nạp Android hoặc điểm vào upload thủ công. Câu hỏi phê duyệt upload **chưa được đưa ra** vì còn thiếu bằng chứng về 7F92 và phương án khôi phục board. Firmware/CPU/vendor/I²C/tuner/TS thật đều **NOT RUN**. Bước tiếp theo duy nhất: xác minh với TBS cách ánh xạ 7F92, chip/revision board, phương án khôi phục và quyền firmware; sau đó mới rà soát lại kế hoạch phần cứng. Không tự bắt đầu frontend.
+
 ## 2026-11-03 — Phase 2.6: đối chiếu USB mode và đọc descriptor không ghi thiết bị
 
 ### Baseline và phân loại bằng chứng

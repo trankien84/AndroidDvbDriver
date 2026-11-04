@@ -340,6 +340,13 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
             org.json.JSONArray entries = new org.json.JSONArray();
             for (Tbs5530RawDescriptors.Entry entry : parsed.entries) entries.put(new org.json.JSONObject(entry.fields));
             descriptors.put("entries", entries); json.put("raw_descriptors", descriptors);
+            info.martinmarinov.drivers.usb.tbs5530.Tbs5530Fx2Fingerprint.Result fingerprint =
+                    info.martinmarinov.drivers.usb.tbs5530.Tbs5530Fx2Fingerprint.assess(parsed);
+            org.json.JSONObject assessed = new org.json.JSONObject();
+            assessed.put("match", fingerprint.match.name()); assessed.put("candidate", fingerprint.candidate.name());
+            assessed.put("differences", new org.json.JSONArray(fingerprint.differences));
+            assessed.put("hardware_upload_allowed", false); assessed.put("firmware_running", "NOT_PROVEN");
+            json.put("fx2_fingerprint", assessed);
         }
         return json;
     }
