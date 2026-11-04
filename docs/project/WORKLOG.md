@@ -1084,3 +1084,139 @@ adb -s <VERIFIED_TCP_SERIAL> shell dumpsys usb
 - Kiểm staged diff phát hiện CRLF ở bốn file Java mới bị báo trailing whitespace.
   Đã dừng trước commit, chỉ chuẩn hóa bốn file sang LF và so sánh xác nhận nội dung chữ không đổi;
   không sửa Git config hoặc tắt whitespace check. `git diff --cached --check` đạt PASS sau chuẩn hóa.
+
+## 2026-11-04 — Phase 2.9: Android debug one-shot đã kiểm offline, chờ phê duyệt
+
+- **Branch/HEAD trước và sau:** `chore/modernize-android-build`,
+  `ead0e4adf5051e878706ad70c3863b90cb8ffb98`. Đầu phiên Git sạch, một worktree chính;
+  `rev-parse HEAD`, `status -sb`, `remote -v`, `worktree list` đã kiểm. Không stage/commit/push,
+  reset/clean/rebase/merge/checkout; không sửa/fetch ba references.
+- **Đường cũ và thay đổi:** UsbManager → Android facade → binding → coordinator → session/lease
+  → ControlTransport/ControlIo. Thêm raw-descriptor seam mặc định throw và giao tiếp package-private
+  dưới cùng lease/transaction. Android bootstrap adapter/runner chỉ debug; dùng runtime/owner cũ,
+  không claim hoặc mở song song. SAF local chọn ảnh và metadata archive do người dùng xác nhận;
+  kiểm byte/hash trước open. Có approval challenge/install/attachment/epoch/plan/hash hết hạn,
+  foreground, xác nhận UI, attempt lưu trước ghi và acknowledgment ADB cho từng ordinal.
+  Observer trước nạp; đủ 132 writes chỉ TRANSITIONING. Đóng lease cũ rồi mở epoch mới chỉ đọc;
+  có82 chỉ OPERATIONAL_CANDIDATE, không ready/frontend/TS. Chi tiết [ADR-020](DECISIONS.md).
+- **File sửa:** ba main classes `Tbs5530AndroidUsbFacade`, `Tbs5530LifecycleCoordinator`,
+  `Tbs5530UsbBinding`; controller/Activity debug; bốn class debug/tests mới ở drivers,
+  approval/tests mới ở app; helper `tools/Watch-TBS5530-BootstrapApproval.ps1`;
+  STATUS/RESEARCH/DECISIONS/TEST-MATRIX/WORKLOG. ENVIRONMENT không sửa vì host/toolchain
+  không đổi. Chip mới chỉ ghi một lần tại RESEARCH, không thư hoặc thông tin liên hệ.
+- **Nguồn:** official/C/Go `rev-parse HEAD` giữ SHA đã khóa; đọc lại hàm firmware bằng
+  `git show HEAD:drivers/media/usb/dvb-usb/tbs5530.c` và source C/Go read-only. Không nghiên cứu
+  lại reset tranh luận; Windows Phase 2.8 vẫn là bằng chứng Windows, không Android.
+- **Toolchain:** đọc khai báo build/wrapper, SDK source.properties và JDK thực;
+  AGP 9.5.0/Gradle 9.8.2/JDK 25.0.5.0.3, compile 37.2/Build-Tools 37.0.0/NDK 30/CMake 4.1.2,
+  min 21/target 37/source-target 8 giữ nguyên. `android --help`, `docs search --help`,
+  `docs fetch --help`, `sdk list --help`; docs search USB/SAF và fetch documents-files.
+  CLI filter `platforms;android-37.2` không match nhưng filesystem source.properties xác minh;
+  không coi kết quả filter rỗng là thiếu SDK hoặc tự cài. Không khảo sát latest stable.
+- **Targeted đầu:** wrapper `:drivers:testDebugUnitTest --tests '*Tbs5530OneShotBootstrapTest'
+  :app:compileDebugJavaWithJavac --console plain --no-daemon`, exit 0/1 phút 9 giây;
+  lúc đó 9 methods mới, sau thêm in-flight/cleanup thành 11. Không dùng kết quả đầu thay suite cuối.
+- **Lệnh regression đầy đủ (Windows PowerShell, cwd repo):** JAVA_HOME process trỏ JDK
+  `jdk-25.0.5.0.3`, ANDROID_HOME SDK hiện hữu, ANDROID_SERIAL lấy động đúng một TCP target.
+  `.\gradlew.bat :usbxfer:testDebugUnitTest :drivers:testDebugUnitTest :dvbservice:testDebugUnitTest
+  :app:connectedDebugAndroidTest :drivers:connectedDebugAndroidTest :dvbservice:connectedDebugAndroidTest
+  :app:assembleDebug :app:assembleRelease :app:lintDebug --console plain --no-daemon`.
+  Lượt đầu exit 0/4 phút 12 giây; sau sửa guard/các race chạy lại exit 0/4 phút 1 giây;
+  sửa pending trước enqueue exit 0/3 phút 9 giây; cuối sau UI cuộn toàn trang exit 0/4 phút 19 giây,
+  421 tasks/39 executed/382 up-to-date. Một số task không đổi là UP-TO-DATE, không gọi là rerun mới.
+  XML kết quả 241 JVM (227+1+13), 56 instrumentation (21+33+2), 0 failure/error/skipped.
+  Lint cuối 0 Error/Fatal/10 Warning; warning Java8 obsolete/Gradle deprecation còn nguyên.
+- **Static/ảnh thật:** 107 TBS class major 52; DEX debug có runner/adapter/approval/diagnostic,
+  release không có; apkanalyzer manifest min 21/target 37 không diagnostic. Không firmware blob
+  trong APK. Ảnh local có sẵn ngoài Git 8192 byte/hash khóa được đọc bằng reader mới và
+  `javac --release 8` harness: 132 writes/8196 payload bytes/128 chunks/delay 100, so từng byte;
+  reject truncated/extra/modified. Harness xóa sau test; không upload hoặc download firmware.
+- **Helper:** PowerShell parse 0 lỗi; gọi không flags exit 1 BLOCKED trước ADB; mock ADB end-to-end
+  exit 0, kiểm ordinal/atomic permit/terminal stop. Fake scripts/state xóa sau test. Không chạy helper
+  có approval trên target thật. Chưa có quyền chuyển host/upload từ người dùng.
+- **Runtime mới:** luôn kiểm OnePlus/GM1900/API 30/USB Host, một TCP target, monitor 10 giây
+  trong lệnh dài. Sau UTP cài lại debug exit 0/cold launch 670 ms; UI firmware/upload hiện và disabled,
+  không USB/TBS, DETECTED/open 0/claim 0/pending=false/cleanup=false. Windows TBS BDA OK.
+  Không dùng alias mDNS như thiết bị thứ hai hoặc permission cached. Không vendor/CPU/USB reset,
+  I2C/EEPROM/configuration/interface/firmware transfer hoặc host handoff.
+- **Giới hạn công cụ:** VS Code runTask không resolve hai id dù tasks.json hiện hữu; fallback wrapper.
+  Editor báo ngoài classpath/duplicate phantom; kiểm source chỉ một changed/main/close, Gradle compile
+  PASS. Explore đọc hồ sơ không chạy được (400 model unsupported), không relaunch.
+  GitNexus `status --json` không hỗ trợ → `status`; refresh đầu tự rebuild vì flag pending và PASS,
+  impact Binding báo 37 symbols/2 modules nên giữ seam nhỏ và regression. Refresh sau mã lớn PASS
+  172.7s; refresh cuối FAILED FTS file_fts inconsistent/COPY. Không drop/force/repair index;
+  không dùng graph lỗi như proof mã cuối. Source/diff/tests là bằng chứng.
+- **NOT RUN/BLOCKED:** Android hardware upload, descriptors sau nạp thật, source SAF trên tuner,
+  USB recovery/lock/TS/API 21 runtime. `BLOCKED: EXPLICIT_HARDWARE_APPROVAL`.
+  Bước đơn tiếp theo: đề nghị riêng quyền chuyển tuner về OnePlus OTG và một lượt dual-reset.
+  Nếu được duyệt, chạy preflight mới từ đầu; không reuse epoch/connection/approval hoặc thử plan khác.
+  Không tự bắt đầu Phase 3.0; physical recovery chỉ do người dùng quyết định sau kiểm nguồn.
+
+- **Memory checkpoint:** Gateway nhận lưu một bài học phương pháp chung, không source/log/firmware/định danh.
+  Response success không chứng minh remote-vs-fallback; không tuyên bố đã bảo đảm lưu bền liên phiên.
+
+### Phase 2.9 — Sau phê duyệt: một attempt thật, dừng UNCERTAIN, recovery riêng
+
+- **Phê duyệt rõ ràng:** ask_user nhận cả ba true: chuyển host vật lý, chỉ nguồn OTG/không
+  backfeed/đóng app giữ tuner và đúng một dual-reset attempt. Người dùng xác nhận đã nối OnePlus;
+  chưa có firmware trên điện thoại. Copy ảnh đã khóa từ local ngoài Git vào Downloads riêng qua
+  Wireless ADB, size/hash mới đúng; không bundle/distribute qua APK hoặc upload từ PC.
+- **Chuẩn bị thật:** refresh metadata thấy một `734c:5530`/default thiếu endpoint `0x82`, permission chưa có.
+  Nút permission-only không open. Người dùng tự OK, nhập nguồn/entry và tự chọn SAF.
+  Lần đầu VALIDATION_FAILED do URL trailing space quan sát trực tiếp; open/claim 0, chưa consume.
+  Không trim/bypass validation hoặc tự chọn thay người dùng. Sau sửa metadata/chọn lại:
+  permission=true, HASH_SIZE_VALIDATED_SOURCE_USER_ATTESTED_SESSION_APPROVAL_REQUIRED,
+  challenge epoch 1/plan dual, age 27192 ms; không pending/cleanup/open.
+- **Lệnh được duyệt:** `tools/Watch-TBS5530-BootstrapApproval.ps1 -ExplicitOneShotApproval
+  -PhysicalHostAndOtgConfirmed`, helper thật chạy sau phê duyệt, chọn serial TCP động đúng
+  OnePlus/GM1900/API 30 và cấp heartbeat/ordinal acknowledgment; không tự bấm upload.
+  Người dùng tự bấm Nạp đúng một lần. Không operation nào chạy trên emulator/PC libusb.
+- **RUNTIME-OBSERVED:** report giữa lượt LOADING, attempted 21/completed 20. Report terminal:
+  UNCERTAIN/epoch 1, attempted 24/completed 23, transferred_bytes 1346, duration 25946 ms,
+  IO_FAILURE, attachment_events 0, pending=false/cleanup_pending=false/ready=false.
+  Port ghi **23 actual UsbDeviceConnection.controlTransfer calls**, mọi call full-length:
+  7F92=01/E600=01 (2×1 byte), 21 DATA × 64 byte tại 0000–0500 (1344 image bytes).
+  Không call release 7F92/E600 hoặc corrective/retry/fallback.
+- **Điểm dừng:** runner ordinal 24 value 1344/0x0540/length 64 FAILED_OR_UNKNOWN,
+  duration 1510321 µs; không có API call 24. Guard acknowledgment chạy trước native call;
+  sau dừng request và last acknowledged ordinal cùng 24. Phù hợp deadline 1500 ms bị lỡ,
+  nhưng không có timestamp chi tiết để xác nhận causal timing; nguyên nhân sâu UNVERIFIED.
+  Không gọi là USB timeout hoặc STALL. Helper exit 0 chỉ nghĩa đã dừng cấp acknowledgment
+  khi app terminal, không nghĩa firmware PASS. Image thiếu, CPU có thể halt; không reset/release.
+- **Raw trước nạp:** COMPLETE_RETURNED_TREE 189 byte, MATCH/default thiếu endpoint `0x82`, SHA-256
+  `e2887bad8b5a0e8dcaaa69bd636a01a2d11e53fe4b532b5b14828a2d3df952de`.
+  Không raw post-upload vì chưa tới TRANSITIONING. Không suy READY hoặc bridge/I2C.
+- **Recovery được hỏi riêng:** người dùng chọn tự rút/cắm đúng một lần trên OnePlus, chỉ OTG;
+  xác nhận đã làm. Không chuyển Windows hoặc gửi USB reset. Sau cleanup/pending=false lưu
+  sanitized attempt report ngoài Git, Back/launch diagnostic mới để không reuse connection/epoch.
+  Permission cũ mất; người dùng OK request mới. Permission-only report TIMEOUT là lịch sử
+  callback, raw port kiểm hasPermission thật=true trước open, không dùng cached grant.
+- **Raw sau recovery:** explicit raw-only click theo UI hierarchy; 14 ms,
+  READ_AND_CLOSED/pending=false/cleanup=false/permission=true,
+  open/read/close 1/1/1, claim/transfer 0, failure NONE. Raw 189 byte/hash ở trên khớp trước nạp,
+  fingerprint MATCH/BOOTSTRAP_CANDIDATE thiếu endpoint `0x82`. Đây là recovery descriptor quan sát được,
+  không guarantee power-cycle, không firmware-upload PASS.
+- **Trạng thái cuối:** Windows PnP TBS 0; tuner ở OnePlus, ADB online đúng target;
+  consumed=true vẫn bền sau diagnostic relaunch. Không chạy instrumentation/build sau thực nghiệm
+  để tránh reinstall/xóa guard. Không cấp lại permit, không attempt thứ hai hoặc Phase 3.0.
+- **Bước đơn tiếp:** phân tích offline handshake latency/stop reason và thêm telemetry/mock độ trễ
+  trước bất kỳ kế hoạch hardware mới; cần approval mới, không reuse attempt đã tiêu thụ.
+
+## 2026-11-04 — Commit và push Phase 2.9 theo yêu cầu
+
+- Người dùng yêu cầu commit các thay đổi hiện có và push lên origin nhánh hiện tại.
+  Preflight: `chore/modernize-android-build`, HEAD/live origin cùng
+  `ead0e4adf5051e878706ad70c3863b90cb8ffb98`, stage trống, một worktree chính, 18 file.
+  Không sửa references hoặc chạy reset/clean/rebase/merge/checkout; không force-push.
+- Phạm vi gồm debug adapter/runner/approval/UI, raw seam main, tests, helper và sáu hồ sơ.
+  Message dự kiến `feat: add guarded debug-only TBS5530 Android bootstrap`, có
+  Co-authored-by trailer. Kết quả commit/push sẽ xác minh từ Git sau thao tác.
+- `git diff --check` và scan nội dung thêm mới không phát hiện mẫu credential/IP hoặc binary
+  ngoài phạm vi. Scan toàn file ban đầu trúng một đoạn WORKLOG lịch sử không nằm trong diff;
+  không sửa lịch sử hoặc đưa kết quả scan cũ thành phát hiện trong thay đổi mới.
+- Wireless ADB preflight vẫn đúng OnePlus/GM1900/API 30 online; không thao tác USB,
+  không cấp permit hoặc thử lại attempt. Không build/test lại: 241 JVM/56 instrumentation,
+  debug/release/lint 0 errors/10 warnings là bằng chứng Phase 2.9 trước tác vụ Git.
+  Hardware UNCERTAIN và guard consumed giữ nguyên; bước tiếp chỉ phân tích offline handshake.
+- Staged check đầu phát hiện CRLF ở bảy file mới; chỉ chuẩn hóa LF, xác minh nội dung chữ không đổi,
+  stage lại và staged whitespace check PASS. Không đổi Git config hoặc chạy lại hardware/tests.

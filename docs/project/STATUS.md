@@ -1,5 +1,71 @@
 # Port TBS5530 sang Android — trạng thái hiện tại
 
+## Checkpoint phát hành Phase 2.9 — 2026-11-04 23:08 +07
+
+- Người dùng yêu cầu commit toàn bộ thay đổi Phase 2.9 và push lên origin của nhánh hiện tại.
+  Preflight xác nhận `chore/modernize-android-build`, HEAD và live origin cùng
+  `ead0e4adf5051e878706ad70c3863b90cb8ffb98`, stage trống và một worktree chính.
+  Phạm vi 18 file: debug executor/approval/UI, seam main, tests, helper và sáu hồ sơ.
+- Message dự kiến: `feat: add guarded debug-only TBS5530 Android bootstrap`.
+  Chỉ xác nhận commit/push sau kiểm tra Git; không đưa firmware, APK, raw logs hoặc định danh vào Git.
+  Các ghi chú chưa commit/push bên dưới là lịch sử trước checkpoint này.
+- Không chạy lại build/instrumentation hoặc thao tác USB trong tác vụ Git. Kết quả gần nhất vẫn
+  là 241 JVM/56 instrumentation, build debug/release và lint 0 errors/10 warnings của Phase 2.9.
+  Hardware attempt UNCERTAIN đã tiêu thụ; recovery raw default không cấp quyền thử lại.
+
+
+## Phase 2.9 — Một attempt Android UNCERTAIN; phục hồi raw default đã quan sát, 2026-11-04 22:51 +07
+
+**Checkpoint mới nhất:** Người dùng đã duyệt riêng chuyển host/nguồn OTG và một lượt upload,
+sau đó tự xác nhận tại UI. Android thực gọi **23 A0 OUT**, đều trả full length:
+7F92/E600 stop và 21×64 byte DATA; tổng **1346 byte payload**, trong đó 1344/8192 byte image.
+Runner thử bước 24 nhưng chưa tới Android API; guard acknowledgment dừng khoảng 1510 ms.
+Không xác nhận nguyên nhân sâu, không gọi là USB timeout/STALL. Attempt consumed=true,
+state UNCERTAIN, pending/cleanup=false; không release CPU, retry, fallback hoặc frontend.
+Không có descriptors sau firmware; chưa đạt OPERATIONAL_CANDIDATE/READY.
+
+Sau phê duyệt recovery riêng, người dùng rút/cắm đúng một lần trên OnePlus, chỉ nguồn OTG.
+Raw mới dùng permission/owner mới: 189 byte/hash `e2887bad8b5a0e8dcaaa69bd636a01a2d11e53fe4b532b5b14828a2d3df952de`,
+MATCH/BOOTSTRAP_CANDIDATE thiếu endpoint `0x82`, open/read/close=1/1/1, 14 ms, không transfer/claim.
+Đây là recovery descriptor được quan sát trên lần này, không bảo đảm recovery mọi lỗi.
+Tuner hiện ở OnePlus, Windows không còn PnP tuner; Wireless ADB online. Guard consumed còn nguyên.
+
+**Bước đơn tiếp theo:** phân tích offline thời hạn/handshake acknowledgment và telemetry lỗi trước
+khi đề nghị bất kỳ thử nghiệm mới nào; chưa đủ điều kiện Phase 3.0. Không dùng lại approval
+đã tiêu thụ hoặc tự tăng timeout để nạp lại. Chi tiết [TEST-MATRIX.md](TEST-MATRIX.md),
+[WORKLOG.md](WORKLOG.md), [RESEARCH.md](RESEARCH.md).
+
+### Checkpoint offline trước phê duyệt (giữ để truy vết)
+
+Bộ nạp debug đã kiểm offline; lúc checkpoint này chưa duyệt phần cứng.
+
+Baseline/HEAD `ead0e4adf5051e878706ad70c3863b90cb8ffb98`, nhánh
+`chore/modernize-android-build`, một worktree chính; đầu phiên sạch. Chưa stage/commit/push.
+Đã có Android USB Host adapter debug dùng owner/worker/binding/session hiện hữu,
+SAF kiểm size/hash, dual-reset đúng một lượt, approval hết hạn và observer raw trước/sau.
+Production vẫn fail-closed; không registry/XML/frontend/TS hoặc driver khác thay đổi.
+Quyết định và giới hạn: [ADR-020](DECISIONS.md); xác nhận chip mới chỉ ghi một lần ở [RESEARCH.md](RESEARCH.md).
+
+- **OFFLINE-TESTED PASS:** 241 JVM (227 drivers + 1 usbxfer + 13 service),
+  gồm 11 tests mới và ma trận lỗi ở cả 132 vị trí, ảnh thật ngoài Git đúng hash/8192 byte,
+  helper mock/deny, Java 8/major 52 và release isolation. Không firmware trong APK.
+- **Instrumentation PASS:** 56 tests (21 app + 33 drivers + 2 service), GM1900/API 30
+  không tuner. Debug/release/lint exit 0; lint 0 errors/fatal, 10 warnings.
+  Lượt cuối 4 phút 19 giây/421 tasks; chi tiết [TEST-MATRIX.md](TEST-MATRIX.md).
+- **RUNTIME-OBSERVED:** Wireless ADB đúng OnePlus online. Sau UTP cài lại debug,
+  cold launch 670 ms, không USB/TBS, open/claim 0, pending/cleanup=false;
+  chọn firmware và upload đều disabled. Windows vẫn TBS BDA OK; chưa chuyển host.
+- **NOT RUN:** Android A0/reset/upload/post-firmware descriptors, hardware cleanup/recovery,
+  API 21 runtime. Helper approval chỉ kiểm syntax/mock; chưa chạy với ADB thật.
+  Không suy fake/Windows là Android PASS hoặc OPERATIONAL_CANDIDATE thật.
+- **BLOCKED: EXPLICIT_HARDWARE_APPROVAL.** Bước đơn tiếp theo là người dùng quyết định
+  riêng chuyển TBS về OnePlus OTG (không nguồn phụ) và một lượt dual-reset upload.
+  Sau phê duyệt phải preflight mới, chọn file và xác nhận UI; không dùng permission/epoch cũ.
+  Không tự bắt đầu Phase 3.0. Mọi lỗi sau write là UNCERTAIN, không retry/corrective writes.
+- GitNexus refresh cuối lỗi FTS; không dùng graph đó xác nhận mã cuối. Source/diff/tests đã kiểm.
+  AgentMemory nhận lưu bài học chung, nhưng response không chứng minh remote-vs-fallback.
+
+
 ## Checkpoint phát hành Phase 2.8 — 2026-11-04 19:10 +07
 
 - Người dùng yêu cầu commit các thay đổi hiện có và push lên origin của nhánh hiện tại.

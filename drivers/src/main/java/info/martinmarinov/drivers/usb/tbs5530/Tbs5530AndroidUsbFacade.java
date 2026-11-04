@@ -51,6 +51,7 @@ public final class Tbs5530AndroidUsbFacade implements Tbs5530UsbBinding.Facade {
     }
 
     public interface RawConnection {
+        default byte[] rawDescriptors() throws IOException { throw new IOException("Raw descriptors unavailable"); }
         int interfaceCount() throws IOException;
         int interfaceId(int index) throws IOException;
         int alternateSetting(int index) throws IOException;
@@ -353,7 +354,7 @@ public final class Tbs5530AndroidUsbFacade implements Tbs5530UsbBinding.Facade {
         return failure instanceof IOException ? (IOException) failure : new IOException(message, failure);
     }
 
-    private static final class AndroidManager implements Manager {
+    static final class AndroidManager implements Manager {
         private final Context application;
         AndroidManager(Context application) { this.application = application; }
 
@@ -389,6 +390,7 @@ public final class Tbs5530AndroidUsbFacade implements Tbs5530UsbBinding.Facade {
             UsbDeviceConnection connection = usb().openDevice(selected);
             if (connection == null) return null;
             return new RawConnection() {
+                @Override public byte[] rawDescriptors() { return connection.getRawDescriptors(); }
                 private UsbInterface descriptor(int index) { return selected.getInterface(index); }
                 @Override public int interfaceCount() { return selected.getInterfaceCount(); }
                 @Override public int interfaceId(int index) { return descriptor(index).getId(); }

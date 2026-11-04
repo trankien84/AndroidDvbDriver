@@ -81,6 +81,9 @@ public final class Tbs5530LifecycleCoordinator implements AutoCloseable {
         default Tbs5530Descriptors.Endpoint streamEndpoint() throws IOException {
             throw new IOException("Stream endpoint metadata is unavailable");
         }
+        default byte[] rawDescriptors() throws IOException {
+            throw new IOException("Raw descriptor observation is unavailable");
+        }
         default void requireControlWorker() throws IOException { }
         default int controlTransfer(int requestType, int request, int value, int index,
                                     byte[] buffer, int offset, int length, int timeoutMillis) throws IOException {
@@ -222,6 +225,28 @@ public final class Tbs5530LifecycleCoordinator implements AutoCloseable {
             session.requireConnectionOwned(request.token, owned);
             return new Tbs5530ControlTransport(session, request.token, owned, false);
         }
+    }
+
+    byte[] bootstrapRawDescriptors(Request request) throws IOException {
+        final Lease lease;
+        synchronized (session) {
+            if (!matches(request) || owned == null || !owned.bootstrap) throw new IOException("No bootstrap owner");
+            lease = owned;
+        }
+        lease.requireControlWorker();
+        final byte[][] result = new byte[1][];
+        session.transaction(request.token, () -> {
+            session.requireConnectionOwned(request.token, lease);
+            try {
+                result[0] = lease.connection.rawDescriptors();
+                session.requireConnectionOwned(request.token, lease);
+            } catch (IOException | RuntimeException failure) {
+                session.failed(request.token, failure);
+                throw new Tbs5530ControlIo.TransferException(Tbs5530ControlIo.FailureKind.IO_FAILURE,
+                        "Descriptor observation failed", failure);
+            }
+        });
+        return result[0];
     }
 
     public Tbs5530Descriptors.Endpoint streamEndpoint(Request request) throws IOException {

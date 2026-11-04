@@ -1,5 +1,24 @@
 # Kiểm kê môi trường
 
+## 2026-11-04 — Phase 2.9: tuner trở lại OnePlus, attempt đã tiêu thụ — 22:51 +07
+
+- Người dùng duyệt riêng chuyển host, nguồn chỉ OTG/không backfeed và một lượt firmware;
+  tự nối TBS5530 vào OnePlus, cấp quyền, chọn file local qua SAF và xác nhận UI.
+  Wireless ADB đúng OnePlus/GM1900/API 30 vẫn online; không đổi toolchain/driver hoặc usbipd.
+- File firmware đã kiểm được chép riêng vào Downloads trên điện thoại qua Wireless ADB,
+  không assets/APK/Git và không upload từ PC. Lượt đầu source URL có trailing space bị
+  từ chối trước open/consume; sửa metadata rồi chọn lại đạt size/hash.
+- Android attempt UNCERTAIN sau 23 native writes full-length; guard bước 24 chưa tới API.
+  Không CPU release/corrective writes. Người dùng duyệt recovery riêng rồi tự rút/cắm một
+  lần trên OnePlus, không nguồn phụ và không chuyển Windows.
+- Sau recovery: permission/owner mới đọc raw 189 byte/default MATCH thiếu endpoint `0x82`, 14 ms,
+  open/read/close 1/1/1, không claim/transfer. Tuner hiện trên OnePlus; Windows không có PnP
+  TBS. App diagnostic mới idle, attempt consumed vẫn true. Không build/test instrumentation
+  sau hardware để không reinstall/xóa guard; không cấp permit mới.
+- Report attempt và raw recovery được lưu ngoài Git dưới dạng JSON chỉ metadata đã lọc.
+  Không lưu serial/IP/firmware payload; helper đã dừng cấp acknowledgment ở terminal state.
+  Mọi thử nghiệm mới bị chặn cho tới khi phân tích offline guard và có phê duyệt mới.
+
 ## 2026-11-04 — Phase 2.8: capture đã hoàn tất, tuner ở Windows — 18:38 +07
 
 - Hai lượt capture được phê duyệt riêng: 30 giây đầu không có packets vì reconnect muộn;

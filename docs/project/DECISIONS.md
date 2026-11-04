@@ -1,5 +1,76 @@
 # Architecture decision record (ADR)
 
+## ADR-020 — Phase 2.9: debug-only one-shot Android EP0 execution with expiring approval
+
+### Bổ sung sau một attempt được duyệt — 22:51 +07
+
+Người dùng đã duyệt riêng chuyển host/nguồn OTG/upload và tự xác nhận UI. Approval đã
+CONSUMED: 23 Android API calls full-length, runner attempted24 nhưng bước 24 dừng ở guard,
+không native call; ảnh chỉ 1344/8192 byte. Kết quả UNCERTAIN, không CPU release/retry/fallback.
+Không có post-firmware operational descriptor. Sau phê duyệt recovery riêng và một rút/cắm
+OTG bằng tay, raw mới lại MATCH/default thiếu endpoint `0x82`; không coi đó là hoàn tất upload.
+Giữ consumed, không xin attempt thứ hai; bước tiếp chỉ phân tích offline acknowledgment và
+stop telemetry. Các câu “chưa duyệt/NOT RUN” bên dưới là checkpoint trước thực nghiệm;
+[TEST-MATRIX.md](TEST-MATRIX.md) và [WORKLOG.md](WORKLOG.md) ghi kết quả mới hơn.
+
+**Date:** 2026-11-04
+
+**Status:** Đã triển khai trên working tree từ `ead0e4adf5051e878706ad70c3863b90cb8ffb98`.
+Phê duyệt phần cứng chưa có; không commit/push. Bằng chứng trước đó: [ADR-019](#adr-019--phase-28-separate-documented-fx2-reset-from-tbs-history-require-board-observation).
+
+**Context:** Đường cũ là `UsbManager` → facade → binding → coordinator → session/lease
+→ `Tbs5530ControlTransport` → `Tbs5530ControlIo`; diagnostic raw có reservation chung
+và worker riêng của owner. Không thêm owner/worker kết nối song song. Windows đã đo
+loader dual-reset thành công nhưng không chứng minh Android hoặc READY.
+
+**Decision — boundary/ownership:** Executor và Android adapter nằm trong `drivers/src/debug`;
+UI, permit và SAF nằm trong `app/src/debug`. Main chỉ thêm seam raw descriptors mặc định
+throw và truy cập package-private dưới transaction/lease hiện hữu; facade production vẫn
+không override `openBootstrap`. Operational 82 guard, registry/XML, frontend và driver cũ
+không đổi. Bootstrap không claim, không release interface, không TS; cùng worker giữ
+connection. Invalidation chỉ hủy logic; cleanup chờ synchronous call trả về, không force-close.
+
+**Decision — firmware/plan:** Đọc tối đa 8192 byte cộng một byte kiểm trailing từ file do người
+dùng chọn; không persist SAF grant hoặc chép blob vào app/Git. URL archive/entry/raw-linear
+là metadata người dùng xác nhận; size/SHA-256 vẫn phải đúng khóa hiện hữu. Android path
+validate lại ảnh, chỉ `TBS_SOURCE_DUAL_RESET`: 7F92=01, E600=01, 128×64 byte tại 0000–1FC0,
+7F92=00, E600=00, delay 100 ms. Tổng 132 writes/8196 byte payload, trong đó 8192 byte image.
+Timeout 2000 ms mỗi transfer; full length bắt buộc, kể cả release. Không E600-only/fallback/retry.
+
+**Decision — approval:** Challenge ngẫu nhiên theo lần chuẩn bị/install, attachment hash,
+upload epoch 1, plan/hash khóa và hạn tối đa năm phút. Challenge không phải approval.
+Helper chỉ chạy với hai xác nhận riêng chuyển host/nguồn OTG và một lượt upload đã được
+người dùng duyệt trong phiên. Helper kiểm đúng một TCP OnePlus/API 30, heartbeat và
+acknowledgment đúng ordinal trước từng write. App còn yêu cầu foreground và xác nhận UI.
+Không tạo permit từ intent/attach/grant/install/launch. Attempt được ghi bền vững trước
+bước có thể ghi; duplicate/relaunch/restart không tạo attempt mới. Cài lại không tái dùng
+permit cũ vì install/challenge đổi. Không chạy helper thật khi chưa được duyệt.
+
+**Decision — observers/state:** Đăng ký observer từ chuẩn bị ảnh; attach/detach làm stale
+approval. Kiểm duy nhất 734c:5530, permission, exact default raw fingerprint thiếu endpoint `0x82`,
+owner/epoch/pending/cleanup và permit trước ghi. Lỗi sau bước được thử là UNCERTAIN,
+không corrective CPU release. Đủ writes chỉ TRANSITIONING; đóng lease cũ an toàn rồi
+mở lease/epoch mới chỉ đọc raw, không xin lại quyền tự động. Có profile với endpoint `0x82` mới chỉ là
+OPERATIONAL_CANDIDATE; vẫn không gọi `ready()`. Metadata lưu kết quả API/count/hash,
+trường số descriptors, thời gian và stop reason; không path/serial/IP/payload. Report lỗi
+thì revoke. Mất foreground cũng revoke, kể cả rotation; không tự tiếp tục lượt ghi.
+
+**Limits/recovery:** Không thể chứng minh độc quyền USB giữa các app qua Android public API;
+cần người dùng đóng app giữ tuner và xác nhận không nguồn phụ/backfeed. Reconnect bị Android
+bỏ lỡ nhưng tái dùng toàn bộ identity vẫn là giới hạn quan sát. ADB acknowledgment không loại
+bỏ race sau lần kiểm cuối; in-flight call không bị cắt, kết quả không rõ là UNCERTAIN.
+Không dùng USB reset thay power-on. Rút/cắm tay chỉ là phương án người dùng cân nhắc sau
+khi kiểm nguồn; không phải recovery được phần mềm bảo đảm. Nếu thiếu quyền/attachment mới
+khi quan sát thì dừng; không reupload hoặc chuyển sang Phase 3.0.
+
+**Alternatives:** Bật boolean upload chung, claim giả, connection thứ hai, tự chạy trên attach,
+nhúng firmware, chỉ heartbeat không đối chiếu bước, chọn plan theo fake PASS: không chọn.
+
+**Verification/rollback:** [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md).
+Rollback bằng rà diff của debug/seam này; không reset/clean hoặc sửa references. Nếu đã
+thực nghiệm lỗi thì rollback code không khôi phục CPU/USB; cần checkpoint và quyết định
+vật lý riêng. Không có thử nghiệm Android upload trong checkpoint hiện tại.
+
 ## ADR-019 — Phase 2.8: separate documented FX2 reset from TBS history; require board observation
 
 ### Bổ sung sau phép đo Windows đã được duyệt — 2026-11-04 18:38 +07

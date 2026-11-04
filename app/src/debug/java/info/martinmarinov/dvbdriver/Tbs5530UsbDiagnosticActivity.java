@@ -24,6 +24,13 @@ public final class Tbs5530UsbDiagnosticActivity extends Activity {
     private Button request, refresh, permissionOnly, raw;
     private boolean reportWriteFailed;
     private Spinner selection;
+    private Button selectFirmware, upload;
+    private android.widget.EditText source, entry;
+    private android.widget.CheckBox sourceAndPower;
+    private final android.os.Handler heartbeatUi = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable permitPoll = new Runnable() {
+        public void run() { if (upload != null) upload.setEnabled(controller.canBootstrap()); heartbeatUi.postDelayed(this, 500); }
+    };
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -57,6 +64,32 @@ public final class Tbs5530UsbDiagnosticActivity extends Activity {
         permissionOnly = button(layout, "Chỉ yêu cầu quyền (không mở USB)", controller::permissionSelected);
         request = button(layout, "Yêu cầu quyền + chạy một chu kỳ", controller::startSelected);
         raw = button(layout, "Đọc raw descriptors một lần (không claim)", controller::rawSelected);
+        source = new android.widget.EditText(this);
+        source.setHint("URL archive nguồn do người dùng xác nhận");
+        source.setSingleLine(true);
+        source.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);
+        layout.addView(source);
+        entry = new android.widget.EditText(this);
+        entry.setHint("Entry trong archive (./dvb-usb-id5530.fw)");
+        entry.setSingleLine(true);
+        entry.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+        layout.addView(entry);
+        sourceAndPower = new android.widget.CheckBox(this);
+        sourceAndPower.setText("Tôi xác nhận nguồn/entry/raw-linear; chỉ nguồn OTG, không nguồn phụ/backfeed, không ứng dụng khác giữ tuner.");
+        layout.addView(sourceAndPower);
+        selectFirmware = button(layout, "Chọn firmware local (không nạp)", () -> {
+            if (!sourceAndPower.isChecked() || !controller.canPrepareFirmware()) return;
+            android.content.Intent picker = new android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT)
+                    .addCategory(android.content.Intent.CATEGORY_OPENABLE).setType("*/*");
+            startActivityForResult(picker, 29);
+        });
+        upload = button(layout, "Xác nhận một lượt dual-reset (cần phê duyệt phiên)", () -> {
+            if (!controller.canBootstrap()) return;
+            new android.app.AlertDialog.Builder(this).setTitle("Một lần nạp FX2 RAM")
+                    .setMessage("132 writes A0, gồm 7F92 và E600. Có thể CPU halt hoặc mất USB. Không retry/recovery tự động; không chứng minh DVB. Chỉ tiếp tục nếu đã duyệt riêng trong phiên.")
+                    .setNegativeButton("Hủy", null)
+                    .setPositiveButton("Nạp đúng một lần", (dialog, which) -> controller.bootstrapSelected()).show();
+        });
         button(layout, "Đóng", () -> { controller.close(); finish(); });
         button(layout, "Sao chép báo cáo đã ẩn định danh", () -> {
             ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
@@ -64,10 +97,11 @@ public final class Tbs5530UsbDiagnosticActivity extends Activity {
         });
         report = new TextView(this);
         report.setTextIsSelectable(true);
+        layout.addView(report);
         ScrollView scroll = new ScrollView(this);
-        scroll.addView(report);
-        layout.addView(scroll, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
-        setContentView(layout);
+        scroll.setFillViewport(true);
+        scroll.addView(layout);
+        setContentView(scroll);
         controller.observe(this::render);
         render();
     }
@@ -87,6 +121,8 @@ public final class Tbs5530UsbDiagnosticActivity extends Activity {
         selection.setEnabled(!controller.isActive());
         permissionOnly.setEnabled(controller.canRequestPermission());
         raw.setEnabled(controller.canInspectRaw());
+        selectFirmware.setEnabled(controller.canPrepareFirmware());
+        upload.setEnabled(controller.canBootstrap());
         exportReport();
     }
 
@@ -112,7 +148,22 @@ public final class Tbs5530UsbDiagnosticActivity extends Activity {
         } catch (java.io.IOException | org.json.JSONException | RuntimeException error) {
             if (!reportWriteFailed) android.util.Log.w("Tbs5530Diagnostic", "Private report export failed: " + error.getClass().getSimpleName());
             reportWriteFailed = true;
+            controller.observerFailed();
         }
+    }
+
+    @Override protected void onActivityResult(int requestCode, int resultCode, android.content.Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == 29 && resultCode == RESULT_OK && data != null && data.getData() != null) {
+            controller.prepareFirmware(getApplicationContext(), data.getData(), source.getText().toString(),
+                    entry.getText().toString(), sourceAndPower.isChecked());
+        }
+    }
+    @Override protected void onResume() {
+        super.onResume(); controller.foreground(true); heartbeatUi.post(permitPoll);
+    }
+    @Override protected void onPause() {
+        controller.foreground(false); heartbeatUi.removeCallbacks(permitPoll); super.onPause();
     }
 
     Tbs5530DiagnosticController diagnosticController() { return controller; }

@@ -199,6 +199,12 @@ public final class Tbs5530UsbBinding implements AutoCloseable {
                 connection.claim(receipt);
                 ensureCurrent(attempt);
             }
+            public byte[] rawDescriptors() throws IOException {
+                ensureCurrent(attempt);
+                byte[] result = connection.rawDescriptors();
+                ensureCurrent(attempt);
+                return result;
+            }
             public void requireControlWorker() throws IOException { connection.requireControlWorker(); }
             public int controlTransfer(int type, int request, int value, int index, byte[] buffer,
                                        int offset, int length, int timeout) throws IOException {
@@ -332,6 +338,16 @@ public final class Tbs5530UsbBinding implements AutoCloseable {
     synchronized long bootstrapEpoch() throws IOException {
         if (current == null || !current.bootstrap) throw new IOException("No bootstrap attempt");
         return current.epoch;
+    }
+
+    byte[] bootstrapRawDescriptors(long expectedEpoch) throws IOException {
+        Tbs5530LifecycleCoordinator.Request request;
+        synchronized (this) {
+            if (!active(current) || current.epoch != expectedEpoch || !current.bootstrap
+                    || current.request == null || current.acquiring) throw new IOException("No bootstrap attachment");
+            request = current.request;
+        }
+        return coordinator.bootstrapRawDescriptors(request);
     }
 
     Tbs5530ControlIo bootstrapControlIo() throws IOException { return bootstrapControlIo(bootstrapEpoch()); }

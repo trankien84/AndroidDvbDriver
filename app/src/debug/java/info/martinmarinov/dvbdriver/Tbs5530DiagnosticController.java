@@ -28,6 +28,14 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
     private final Tbs5530RawDescriptorInspection.Port rawPort;
     private Tbs5530RawDescriptorInspection rawInspection;
     private boolean rawOperation;
+    private info.martinmarinov.drivers.usb.tbs5530.Tbs5530FirmwarePlan firmware;
+    private info.martinmarinov.drivers.usb.tbs5530.Tbs5530AndroidBootstrap bootstrap;
+    private Tbs5530BootstrapApproval approval;
+    private Tbs5530UsbBinding.Device firmwareDevice;
+    private boolean preparing, bootstrapOperation, foreground;
+    private Tbs5530UsbBinding.Registration preparationObserver;
+    private java.util.concurrent.atomic.AtomicBoolean preparationInvalidated = new java.util.concurrent.atomic.AtomicBoolean();
+    private String firmwareStatus = "NOT_SELECTED";
     private final long permissionTimeout, acquisitionTimeout;
     private final List<String> steps = new ArrayList<>();
     private final int[] attempts = new int[4], completed = new int[4];
@@ -80,6 +88,7 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
     int selectedIndex() { return selected; }
     void select(int index) { main(); if (!active && index >= 0 && index < snapshot.devices.size()) selected = index; }
     private boolean resourcesIdle() {
+        if (preparing || bootstrap != null && bootstrap.cleanupPending()) return false;
         if (active || binding != null && binding.isPending() || session != null && session.isCleanupPending()) return false;
         if (rawInspection != null) {
             Tbs5530RawDescriptorInspection.Snapshot raw = rawInspection.snapshot();
@@ -100,11 +109,90 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
             if (diagnosticReservation == reservation) diagnosticReservation = null;
         }
     }
-    boolean canRequestPermission() { return !destroyed && resourcesIdle() && reservationAvailable() && !snapshot.devices.isEmpty(); }
+    boolean canRequestPermission() { return !destroyed && !bootstrapOperation && resourcesIdle() && reservationAvailable() && !snapshot.devices.isEmpty(); }
     boolean canInspectRaw() { return rawPort != null && canRequestPermission(); }
-    boolean canStart() { return canRequestPermission() && snapshot.acquisitionAllowed.get(selected); }
+    boolean canStart() { return firmware == null && canRequestPermission() && snapshot.acquisitionAllowed.get(selected); }
     boolean isActive() { return active; }
     boolean isRuntimeTerminated() { return runtime == null || runtime.isTerminated(); }
+
+    void foreground(boolean value) {
+        main(); foreground = value;
+        if (approval != null) approval.foreground(value);
+        if (!value && bootstrap != null && bootstrap.snapshot().pending) bootstrap.close();
+    }
+
+    boolean canPrepareFirmware() { return canRequestPermission() && snapshot.devices.size() == 1 && bootstrap == null; }
+    boolean canBootstrap() {
+        if (!foreground || preparationInvalidated.get() || firmware == null || approval == null || approval.consumed() || !canPrepareFirmware()
+                || !firmwareDevice.equals(snapshot.devices.get(selected))) return false;
+        try { approval.requireCurrent(); return true; } catch (IOException error) { return false; }
+    }
+    void prepareFirmware(android.content.Context context, android.net.Uri uri, String source, String entry,
+                         boolean sourceAndPowerConfirmed) {
+        main();
+        if (!sourceAndPowerConfirmed || !canPrepareFirmware() || !reserve()) return;
+        applicationForBootstrap = context.getApplicationContext();
+        firmware = null; approval = null; preparing = true; active = true;
+        firmwareStatus = "VALIDATING_LOCAL_SELECTION";
+        firmwareDevice = snapshot.devices.get(selected);
+        java.util.concurrent.atomic.AtomicBoolean invalidated = new java.util.concurrent.atomic.AtomicBoolean();
+        preparationInvalidated = invalidated;
+        try {
+            if (preparationObserver != null) preparationObserver.close();
+            preparationObserver = factory.create().listen(new Tbs5530UsbBinding.Events() {
+                private void changed(Tbs5530UsbBinding.Device device) {
+                    if (device.vendorId == 0x734c && device.productId == 0x5530) invalidated.set(true);
+                }
+                public void attached(Tbs5530UsbBinding.Device device) { changed(device); }
+                public void detached(Tbs5530UsbBinding.Device device) { changed(device); }
+            });
+        } catch (IOException | RuntimeException error) {
+            preparing = false; active = false; invalidated.set(true); releaseReservation(); changed(); return;
+        }
+        if (runtime == null) runtime = new Tbs5530AndroidRuntime();
+        runtime.execute(() -> {
+            try (java.io.InputStream input = context.getContentResolver().openInputStream(uri)) {
+                info.martinmarinov.drivers.usb.tbs5530.Tbs5530FirmwarePlan validated =
+                        info.martinmarinov.drivers.usb.tbs5530.Tbs5530OneShotBootstrap.readFirmware(input, source, entry,
+                                info.martinmarinov.drivers.usb.tbs5530.Tbs5530FirmwareValidation.Format.RAW_LINEAR);
+                Tbs5530BootstrapApproval prepared = new Tbs5530BootstrapApproval(context, firmwareDevice);
+                prepared.publishChallenge();
+                handler.post(() -> {
+                    if (!destroyed) {
+                        firmware = validated; approval = prepared; approval.foreground(foreground);
+                        firmwareStatus = "HASH_SIZE_VALIDATED_SOURCE_USER_ATTESTED_SESSION_APPROVAL_REQUIRED";
+                    }
+                    preparing = false; active = false; releaseReservation(); changed();
+                });
+            } catch (IOException | RuntimeException error) {
+                handler.post(() -> { preparing = false; active = false; firmwareStatus = "VALIDATION_FAILED";
+                    releaseReservation(); changed(); });
+            }
+        });
+        changed();
+    }
+    void bootstrapSelected() {
+        main();
+        if (!canBootstrap() || !reserve()) return;
+        bootstrapOperation = true; rawOperation = false; active = true; clicks++;
+        try {
+            bootstrap = new info.martinmarinov.drivers.usb.tbs5530.Tbs5530AndroidBootstrap(
+                    applicationForBootstrap, runtime, firmwareDevice, firmware,
+                    new info.martinmarinov.drivers.usb.tbs5530.Tbs5530OneShotBootstrap.Guard() {
+                        public void requireCurrent() throws IOException { approval.requireCurrent(); }
+                        public void requireWrite(int ordinal) throws IOException { approval.requireWrite(ordinal); }
+                    }, approval::consume);
+            if (preparationInvalidated.get()) throw new IOException("Prepared attachment changed");
+            if (preparationObserver != null) { preparationObserver.close(); preparationObserver = null; }
+            bootstrap.startFromUserConfirmation();
+        } catch (IOException | RuntimeException error) {
+            error(error); active = false;
+            if (bootstrap != null) bootstrap.close();
+            releaseReservation();
+        }
+        handler.post(poll); changed();
+    }
+    private android.content.Context applicationForBootstrap;
 
     void startSelected() { start(false); }
     void permissionSelected() { start(true); }
@@ -164,6 +252,13 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
     private void poll() {
         main();
         if (destroyed || !active) return;
+        if (bootstrapOperation && bootstrap != null) {
+            active = bootstrap.snapshot().pending || bootstrap.cleanupPending();
+            if (!active) releaseReservation();
+            changed();
+            if (active) handler.postDelayed(poll, 50);
+            return;
+        }
         if (rawOperation) {
             active = rawInspection.snapshot().pending;
             if (resourcesIdle()) releaseReservation();
@@ -286,6 +381,15 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
         StringBuilder out = new StringBuilder("Chẩn đoán USB TBS5530 — chỉ bản debug\n");
         out.append("API Android: ").append(android.os.Build.VERSION.SDK_INT).append('\n');
         out.append(snapshot.report).append('\n');
+        out.append("Firmware: ").append(firmwareStatus).append('\n');
+        if (bootstrapOperation && bootstrap != null) {
+            info.martinmarinov.drivers.usb.tbs5530.Tbs5530OneShotBootstrap.Snapshot s = bootstrap.snapshot();
+            out.append("Bootstrap: ").append(s.state).append("; epoch=").append(s.epoch)
+                    .append("; attempted/completed=").append(s.attempted).append('/').append(s.completed)
+                    .append("; bytes=").append(s.bytes).append("; failure=").append(s.failure).append('\n');
+            out.append("Không READY, không frontend hoặc TS; không retry.\n");
+            return out.toString();
+        }
         if (rawOperation && rawInspection != null) {
             Tbs5530RawDescriptorInspection.Snapshot raw = rawInspection.snapshot();
             out.append("Raw inspection: ").append(raw.status).append("; generation: ").append(raw.generation)
@@ -351,7 +455,42 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
         return json;
     }
 
+    private org.json.JSONObject bootstrapReport() throws org.json.JSONException {
+        info.martinmarinov.drivers.usb.tbs5530.Tbs5530OneShotBootstrap.Snapshot s = bootstrap.snapshot();
+        org.json.JSONObject json = new org.json.JSONObject();
+        json.put("operation", "DEBUG_ONE_SHOT_FX2"); json.put("state", s.state.name());
+        json.put("timestamp_epoch_ms", System.currentTimeMillis()); json.put("duration_ms", s.durationMillis);
+        json.put("epoch", s.epoch); json.put("pending", s.pending); json.put("cleanup_pending", bootstrap.cleanupPending());
+        json.put("attempted", s.attempted); json.put("completed", s.completed); json.put("transferred_bytes", s.bytes);
+        json.put("plan", "TBS_SOURCE_DUAL_RESET");
+        json.put("firmware_size", info.martinmarinov.drivers.usb.tbs5530.Tbs5530FirmwareValidation.SIZE);
+        json.put("firmware_sha256", info.martinmarinov.drivers.usb.tbs5530.Tbs5530FirmwareValidation.SHA256);
+        json.put("source_provenance", "USER_ATTESTED_ARCHIVE_METADATA_HASH_VERIFIED");
+        json.put("failure", s.failure); json.put("attachment_events", bootstrap.attachmentEvents());
+        json.put("requests", new org.json.JSONArray(s.transfers));
+        json.put("android_api_results", new org.json.JSONArray(bootstrap.apiResults()));
+        json.put("before", descriptorReport(s.before)); json.put("after", descriptorReport(s.after));
+        json.put("ready", false); json.put("frontend_tested", false); json.put("active_configuration", "NOT_OBSERVED");
+        json.put("active_alternate", "NOT_OBSERVED"); json.put("text_report", report());
+        return json;
+    }
+    private org.json.JSONObject descriptorReport(Tbs5530RawDescriptors.Result raw) throws org.json.JSONException {
+        org.json.JSONObject json = new org.json.JSONObject();
+        if (raw == null) { json.put("status", "NOT_OBSERVED"); return json; }
+        json.put("length", raw.length); json.put("sha256", raw.sha256); json.put("status", raw.status);
+        json.put("issues", new org.json.JSONArray(raw.issues));
+        org.json.JSONArray entries = new org.json.JSONArray();
+        for (Tbs5530RawDescriptors.Entry entry : raw.entries) entries.put(new org.json.JSONObject(entry.fields));
+        json.put("entries", entries); return json;
+    }
+    void observerFailed() {
+        main();
+        if (approval != null) approval.foreground(false);
+        if (bootstrap != null && bootstrap.snapshot().pending) bootstrap.close();
+    }
+
     synchronized org.json.JSONObject structuredReport() throws org.json.JSONException {
+        if (bootstrapOperation && bootstrap != null) return bootstrapReport();
         if (rawOperation && rawInspection != null) return rawReport();
         org.json.JSONObject json = new org.json.JSONObject();
         json.put("timestamp_epoch_ms",System.currentTimeMillis());json.put("operation_id",clicks);
@@ -399,6 +538,13 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
         destroyed = true;
         observer = null;
         handler.removeCallbacks(poll);
+        if (approval != null) approval.foreground(false);
+        preparationInvalidated.set(true);
+        if (preparationObserver != null) {
+            try { preparationObserver.close(); } catch (IOException error) { error(error); }
+            preparationObserver = null;
+        }
+        if (bootstrap != null) bootstrap.close();
         if (rawInspection != null && rawInspection.snapshot().pending) rawInspection.close();
         try { closeBinding(); }
         finally {

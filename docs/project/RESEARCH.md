@@ -1,5 +1,57 @@
 # Research log (append-only)
 
+## 2026-11-04 — Phase 2.9: Android thực đã ghi một phần, dừng ở acknowledgment
+
+**RUNTIME-OBSERVED, 22:51 +07:** Sau phê duyệt riêng chuyển host và một lượt upload,
+người dùng cấp permission, tự chọn file SAF và xác nhận UI. Raw trước nạp 189 byte,
+MATCH/default thiếu endpoint `0x82`. Android API trả đủ byte cho 23 A0 OUT: hai stop reset và 21 chunk;
+1346 byte payload = 2 reset + 1344 image. Lượt chưa hoàn tất 8192 byte.
+
+Runner ghi attempted=24/completed=23, duration 25946 ms. Bước 24 (DATA value 1344/0x0540,
+64 byte) ghi FAILED_OR_UNKNOWN sau 1510321 µs, nhưng không có kết quả/call thứ 24 tại
+Android port; guard chạy trước lời gọi native. Sau dừng, request/last acknowledged ordinal đều 24.
+Điều này tương thích deadline acknowledgment 1500 ms bị lỡ, **chưa chứng minh nguyên nhân sâu**
+hoặc việc permit đến trước/sau deadline. Không gọi là USB timeout, A0 STALL hay lỗi 7F92.
+Có thể cần telemetry timestamp/stop reason chi tiết hơn và mô phỏng độ trễ handshake offline.
+Không tự nới thời hạn hoặc xin attempt thứ hai trong cùng lượt.
+
+Kết quả **UNCERTAIN**, consumed=true, pending/cleanup=false, attach/detach events=0;
+không CPU release, corrective writes, retry, fallback, frontend hoặc post-upload descriptors.
+Ảnh chưa đủ và CPU có thể halt; cleanup tài nguyên thành công không chứng minh CPU state.
+
+**Recovery RUNTIME-OBSERVED, không phải guarantee:** Người dùng duyệt rồi tự rút/cắm một lần,
+chỉ nguồn OTG, không Windows. Permission mới và một owner chẩn đoán mới đọc/đóng raw 14 ms,
+open/read/close=1/1/1, claim/transfer=0. Cây 189 byte/hash
+`e2887bad8b5a0e8dcaaa69bd636a01a2d11e53fe4b532b5b14828a2d3df952de`
+khớp cây trước nạp, MATCH/BOOTSTRAP_CANDIDATE thiếu endpoint `0x82`. Đây không phải post-firmware
+operational profile. Attempt vẫn consumed; chưa đủ điều kiện bridge/I²C của Phase 3.0.
+
+## 2026-11-04 — Phase 2.9: xác nhận chip và ranh giới thử Android
+
+**VENDOR-CONFIRMED:** TBS xác nhận controller USB là Cypress EZ-USB FX2, mã
+`CY7C68013` (nguồn: TBS technical support, 2026-11-04; người dùng cung cấp).
+Xác nhận này không bao gồm revision, reset semantics, quyền phân phối firmware,
+recovery hoặc một bản port Android. Không lưu thư hay thông tin liên hệ.
+
+**SOURCE-CONFIRMED:** Đọc lại `tbs5530_load_firmware` tại official
+`2ce787de9f6e81b4294692a45de15596ae2e1322`, C
+`c5fa27eecbe80633cbb365cc44656daea1c0e2e3` và `Bridge.LoadFirmware` tại Go
+`11228b05fb1626bf41c4e1879ace10cd0a8d575c`; không fetch/sửa references.
+Giữ dual-reset và delay 100 ms. Bằng chứng Windows của Phase 2.8 vẫn độc lập
+với Android; không sao chép B7 hoặc lần nạp thứ hai.
+
+**Checkpoint trước thực nghiệm (giữ lịch sử):** SAF cho người dùng chọn file; nguồn archive/entry
+là lời xác nhận của người dùng, không phải provenance suy ra từ bytes. Size/hash kiểm
+bắt buộc trước open. Runner dùng owner cũ, raw fingerprint trước ghi và một lease mới
+chỉ đọc sau nạp. `getRawDescriptors()` phản ánh cây Android trả về, không tự chứng minh
+alternate/configuration đang active hay bridge/frontend đã sẵn sàng.
+
+**UNVERIFIED / NOT RUN tại checkpoint trước thực nghiệm:** Android A0, transition thực và descriptors sau firmware.
+ADB heartbeat kèm acknowledgment cho từng write giảm khoảng trống mất kết nối;
+không thể bảo đảm PC/Android đồng thời tuyệt đối ở thời điểm native call bắt đầu.
+Khi mất kiểm soát phải ghi UNCERTAIN, chờ call trả về và không ghi khắc phục.
+Quyết định/giới hạn và checkpoint ở [ADR-020](DECISIONS.md) và [TEST-MATRIX.md](TEST-MATRIX.md).
+
 ## 2026-11-04 — Phase 2.8: đối chiếu CPUCS độc lập và chọn phép đo URB trên board thật
 
 ### Kết luận và phạm vi

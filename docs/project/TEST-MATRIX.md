@@ -1,5 +1,51 @@
 # TBS5530 test matrix
 
+## 2026-11-04 — Phase 2.9: một attempt Android thật và recovery riêng
+
+Các kết quả này mới hơn checkpoint offline phía dưới. Không chạy lại instrumentation/build
+sau thực nghiệm, tránh cài lại/xóa attempt guard đã consumed. Không thay mã sau khi chạy hardware.
+
+| Gate | Kết quả thực | Bằng chứng / giới hạn |
+|---|---|---|
+| Phê duyệt | APPROVED rồi CONSUMED | Người dùng xác nhận riêng chuyển Windows→OnePlus, chỉ OTG/không backfeed và một lượt dual-reset; tự chọn SAF và tự bấm Nạp đúng một lần |
+| Firmware preflight | PASS trước open | 8192 byte/hash khóa, source metadata user-attested. Lần chọn đầu FAILED vì URL trailing space, không open/write/consume; người dùng sửa rồi chọn lại |
+| Permission/ownership | RUNTIME-OBSERVED | GM1900/API 30 qua Wireless ADB; một tuner, permission có, raw MATCH thiếu endpoint `0x82`; observer/epoch 1/worker hiện hữu, không claim |
+| A0 thật qua Android API | PARTIAL, không upload PASS | 23 actual calls đều full length: 2×1 byte reset stop + 21×64 byte image =1346 byte payload; 1344/8192 byte image |
+| Bước 24 / handshake | FAILED trước Android API | value 0x0540/length 64, runner attempted 24/completed 23; guard dừng sau 1510321 µs. Không native call 24. Sau dừng ack ordinal 24; deadline 1500 ms là giải thích phù hợp nhưng nguyên nhân sâu UNVERIFIED |
+| Trạng thái attempt | UNCERTAIN | Duration 25946 ms, IO_FAILURE, attach events 0, pending=false/cleanup=false, consumed=true; không CPU release/retry/fallback hoặc lần upload 2 |
+| Firmware transition/post-upload descriptors | NOT RUN / NOT REACHED | Chưa đủ image/132 writes; không TRANSITIONING hoặc OPERATIONAL_CANDIDATE, không READY/frontend/TS |
+| Recovery vật lý | RUNTIME-OBSERVED có điều kiện | Người dùng duyệt riêng và rút/cắm đúng một lần trên OnePlus, chỉ OTG. Không software USB reset hoặc chuyển Windows |
+| Raw sau recovery | PASS đọc descriptor, không bootstrap PASS | Permission/owner mới, 14 ms; open/read/close 1/1/1, claim/transfer 0; 189 byte/MATCH/BOOTSTRAP_CANDIDATE thiếu endpoint `0x82`, hash khớp trước nạp |
+| Ownership/guard cuối | RUNTIME-OBSERVED | Tuner trên OnePlus; Windows PnP tuner 0; ADB đúng OnePlus online. Guard consumed=true sau mở diagnostic mới; không tái cấp permit hoặc retry |
+| Bước tiếp | BLOCKED đối với hardware mới | Phân tích/mô phỏng offline acknowledgment latency và stop telemetry; mọi attempt tương lai cần phê duyệt mới, không reuse authorization |
+
+
+## 2026-11-04 — Phase 2.9: debug Android bootstrap, chưa thực nghiệm tuner
+
+Baseline `ead0e4adf5051e878706ad70c3863b90cb8ffb98` cộng working tree, không commit.
+Giữ AGP 9.5.0/Gradle 9.8.2/JDK 25.0.5.0.3/compile 37.2/Build-Tools 37.0.0,
+NDK 30.0.16248370/CMake 4.1.2/target 37/min 21/source-target 8; không cài hoặc nâng cấp.
+
+| Gate | Kết quả mới | Bằng chứng / giới hạn |
+|---|---|---|
+| One-shot runner fake | OFFLINE-TESTED PASS, 11 methods mới | 132 writes/8196 payload bytes, 8192 image bytes, 100 ms; 4 kiểu lỗi × 132 vị trí; deny trước open, identity/raw/fingerprint/permission/epoch/ADB, cleanup/in-flight, quan sát lease mới và không READY |
+| Ảnh thật local | OFFLINE-TESTED PASS | Reader/planner mới chạy bằng Java `--release 8`, đúng size/hash khóa; so từng DATA chunk, từ chối truncated/extra/modified; không USB và không blob fixture |
+| Android adapter injected | PASS, 3 instrumentation methods mới | Manager/raw fake trên Android thật; full/short/negative/exception, thứ tự/fields, worker, observer, single lease, acknowledgment; không gọi UsbManager phần cứng |
+| Approval boundary | PASS, 4 instrumentation methods mới | Thiếu permit, foreground, explicit flags, expiry/heartbeat, challenge/install/hash/attachment/plan, duplicate, restart/reinstall, ordinal acknowledgment |
+| JVM toàn bộ | PASS: 241 methods | drivers 227 + usbxfer 1 + dvbservice 13; 0 failures/errors/skipped. Test runner mới có 528 trường hợp lỗi trong 1 method, không tính thành 528 testcases riêng |
+| Instrumentation | PASS: 56 tests | app 21 + drivers 33 + dvbservice 2; GM1900/API 30, không tuner; 0 failures/errors/skipped. Native smoke/XML và 49 tests cũ giữ trong suite |
+| Build/lint mã cuối | PASS, exit 0 | Lượt cuối 4 phút 19 giây, 421 tasks/39 executed/382 up-to-date; debug/release/lint. Lint 0 Error/Fatal, 10 Warning; không suppress hoặc thêm baseline |
+| Java/release isolation | PASS static | 107 class TBS major 52; uploader/runner/approval/diagnostic có debug, vắng release DEX; release manifest không diagnostic, min 21/target 37; không .fw hoặc firmware blob trong hai APK |
+| Approval PowerShell helper | OFFLINE-TESTED PASS | Parse 0 errors; không flags → BLOCKED exit 1 trước ADB; mock ADB end-to-end cấp đúng ordinal/ghi atomic/stop terminal exit 0. Không chạy helper với target thật |
+| UI sau UTP | RUNTIME-OBSERVED PASS có phạm vi | Cài debug exit 0/cold launch 670 ms; nút firmware/upload hiện và disabled; report DETECTED, open/claim 0, pending/cleanup false. Không USB/TBS trên OnePlus; Windows BDA OK |
+| Wireless ADB | RUNTIME-OBSERVED | Chọn một TCP target, xác minh OnePlus/GM1900/API 30/Host; giám sát mỗi 10 giây trong lệnh dài. Không tự pair/reconnect/đổi target |
+| Tooling/editor | Có giới hạn | VS Code task không resolve được, dùng wrapper trực tiếp. Java editor báo ngoài classpath/duplicate phantom; Gradle compile/test thực thành công, source chỉ một định nghĩa mỗi method. Không sửa global cấu hình |
+| GitNexus cuối | FAILED refresh | Đầu và giữa phiên refresh PASS; cuối gặp FTS file_fts inconsistent/COPY. Không force/drop/rebuild thủ công; không dùng graph cuối làm chứng cứ an toàn |
+| Android hardware firmware/transition/post-descriptors | NOT RUN / BLOCKED | Chưa duyệt chuyển host hoặc một lượt upload; firmware chưa chọn qua UI trên tuner; chưa có descriptor Android sau firmware |
+| Frontend/I²C/tuning/PLP/MPEG-TS/READY | NOT RUN, ngoài Phase 2.9 | Không A0 IN, B7, 80/90/91/8A, EEPROM, setInterface/setConfiguration/reset hoặc stream |
+| API 21 runtime / recovery vật lý | NOT RUN | Static minSdk/major52 không thay thế thiết bị API21; không đảm bảo power-cycle recovery từ fake |
+
+
 ## 2026-11-04 — Phase 2.8: kết quả sau trace Windows và parser offline
 
 Phần này mới hơn checkpoint offline 225 JVM phía dưới. Firmware Android vẫn NOT RUN;
