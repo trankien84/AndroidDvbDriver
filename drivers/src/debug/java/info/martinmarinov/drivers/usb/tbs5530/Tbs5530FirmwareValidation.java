@@ -24,7 +24,7 @@ public final class Tbs5530FirmwareValidation {
                 Collections.singletonList(new Tbs5530FirmwarePlan.Range(0x2000,0x10000)),0,SIZE));
     }
 
-    /** The legacy write is source-confirmed but has no proven FX2 mapping on this board. */
+    /** Windows URBs are evidence, not an Android one-shot preflight or upload authorization. */
     public static boolean hardwareUploadAllowed() { return false; }
-    public static String hardwareBlocker() { return "UNVERIFIED_7F92_MAPPING_AND_BOARD_RECOVERY"; }
+    public static String hardwareBlocker() { return "ANDROID_ONE_SHOT_PREFLIGHT_AND_UPLOAD_APPROVAL_REQUIRED"; }
 }

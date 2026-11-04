@@ -1,5 +1,77 @@
 # Kiểm kê môi trường
 
+## 2026-11-04 — Phase 2.8: capture đã hoàn tất, tuner ở Windows — 18:38 +07
+
+- Hai lượt capture được phê duyệt riêng: 30 giây đầu không có packets vì reconnect muộn;
+  180 giây/8 MiB sau có 3028 packets, 232084 byte, chỉ bus3/address4 và không frame bị cắt.
+  Capture ngoài Git; không cài/đổi filter/driver/registry. Người dùng tự reconnect đúng cổng USB 2.0,
+  không nguồn phụ theo xác nhận. BDA 2.0.0.2 tự phát hai lượt dual-reset và vendor init;
+  không có lệnh USB do agent gửi, không coi đó là Android upload.
+- TShark đã dừng ghi; wrapper pipeline exit1 ở deadline vì worker elevated không tự thoát.
+  Parent thường được dừng bằng PID; worker còn lại bị Access denied trong shell thường.
+  Người dùng dừng đúng PID bằng Administrator, kiểm lại không còn TShark/USBPcapCMD.
+  Không restart service hoặc dừng theo tên. Cleanup đã xác minh, không còn capture chạy nền.
+- Wireless ADB hiện đúng OnePlus GM1900/API 30 sau hai lần fail-stop và người dùng xác nhận nối lại;
+  monitor 10 giây bật lại. Tuner ở Windows/OK, không ở Android. Sau regression cuối đã cài lại debug,
+  cold launch 996 ms: không có USB, operation/generation 0, pending/cleanup=false, open/claim/close 0.
+  Không có session USB cũ được tái dùng.
+- Thêm parser Java debug chỉ đọc TSV offline, kiểm trên capture thực với Java 8/major 52;
+  fixture JVM là tổng hợp, không firmware/pcap thật. Không thêm dependency hoặc cài công cụ.
+- Refresh GitNexus cuối sau thêm parser FAILED: FTS `file_fts` inconsistent trong incremental COPY.
+  `status` vẫn báo up-to-date theo HEAD đã index cũ; không tin là graph đã chứa parser mới.
+  Không tự drop/rebuild FTS hoặc force analysis để sửa vấn đề ngoài phạm vi; quay về source/diff/tests.
+
+## 2026-11-04 — Phase 2.8: checkpoint chuyển tuner sang Windows, 18:20 +07
+
+- Người dùng duyệt riêng chuyển host và tự cắm tuner vào USB 2.0 laptop; trước đó chỉ dùng nguồn OTG,
+  không nguồn/LNB/hub có nguồn hoặc dây cấp điện khác. Chưa duyệt capture/upload Android.
+- Có một lần TCP Wireless ADB mất ở checkpoint; dừng trước truy vấn tuner Windows.
+  Chỉ sau người dùng xác nhận nối lại mới xác minh serial mới/GM1900/OnePlus/API 30 và owner không pending/open.
+  Không pair/reconnect tự động hoặc dùng lại USB session cũ.
+- Windows hiện có TBS 5530 DVB BDA (MEDIA/OK), driver 2.0.0.2/oem108.inf/tbsBDA.TBS5530;
+  topology EHCI #2 → Generic USB Hub → port 2. Extcap đọc qua Process stdout xác nhận USBPcap3,
+  tuner USB address 4. PnP Device_Address=2 không phải địa chỉ USB capture; không dùng lẫn hai giá trị.
+- Android dumpsys không còn tuner. Activity còn hiển thị report metadata cũ nên không coi report đó là
+  xác nhận attachment hiện tại; owner không open/pending. Driver Running/PnP OK chưa chứng minh firmware/TS.
+- Root hub có webcam/Bluetooth; cấm capture-all. Chưa mở capture handle, chưa đo quyền capture,
+  không đổi driver/filter/nguồn. Mọi instance ID/raw topology giữ ngoài Git.
+
+## 2026-11-04 — Phase 2.8: xác minh công cụ capture và driver hãng, không thay môi trường
+
+- Baseline thực `ef1154d9c60725150e0d2eaab082d7b644748444`, nhánh `chore/modernize-android-build`.
+  Không cài/gỡ/nâng cấp phần mềm hoặc SDK, không thay PATH/registry/driver/USB ownership.
+  Toolchain đọc lại từ build/wrapper/package local: AGP 9.5.0, Gradle 9.8.2, JDK 25.0.5.0.3,
+  compileSdk 37.2 revision 2, Build-Tools 37.0.0, NDK 30.0.16248370, CMake 4.1.2;
+  target 37/min 21/Java 8 giữ nguyên. Không khảo sát latest stable vì không có tác vụ nâng cấp.
+- **RUNTIME-OBSERVED:** đúng một TCP target OnePlus GM1900/API 30 online; alias mDNS không phải
+  thiết bị thứ hai. USB Host feature có. Monitor local kiểm đúng serial/model/manufacturer/API mỗi 10 giây;
+  không ghim IP/port vào hồ sơ. Báo cáo app-private đọc đầu phiên có generation 0/DETECTED,
+  permission=false, pending/cleanup=false, open/claim/close 0; đó là file báo cáo đã tồn tại,
+  không được gọi là phép đọc raw mới. Kiểm runtime mới sau regression ghi WORKLOG.
+- **Capture inventory:** `C:\Program Files\Wireshark` có Wireshark/TShark/Dumpcap 4.6.9;
+  `C:\Program Files\USBPcap\USBPcapCMD.exe` và SYS 1.5.4.0.
+  Service USBPcap Running/Manual; `tshark -D` và extcap liệt kê USBPcap1–5.
+  `dumpcap -D` không liệt kê USBPcap vì đường extcap do TShark cung cấp; không coi đó là capture failure.
+  Shell không elevated; chưa kiểm khả năng mở capture handle hoặc ghi trace. Cấu hình extcap liệt kê
+  snaplen/buffer/devices/capture-all/capture-new/inject-descriptors, chưa trả mapping tuner cụ thể.
+  Không start capture, đổi filter, restart service hoặc cài lại. Tuner chưa chuyển khỏi OnePlus.
+- **Driver TBS đã cài:** service `tbsBDA.TBS5530` Running/Auto;
+  `C:\Windows\System32\drivers\TBS5530.sys` phiên bản 2.0.0.2, 404168 byte,
+  SHA-256 `48f2d8fefd467adc4dafe68c2708439e794c4c1daf69f7db5405b5388cf9e65c`,
+  trùng SYS x64 trong ZIP hãng 2025-06-10. PnP query không trả tuner hiện tại;
+  service Running không chứng minh TBS đang hoạt động hoặc đang nối Windows.
+  ZIP Windows 11 2.1.0.3 chỉ phân tích tĩnh, không cài lên Windows 10.
+- **Công cụ offline:** `objdump.exe` hiện có tại `C:\msys64\mingw64\bin`, phiên bản GNU Binutils
+  2.47.20260726; chạy trực tiếp executable để đọc PE, không khởi động môi trường MSYS2.
+  NDK còn có llvm-objdump. Dùng Node.js/.NET sẵn có để so khớp bytes/ZIP và Git `pdftotext.exe`
+  để trích PDF; không cài Ghidra/Python package hoặc thực thi SYS/EXE hãng.
+  Firmware/PDF/ZIP/disassembly/logs chỉ ở session local ngoài Git, không đăng firmware hoặc traffic.
+- **GitNexus:** CLI không hỗ trợ `status --json`; `status` xác nhận thiếu index, sau đó
+  `analyze --index-only` thành công trong 71,5 giây. Refresh sau sửa interfaces debug đạt trong 95,4 giây;
+  `status` xác nhận đúng repo/branch/HEAD và up-to-date. Không sinh instructions/skills hoặc sửa tracked files.
+  Graph giúp xem callers/impact; source/tests vẫn là thẩm quyền. AgentMemory recall rỗng;
+  đã lưu một finding từ nguồn công khai, không gửi code/log/định danh thiết bị.
+
 ## 2026-11-04 — Phase 2.7: không đổi toolchain; Wireless ADB có một lần dừng
 
 - Baseline Git `f03e092702edac5134efea633d8a30a51e1716e4`, nhánh `chore/modernize-android-build`. Đã đọc lại khai báo build, wrapper và `source.properties`: AGP 9.5.0, Gradle 9.8.2, JDK 25.0.5.0.3, compileSdk 37.2 revision 2, Build-Tools 37.0.0, NDK 30.0.16248370 và CMake 4.1.2. Giữ targetSdk 37, minSdk 21 và Java source/target 8. Đây là các phiên bản đang khai báo/cài và vừa kiểm thử, không phải tuyên bố về bản stable mới nhất.

@@ -27,13 +27,17 @@ public class Tbs5530BootstrapDryRunTest {
         final Tbs5530UsbBinding binding;
         final Tbs5530BootstrapDryRun runner;
         final Tbs5530FirmwarePlan plan;
-        Tbs5530UsbBinding.Events events;boolean permitted=true,present=true,closeFail,delayFail;
+        final Tbs5530Fx2ProtocolPlan protocol;
+        Tbs5530UsbBinding.Events events;boolean permitted=true,present=true,closeFail,delayFail,adbOnline=true;
         int opens,closes,calls,failAt=-1;String mode="short";Runnable during=()->{};
-        Rig(int size)throws Exception{
+        Rig(int size)throws Exception{ this(size, Tbs5530Fx2ProtocolPlan.Id.TBS_SOURCE_DUAL_RESET); }
+        Rig(int size,Tbs5530Fx2ProtocolPlan.Id id)throws Exception{
             plan=plan(image(size));
+            protocol=Tbs5530Fx2ProtocolPlan.describe(plan,id.name());
             binding=new Tbs5530UsbBinding(session,this,Runnable::run,(r,d)->{timers.add(r);return ()->{};},errors::add,30000,10000);
             runner=new Tbs5530BootstrapDryRun(session,binding,Tbs5530Fx2FingerprintTest.assess(Tbs5530Fx2FingerprintTest.bootstrap()),
-                    plan,millis->{assertEquals(100,millis);if(delayFail)throw new IOException("delay");});
+                    protocol,millis->{assertEquals(100,millis);if(delayFail)throw new IOException("delay");},
+                    ()->{if(!adbOnline)throw new IOException("Wireless ADB unavailable");});
         }
         public List<Tbs5530UsbBinding.Device> devices(){return present?Collections.singletonList(device):Collections.emptyList();}
         public boolean hasPermission(Tbs5530UsbBinding.Device d){return permitted;}
@@ -47,8 +51,8 @@ public class Tbs5530BootstrapDryRunTest {
         public void close()throws IOException{closes++;if(closeFail)throw new IOException("close");}
         public int controlTransfer(int type,int request,int value,int index,byte[] data,int offset,int length,int timeout)throws IOException{
             assertEquals(0,closes);int ordinal=calls++;
-            if(ordinal>=plan.getSteps().size()-1)throw new AssertionError("Unexpected call");
-            Tbs5530FirmwarePlan.Step expected=plan.getSteps().get(ordinal);
+            if(ordinal>=protocol.getSteps().size()-1)throw new AssertionError("Unexpected call");
+            Tbs5530FirmwarePlan.Step expected=protocol.getSteps().get(ordinal);
             assertEquals(expected.getRequestType(),type);assertEquals(expected.getRequest(),request);
             assertEquals(expected.getValue(),value);assertEquals(0,index);assertEquals(0,offset);assertEquals(2000,timeout);
             assertEquals(expected.getPayload().length,length);assertArrayEquals(expected.getPayload(),data);
@@ -149,6 +153,45 @@ public class Tbs5530BootstrapDryRunTest {
         }
         try{Tbs5530FirmwareValidation.validate(null,Tbs5530FirmwareValidation.SOURCE,Tbs5530FirmwareValidation.ENTRY,
                 Tbs5530FirmwareValidation.Format.RAW_LINEAR);fail();}catch(IllegalArgumentException expected){}
+    }
+    @Test public void bothPlansStopAtEveryRealImageBoundaryWithoutRetry()throws Exception{
+        for(Tbs5530Fx2ProtocolPlan.Id id:Tbs5530Fx2ProtocolPlan.Id.values()){
+            int writes=id==Tbs5530Fx2ProtocolPlan.Id.TBS_SOURCE_DUAL_RESET?132:130;
+            for(int step=0;step<writes;step++){
+                Rig r=new Rig(8192,id);r.failAt=step;r.acquire();r.fails();
+                assertEquals(step+1,r.calls);assertEquals(1,r.closes);
+                assertEquals(Tbs5530BootstrapDryRun.State.UNCERTAIN,r.runner.state());
+                try{r.runner.execute();fail();}catch(IllegalStateException expected){}
+                assertEquals(step+1,r.calls);
+            }
+        }
+    }
+    @Test public void documentedPlanFinishesOnlyTransitioningWithOrWithoutReattachment()throws Exception{
+        Rig r=new Rig(8192,Tbs5530Fx2ProtocolPlan.Id.DOCUMENTED_FX2_E600_ONLY);
+        r.acquire();r.runner.execute();assertEquals(130,r.calls);
+        assertEquals(Tbs5530BootstrapDryRun.State.TRANSITIONING,r.runner.state());
+        assertEquals(Tbs5530Session.State.CLOSED,r.session.getState());
+        assertFalse(r.session.isStreaming());
+        r.events.attached(r.device);
+        assertEquals(Tbs5530BootstrapDryRun.State.TRANSITIONING,r.runner.state());
+        assertNotEquals(Tbs5530Session.State.READY,r.session.getState());
+        assertEquals(130,r.calls);
+    }
+    @Test public void wirelessLossBeforeAcquisitionConsumesAttemptWithoutOpening()throws Exception{
+        Rig r=new Rig(64,Tbs5530Fx2ProtocolPlan.Id.DOCUMENTED_FX2_E600_ONLY);r.adbOnline=false;
+        try{r.acquire();fail();}catch(IOException expected){}
+        r.adbOnline=true;
+        try{r.acquire();fail();}catch(IllegalStateException expected){}
+        assertEquals(0,r.opens);assertEquals(0,r.calls);
+    }
+    @Test public void wirelessLossAfterSynchronousWriteDoesNotSendCorrectiveWrites()throws Exception{
+        Rig r=new Rig(8192,Tbs5530Fx2ProtocolPlan.Id.DOCUMENTED_FX2_E600_ONLY);r.acquire();
+        r.during=()->r.adbOnline=false;r.fails();
+        assertEquals(1,r.calls);assertEquals(1,r.closes);
+        assertEquals(Tbs5530BootstrapDryRun.State.UNCERTAIN,r.runner.state());
+        r.adbOnline=true;
+        try{r.runner.execute();fail();}catch(IllegalStateException expected){}
+        assertEquals(1,r.calls);
     }
     @Test(timeout=5000) public void inFlightInvalidationDefersCloseAndStopsNextWrite()throws Exception{
         Rig r=new Rig(65);r.acquire();CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);

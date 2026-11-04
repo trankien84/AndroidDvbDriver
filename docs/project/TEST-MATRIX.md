@@ -1,5 +1,67 @@
 # TBS5530 test matrix
 
+## 2026-11-04 — Phase 2.8: kết quả sau trace Windows và parser offline
+
+Phần này mới hơn checkpoint offline 225 JVM phía dưới. Firmware Android vẫn NOT RUN;
+Windows writes dưới đây do BDA hãng tự phát trong reconnect được duyệt, không phải agent/Android uploader.
+
+| Gate | Kết quả mới | Bằng chứng / giới hạn |
+|---|---|---|
+| Trace thứ nhất 30 giây | FAILED phép đo | 296 byte/0 packets; reconnect sau cửa sổ, không đủ dữ liệu protocol. Không tự retry |
+| Trace thứ hai 180 giây | RUNTIME-OBSERVED | Người dùng duyệt riêng; 3028 packets/232084 byte, chỉ bus3/address4, không frame truncated, raw ngoài Git |
+| A0 setup/completion Windows | RUNTIME-OBSERVED | 264/264 cặp, hai lượt tự nhiên × 132 writes. Tất cả completion SUCCESS, không A0 pending; không lấy submission status làm kết quả |
+| 7F92/E600 trên board này | RUNTIME-OBSERVED | Mỗi địa chỉ stop 01/release 00 thành công ở cả hai lượt; không STALL trong điều kiện quan sát. Không chứng minh alias, CPU state hoặc mọi revision |
+| Ảnh DATA trong capture | OFFLINE-TESTED | Hai ảnh dựng lại đều 8192 byte/hash khóa, 128 × 64 byte, đúng vùng 0000–1FFF; không bỏ zero/padding |
+| Descriptor Windows | RUNTIME-OBSERVED | Frame 6 có default alt 0–3 thiếu 82, frame 298 sau lượt đầu có alt 0 với IN82/81. Không khẳng định Android descriptor hoặc READY |
+| BDA tự init lần hai | RUNTIME-OBSERVED, chưa giải thích | Mười B7 IN completion c0000011 sau lượt đầu; có vendor 90/8A/80 tự nhiên. Không agent I²C, không sao chép retry sang Android |
+| Capture cleanup | PASS sau hỗ trợ người dùng | TShark dừng; wrapper exit1 do elevated worker còn sống. Dừng parent bằng PID, worker Access denied; người dùng dừng đúng PID, kiểm không còn capture process. Không đổi service/filter |
+| Parser transcript mới | OFFLINE-TESTED: 5 methods PASS | IRP ID tái dùng/frame correlation, failed completion, thiếu cặp, truncation, hash/address/length sai, mixed devices/rows; fixture tổng hợp không firmware thật |
+| Parser trên trace thật | OFFLINE-TESTED PASS | Java parser và Node checker độc lập cho cùng hai ảnh/hash/264 pairs; đầu ra chỉ frame/reset/status/hash, không raw payload/IRP IDs công khai |
+| JVM sau parser | PASS: 230 methods | drivers 216 + usbxfer 1 + dvbservice 13; 0 failures/errors/skipped. Tăng 5 methods so với checkpoint 225 |
+| Instrumentation sau parser | PASS: 49 tests | App 17 + drivers 30 + dvbservice 2 trên GM1900/API 30 khi tuner ở Windows; native smoke/XML vẫn trong suite, không Android USB hardware |
+| Debug/release/lint mã cuối | PASS | 4 phút 2 giây/419 tasks/55 executed/364 up-to-date; lint 0 errors/fatal, 9 warnings. Toàn bộ unit/connected tasks chạy lại trên mã đã khóa |
+| Java 8/release isolation sau parser | PASS static | Parser biên dịch `--release 8`, major 52; parser/comparator/runner/validation không có trong release DEX, debug có; manifest min 21/target 37 không diagnostic |
+| Metadata mã cuối | RUNTIME-OBSERVED | Sau UTP cài lại debug/cold launch 996 ms: không có USB trên OnePlus, operation/generation 0, DETECTED, pending/cleanup=false, open/claim/close 0. Windows vẫn TBS BDA OK |
+| GitNexus cuối | FAILED refresh | Incremental gặp FTS file_fts inconsistent. `status` vẫn báo up-to-date theo HEAD cũ, không dùng làm proof graph mới; không tự drop index/force repair |
+| Wireless ADB | RUNTIME-OBSERVED: hai fail-stops | Dừng trước Windows query và ở kiểm cuối khi TCP target mất; chỉ sau hai xác nhận nối lại mới kiểm GM1900/OnePlus/API 30/owner, không tái dùng USB session |
+| Android upload/return-host/READY/frontend/TS | NOT RUN | Tuner hiện ở Windows. Chưa duyệt chuyển về/upload; gate false, không có hardware backend hoặc retry kế hoạch khác |
+
+## 2026-11-04 — Phase 2.8: hai reset plans offline; phép đo board và upload NOT RUN
+
+Baseline Phase 2.7 `ef1154d9c60725150e0d2eaab082d7b644748444`, cộng working tree chưa commit.
+Toolchain giữ AGP 9.5.0/Gradle 9.8.2/JDK 25.0.5.0.3/compile 37.2/target 37/min 21/Java 8,
+Build-Tools 37.0.0/NDK 30.0.16248370/CMake 4.1.2. Runtime GM1900/API 30/arm64 thật qua Wireless ADB;
+không emulator, không gọi hardware port trong tests.
+
+| Gate | Kết quả mới | Bằng chứng / giới hạn |
+|---|---|---|
+| Plan comparator | OFFLINE-TESTED: 3 methods PASS | Exact allowlist; null/unknown/case/space bị từ chối; giữ dual-reset lịch sử; E600-only không chứa 7F92; provenance khác; immutable; full image và tail không padding; từ chối DATA vượt 1FFF |
+| Bootstrap runner | OFFLINE-TESTED: 17 methods PASS | 13 methods cũ và 4 mới; lỗi từng vị trí trong 132/130 writes của ảnh tổng hợp 8192 byte; không retry/corrective release; mất ADB trước open hoặc sau write; attempt tiêu thụ; TRANSITIONING không thành READY khi không/có attach mới |
+| Failure/lifecycle regression | PASS trong suite | Denied permission, epoch/generation cũ, detach/identity tái dùng, I/O pending, lỗi cleanup, short/negative/timeout/cancel, deferred close khi synchronous call còn chạy. Hai plans không tự fallback |
+| Ảnh hãng thật qua planner | OFFLINE-TESTED PASS | 8192 byte/hash khóa; kiểm mọi DATA byte/address/control field; dual 132 writes và E600-only 130 writes, mỗi plan 1 delay; sửa byte cuối bị từ chối. Không UsbDeviceConnection, không dùng firmware fixture trong Git |
+| JVM toàn bộ mã cuối | PASS: 225 methods | drivers 211 + usbxfer 1 + dvbservice 13; 0 failures/errors/skipped. Ba task unit chạy `--rerun`; tăng 7 methods so với 218 lịch sử |
+| Instrumentation app | PASS: 17 tests | Diagnostic fake trên GM1900/API 30, không mở tuner |
+| Instrumentation drivers | PASS: 30 tests | 28 facade + 2 bootstrap isolation; facade production vẫn từ chối bootstrap trước manager, EP0 fake không claim |
+| Native smoke / XML | PASS: 2 tests | NativeLibrarySmokeTest load arm64 và DeviceFilterXmlEquivalenceTester; không USB ioctl |
+| Tổng instrumentation mã cuối | PASS: 49 tests | 17 + 30 + 2, 0 failures/errors/skipped; connected tasks thực thi lại, không lấy XML cũ làm PASS mới |
+| Debug/release build, lint | PASS | Lượt cuối 2 phút 29 giây, 419 tasks, 27 executed/392 up-to-date; lint 0 errors/fatal, 9 warnings trên cùng mã. Không suppress/baseline hoặc nâng toolchain |
+| Java 8 / minSdk | PASS static | 13 core/debug source `javac --release 8`, comparator bytecode major 52; release manifest min 21/target 37. API 21 runtime NOT RUN |
+| Release isolation | PASS static | Comparator/runner/validation/fingerprint/raw/diagnostic không có trong release DEX; release manifest không diagnostic. Debug có comparator; cả hai APK có bốn ABI libUsbXfer. Production registry/XML/main source không đổi |
+| App sau UTP | RUNTIME-OBSERVED | UTP gỡ app; cài lại debug thành công, cold launch 826 ms. Metadata mới Host=true, 734c:5530, alt 0–3, không có 82; permission=false, operation/generation 0, DETECTED, pending/cleanup=false, open/claim/release/close 0 |
+| Wireless ADB guard | RUNTIME-OBSERVED | Đúng TCP serial/model/manufacturer/API được kiểm đầu phiên, trước device operations và mỗi 10 giây trong lệnh dài; không phát hiện mất target trong các lượt này; alias mDNS không phải thiết bị thứ hai |
+| Firmware/SYS/PDF provenance | OFFLINE-TESTED | Tải HTTPS, size/hash xác minh mới; ba SYS nhúng nguyên ảnh firmware; phân tích tĩnh dual-reset. Không coi đó là board/Android PASS |
+| Capture tooling | RUNTIME-OBSERVED inventory | TShark 4.6.9, USBPcap 1.5.4.0, service Running và 5 interfaces qua extcap; quyền capture/topology tuner chưa kiểm. Không có capture mới |
+| URB board / A0 IN-OUT / CPU reset-release / firmware transition | NOT RUN | Chọn hướng B; chưa duyệt chuyển host/capture/upload. Không biết completion 7F92, recovery nguồn, descriptor sau nạp hoặc IN82 mới |
+| EEPROM / setInterface / setConfiguration / USB reset / frontend / tuning / TS | NOT RUN | Không thay production gate/registry, không bắt đầu CXD2878 hoặc phase kế tiếp |
+| Markdown và whitespace | PASS giới hạn | `git diff --check` và rà thủ công phần mới; không có Markdown linter được cấu hình/chạy, không gọi đây là Markdown lint |
+
+Lượt targeted ban đầu: 20 methods, 0 failures/errors/skipped, 58 giây/23 tasks.
+Lượt full đầu: 225 JVM/49 instrumentation, 5 phút 27 giây/419 tasks/67 executed.
+Sau đổi chuỗi blocker (gate vẫn false), focused/build/lint đạt 2 phút 3 giây/314 tasks;
+regression full cuối ở bảng mới xác minh lại toàn bộ mã cuối. Không cộng lặp các lượt thành tổng tests khác.
+Cảnh báo Java source/target 8 và Gradle 10 giữ nguyên. API 21 runtime, thiết bị USB trang nhớ 16 KiB
+và tốc độ USB thực chưa có phép đo mới. Xem lệnh/exit trong [WORKLOG.md](WORKLOG.md).
+
 ## 2026-11-04 — Phase 2.7: bootstrap offline, hardware upload BLOCKED
 
 Baseline Phase 2.6 đã push `f03e092702edac5134efea633d8a30a51e1716e4`, nhánh `chore/modernize-android-build`, cộng working tree chưa commit. Không dùng kết quả lịch sử 199/47 làm `PASS` mới. Toolchain khai báo và đã kiểm local giữ AGP 9.5.0, Gradle 9.8.2, JDK 25.0.5.0.3, compileSdk 37.2, targetSdk 37, minSdk 21, Java 8, NDK 30 và CMake 4.1.2. Runtime là GM1900/API 30/arm64; chỉ dùng serial Wireless TCP đã chọn tường minh.

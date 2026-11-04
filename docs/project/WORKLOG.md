@@ -826,3 +826,261 @@ git --no-pager diff --check
 - Message dự kiến `feat: add offline TBS5530 FX2 bootstrap validation`, có Co-authored-by trailer. Stage tường minh 18 file đã kiểm và push `origin HEAD:refs/heads/chore/modernize-android-build`; hash và kết quả remote được xác minh sau thao tác, không ghi trước thành công.
 - Kiểm staged diff phát hiện CRLF trong 6 file Java mới bị Git báo trailing whitespace với `core.autocrlf=false`. Dừng trước commit, chỉ chuẩn hóa 6 file đó sang LF và xác minh nội dung chữ không đổi. Không sửa cấu hình Git hoặc tắt kiểm tra; `git diff --cached --check` đạt PASS sau chuẩn hóa.
 - Không chạy lại build/tests cho tác vụ Git. Kết quả 218 JVM/49 instrumentation/debug/release/lint của Phase 2.7 là bằng chứng đã có, không phải lượt PASS mới. Hardware upload vẫn BLOCKED/NOT RUN, không xin hoặc nhận phê duyệt USB writes từ yêu cầu commit/push.
+
+## 2026-11-04 — Phase 2.8: điều tra reset độc lập, hai plans offline và checkpoint hướng B
+
+### Baseline, môi trường và bảo toàn thay đổi
+
+- Windows PowerShell tại AndroidDvbDriver; HEAD thực `ef1154d9c60725150e0d2eaab082d7b644748444`,
+  nhánh `chore/modernize-android-build`, remote-tracking origin cùng checkpoint.
+  Origin SSH là fork trankien84; upstream HTTPS là signalwareltd. Một worktree chính, không checkout.
+- Working tree có trước: `.github/copilot-instructions.md`, `.github/instructions/project-records.instructions.md`
+  đã sửa và `.github/instructions/usb-capture-windows.instructions.md` chưa tracked.
+  Đọc để tuân thủ, không sửa/stage ba file này. Không commit/push/fetch/reset/clean/merge/rebase.
+  Ba references đúng SHA khóa, không có thay đổi; Go báo behind 26 so với remote-tracking,
+  không sync vì không được suy newest là đúng hoặc cần cập nhật để nghiên cứu reset.
+- Đọc hướng dẫn project/scoped, skills và hồ sơ hiện tại, đặc biệt ADR-016–018.
+  Load tbs-research/android-cli. Agent nghiên cứu không khởi chạy được do model mặc định không khả dụng;
+  tự đọc nguồn trực tiếp, không retry model hoặc nhận có báo cáo agent. Session history query không có kết quả;
+  AgentMemory recall rỗng. Không gửi mã nguồn/firmware/logs riêng sang hệ thống bên thứ ba.
+- Toolchain kiểm lại build/wrapper/source.properties/JDK: AGP 9.5.0, Gradle 9.8.2,
+  JDK 25.0.5.0.3, compile 37.2 revision 2, Build-Tools 37.0.0, NDK 30.0.16248370, CMake 4.1.2.
+  Giữ min 21/target 37/Java 8. Không cài/gỡ/nâng cấp package, sửa PATH hoặc User/Machine environment.
+
+### Nghiên cứu và các lệnh chỉ đọc
+
+```powershell
+git --no-pager status -sb
+git rev-parse HEAD
+git remote -v
+git worktree list
+git -C <REFERENCE> rev-parse HEAD
+git -C <REFERENCE> --no-pager status -sb
+adb devices -l
+adb -s <VERIFIED_TCP_SERIAL> shell getprop ro.product.model
+adb -s <VERIFIED_TCP_SERIAL> shell getprop ro.product.manufacturer
+adb -s <VERIFIED_TCP_SERIAL> shell getprop ro.build.version.sdk
+adb -s <VERIFIED_TCP_SERIAL> shell pm list features
+adb -s <VERIFIED_TCP_SERIAL> shell run-as info.martinmarinov.dvbdriver cat files/tbs5530-diagnostic.json
+gitnexus status --json
+gitnexus status
+gitnexus analyze --index-only
+```
+
+- Git/ADB đọc thành công, đúng một TCP target GM1900/OnePlus/API 30 và Host=true.
+  Không coi alias mDNS là target thứ hai. Monitor session local xác minh cùng serial/model/manufacturer/API
+  mỗi 10 giây, không phát hiện mất ADB trong các lượt. Không reconnect/pair/tcpip hoặc dùng emulator.
+- `gitnexus status --json` FAILED: CLI không hỗ trợ option; `status` xác nhận chưa index.
+  Analyze index-only PASS 71,5 giây, 4514 nodes/12840 edges; status đúng HEAD/up-to-date.
+  Context/impact planner trả callers và LOW trong phạm vi query nhưng có truncation, không xem là bảo đảm an toàn.
+  Refresh sau debug interfaces PASS 95,4 giây, 4552 nodes/12946 edges; không sinh instructions/skills.
+  `detect_changes` báo risk critical theo heuristics (52 symbols/39 affected/9 files, gồm nhiều headings docs),
+  output bị cắt; không coi đó là lỗ hổng hay bằng chứng tác động production. Diff/test/DEX mới xác nhận phạm vi.
+- Tải TRM PDF HTTPS lại 5790150 byte và đối chiếu hash; `pdftotext -layout` có sẵn.
+  Linux generic lấy bằng GitHub MCP khóa SHA; raw download có một HTTP 429, không retry cùng URL liên tục.
+  libusb khóa SHA tải thành công. Hai Infineon KB trả 403; search snippet chỉ hỗ trợ tìm nguồn.
+  TBS commit message “fixed download firmware error” thực sửa buffer I²C, không CPUCS.
+- Firmware archive tải lại HTTPS 566825 byte, đúng hash; `tar -tf`, chỉ trích entry 5530 vào session ngoài Git.
+  Entry 8192 byte đúng hash khóa. Hai ZIP Windows chính hãng chỉ trích SYS/INF để đọc;
+  không chạy setup/EXE hoặc cài driver. Hash/offset/SHA/URL và matrix trong [RESEARCH.md](RESEARCH.md).
+- `objdump -h/-d -Mintel` trên SYS bằng executable sẵn có; Node.js so khớp nguyên ảnh 8192 byte
+  tại offsets 35680/1B890/35350 trong ba SYS. Hai x64 helpers dựng dual-reset và ghi đè status đầu;
+  đây là static evidence, không runtime capture. Driver cài hiện tại trùng SYS x64 2.0.0.2 hash;
+  service Running không đồng nghĩa tuner hoạt động. Không cài Ghidra/Python hoặc thực thi binary hãng.
+- TShark/Wireshark 4.6.9, USBPcapCMD/SYS 1.5.4.0; service USBPcap Running.
+  `tshark -D`, extcap interfaces/config và `USBPcapCMD --help` đã đọc, không capture.
+  `dumpcap -D` không thấy extcap USB; không kết luận driver hỏng. Quyền capture thực chưa đo,
+  shell không elevated, mapping tuner→root hub chưa có vì tuner vẫn nối OnePlus.
+  `tshark -G fields` xác minh `usb.bmRequestType`, setup fields, urb_id/status/usbd_status;
+  `--help` xác nhận autostop duration/filesize. Không lấy serial/IP/network interface inventory vào Git.
+
+### Thay đổi phần mềm và kiểm thử thực tế
+
+- Thêm debug `Tbs5530Fx2ProtocolPlan` và test; giữ main planner và toàn bộ ownership/production không đổi.
+  Exact allowlist/provenance, main RAM bound, bỏ đúng hai legacy reset metadata khi mô tả E600-only,
+  không tự chọn/fallback. Dry-run fake nhận preflight để mô hình hóa ADB loss và one-shot;
+  không tạo Android uploader/entrypoint. Chỉ sửa chuỗi blocker validation, gate vẫn false.
+- `runTask` cho task build đã có trả “Task not found” trong host; không sửa task/settings để né.
+  Dùng Gradle Wrapper trực tiếp đúng lệnh build/test. Child process đặt JAVA_HOME từ Machine,
+  ANDROID_HOME đúng SDK, ANDROID_SERIAL lấy từ TCP target đã kiểm; không đổi môi trường toàn cục.
+
+```powershell
+.\gradlew.bat :drivers:testDebugUnitTest --tests '*Tbs5530Fx2ProtocolPlanTest' --tests '*Tbs5530BootstrapDryRunTest' --console plain --no-daemon --max-workers=1
+.\gradlew.bat :drivers:testDebugUnitTest --rerun :usbxfer:testDebugUnitTest --rerun :dvbservice:testDebugUnitTest --rerun :app:connectedDebugAndroidTest --rerun :drivers:connectedDebugAndroidTest --rerun :dvbservice:connectedDebugAndroidTest --rerun :app:assembleDebug :app:assembleRelease :app:lint --console plain --no-daemon --max-workers=1
+.\gradlew.bat :drivers:testDebugUnitTest --tests '*Tbs5530BootstrapDryRunTest.hardwareValidationRejectsEmptyWrongFormatSizeSourceAndDigest' :app:assembleDebug :app:assembleRelease :app:lint --console plain --no-daemon --max-workers=1
+javac --release 8 -d <SESSION_CLASSES> <13_CORE_DEBUG_SOURCES>
+javap -verbose -classpath <SESSION_CLASSES> info.martinmarinov.drivers.usb.tbs5530.Tbs5530Fx2ProtocolPlan
+java -cp <SESSION_CLASSES> info.martinmarinov.drivers.usb.tbs5530.FirmwarePlanProbe <LOCAL_FIRMWARE>
+apkanalyzer.bat manifest print app\build\outputs\apk\release\app-release-unsigned.apk
+git --no-pager diff --check
+```
+
+- Targeted PASS exit 0, 20 methods, 58 giây/23 tasks/5 executed.
+  Full đầu PASS exit 0, 5 phút 27 giây/419 tasks/67 executed/352 up-to-date;
+  XML mới drivers211/usbxfer1/dvbservice13 = 225 JVM, app17/drivers30/dvbservice2 = 49 instrumentation,
+  0 failures/errors/skipped. Native smoke arm64 và XML equivalence nằm trong hai tests dvbservice.
+- Khi full đầu đang chạy, đổi chuỗi mô tả blocker trong debug validation, không đổi gate.
+  Vì vậy không dùng kết quả đó làm attestation mã cuối: focused/build/lint sau đó PASS exit 0,
+  2 phút 3 giây/314 tasks/45 executed. Rồi chạy lại nguyên full command phía trên trên mã cuối:
+  **PASS exit 0, 2 phút 29 giây/419 tasks/27 executed/392 up-to-date**, cùng 225 JVM/49 instrumentation.
+  Lint 0 Error/Fatal, 9 Warning trên cùng mã, không suppress/baseline.
+- Java 8 compile 13 sources PASS exit 0, comparator major 52. Chương trình session chỉ đọc ảnh thật,
+  kiểm mọi byte/address/control field của hai plans: 132/130 writes mô tả, 1 delay, hardwareCalls=0;
+  sửa byte cuối bị từ chối. Không nhúng ảnh vào source/test/APK.
+- Quét DEX debug có comparator/runner/fingerprint/validation/raw/diagnostic; release không các nhóm đó,
+  release manifest không diagnostic, min 21/target 37. Cả debug/release có bốn native ABI libUsbXfer.
+  Không sửa main registry/XML/profile. API 21 runtime, USB trang nhớ 16 KiB và DVB thật NOT RUN.
+- Problems editor còn báo debug/testDebug không trên classpath IDE; comparator mới không có syntax error.
+  Gradle/Javac thực PASS, không gọi cảnh báo classpath là compile failure của build.
+
+### Runtime cuối, gate và điểm dừng
+
+```powershell
+adb -s <VERIFIED_TCP_SERIAL> install -r app\build\outputs\apk\debug\app-debug.apk
+adb -s <VERIFIED_TCP_SERIAL> shell am start -W -n info.martinmarinov.dvbdriver/.Tbs5530UsbDiagnosticActivity
+adb -s <VERIFIED_TCP_SERIAL> shell run-as info.martinmarinov.dvbdriver cat files/tbs5530-diagnostic.json
+adb -s <VERIFIED_TCP_SERIAL> shell dumpsys usb
+```
+
+- Sau UTP, `run-as` trả unknown package: app đã được test runner gỡ, không phải USB failure.
+  Cài lại debug PASS, cold launch 826 ms. Chỉ metadata: Host=true, 734c:5530, alt0–3, không IN82;
+  permission=false, operation/generation 0, DETECTED, pending/cleanup=false,
+  open/claim/release/close đều 0. `pidof` có process, dumpsys xác nhận VID/PID;
+  raw output không đưa vào Git. Không xin permission hoặc chạy raw descriptor cycle lần nữa.
+- Chọn **B**, không đợi TBS: candidate E600-only có cơ sở protocol chip nhưng board responses/recovery
+  chưa đủ để nạp Android. Blocker ảnh Linux-vs-Windows đã giải quyết bằng exact byte match;
+  blocker hiểu sai C error path đã giải quyết; semantics thật 7F92/nguồn/EEPROM vẫn UNVERIFIED.
+  Phải xin duyệt chuyển host vì driver Windows có thể tự nạp ngay khi cắm; sau mapping thật mới duyệt
+  capture giới hạn. Không đề nghị phê duyệt upload Android khi chưa đủ điều kiện.
+- Recovery chỉ có điều kiện mất mọi nguồn nuôi RAM trên đúng FX2, không hứa USB unplug luôn đủ.
+  Không CPU release/reset khắc phục, không retry/plan thứ hai. Các vendor IN/OUT, firmware/CPU,
+  I²C/frontend/tuning/TS/config/alternate/reset/EEPROM, chuyển host và capture đều NOT RUN.
+  Không có descriptor/quyền/IN82 sau nạp hoặc READY mới. Không tự chuyển phase.
+- Cập nhật sáu hồ sơ theo format sẵn có, giữ nguyên phần lịch sử. Kiểm whitespace/diff và rà thủ công
+  tiếng Việt/link; không có Markdown linter chạy. Firmware/ZIP/PDF/disassembly/raw logs giữ ngoài Git.
+  AgentMemory `memory_save` xác nhận success cho finding từ nguồn công khai, không kèm code/log/định danh.
+  Không có xác nhận transport remote-vs-fallback trong response nên không khẳng định lưu remote bền vững.
+- Bước tiếp theo duy nhất: người dùng quyết định có cho phép chuyển tuner sang Windows với tác động
+  khởi tạo tự nhiên hay không; cần xác nhận nguồn hiện tại trước thao tác. Nếu không duyệt, giữ checkpoint
+  offline này, không tự chọn upload Android để thay phép đo.
+
+### Checkpoint sau phê duyệt chuyển host, trước capture — 18:20 +07
+
+- Người dùng phê duyệt riêng chuyển tuner sang Windows, xác nhận trước đó chỉ có nguồn OTG OnePlus,
+  không adapter/LNB/hub có nguồn hoặc kết nối cấp điện khác; thông báo đã chuyển vào cổng USB 2.0 laptop.
+  Không coi đây là phê duyệt capture hoặc upload Android. Việc tháo/cắm do người dùng thực hiện;
+  agent chưa gửi USB write hoặc mở ứng dụng DVB.
+- Lệnh đầu sau phản hồi không tìm được đúng TCP target online: FAILED/fail-stop trước mọi truy vấn Windows.
+  Đã dừng và hỏi nối lại; người dùng xác nhận `reconnected`. Sau đó xác minh mới GM1900/OnePlus/API 30,
+  Host=true, owner report pending/cleanup=false/open/claim/close 0; không tái dùng connection/epoch.
+  Bật lại monitor 10 giây với TCP serial mới. Không tự pair/reconnect hoặc chuyển emulator.
+- **RUNTIME-OBSERVED:** Windows có đúng TBS 5530 DVB BDA, MEDIA/OK, VID:PID 734c:5530,
+  driver 2.0.0.2/oem108.inf/service tbsBDA.TBS5530. Topology EHCI #2 (8 Series/C220),
+  Generic USB Hub, port 2. USBPcap extcap mapping xác nhận tuner ở `USBPcap3`, USB address 4,
+  parent hub address 1. `DEVPKEY_Device_Address=2` là dữ liệu PnP khác, không dùng làm địa chỉ capture.
+  Không lưu instance ID/serial vào Git.
+- Truy vấn stdout USBPcap qua PowerShell redirect có lần trả file rỗng dù exit 0.
+  Dùng `System.Diagnostics.Process` đọc stdout trực tiếp mới thu được topology; không dùng output rỗng
+  làm bằng chứng hub không có thiết bị. Root hub còn có webcam/Bluetooth, nên capture-all không được phép.
+  Các thiết bị này không phải target; raw topology chỉ lưu session local.
+- Android dumpsys không còn VID/PID tuner. Activity HOT launch vẫn giữ báo cáo metadata cũ;
+  không gọi đây là snapshot attachment mới. Report owner vẫn không có open/pending; không USB handles cũ
+  nào được tái dùng. Chưa force-stop ứng dụng hoặc thu hồi quyền.
+- **Capture NOT RUN:** đã biết đúng interface/address nhưng chưa xin/nhận phê duyệt capture/reconnect.
+  Kế hoạch sẽ giới hạn đúng address 4 và thiết bị mới trong duy nhất hub được duyệt, không all-devices,
+  không inject-descriptors; cần người dùng không cắm thiết bị khác trên hub trong khoảng đo.
+  Mọi dữ liệu raw ngoài Git, chỉ xuất bảng URB đã lọc. Không khẳng định BDA tự nạp đã thành công khi chưa có trace.
+
+### Hai phê duyệt capture tách biệt và trạng thái thu — 18:31 +07
+
+- Người dùng duyệt riêng một trace 30 giây/8192 KiB trên USBPcap3/address 4 và thiết bị mới,
+  snaplen 256, không capture-all/inject-descriptors; đồng ý một reconnect cùng cổng, không đổi USB khác.
+  Capture pipeline dùng USBPcapCMD xuất stdout vào TShark stdin, không gửi lệnh tới tuner.
+  File ngoài Git; UAC/worker nếu có chỉ thuộc capture đã duyệt, không cài hoặc sửa filter.
+- **FAILED phép đo đầu:** TShark thực sự sẵn sàng lúc khoảng 18:25:47, tạo header pcapng 296 byte.
+  `capinfos` xác minh 0 packets, không timestamp. PnP LastArrivalDate 18:27:28 cho thấy reconnect
+  sau cửa sổ 30 giây; vì vậy không có cơ sở kết luận 7F92 hoặc capture driver hỏng.
+  Script chờ pipeline hết deadline 60 giây rồi báo exit 1; sau đó không còn TShark/USBPcap processes.
+  Không tự lặp capture/reconnect.
+- Đã giải thích thất bại và xin phê duyệt MỚI; người dùng đồng ý đúng một lượt 180 giây/8192 KiB
+  cùng phạm vi và một reconnect riêng. Không diễn giải đây là retry firmware upload Android.
+  Lượt hai sẵn sàng 18:30:13; người dùng xác nhận reconnect, PnP arrival 18:31:01 nằm trong cửa sổ.
+  Tại 18:31:04 file tăng lên 232084 byte, tuner vẫn MEDIA/OK, Wireless ADB đúng GM1900/API 30 online.
+  Đây chỉ xác nhận có dữ liệu capture, chưa phân tích completion hoặc kết luận bring-up.
+
+### Phân tích trace thật và cleanup — 18:44 +07
+
+- TShark dừng sau 180 giây, ghi 3028 packets/232084 byte; `capinfos` cho khoảng packets
+  18:30:59.221881–18:31:04.273827 +07, SHA pcapng
+  `e3220b64da4adac60862406569ef5151c430f050f6b179096a925b803e913f4f`.
+  Chỉ address4/bus3, không frame truncated. Raw ngoài Git vì có nguyên firmware.
+- Wrapper pipeline exit1 ở deadline210 giây vì USBPcap worker elevated còn tồn tại sau khi TShark dừng.
+  `Stop-Process -Id 2208` Access denied; dừng parent PID15680 thành công nhưng worker vẫn còn.
+  Đã dừng việc tiếp tục capture và hỏi người dùng dọn đúng PID bằng Administrator.
+  Người dùng xác nhận, kiểm lại không còn TShark/USBPcapCMD: cleanup PASS có phạm vi.
+  Không restart service/filter/driver hoặc tự nâng quyền. Không nhầm exit1 pipeline thành firmware fail.
+- Lần xuất TSV đầu dùng `usb.urb_function` không hợp lệ: FAILED export, không USB failure.
+  Bỏ trường sai, dùng `usb.irp_id`, irp_info/control_stage/request_in và completion usbd_status.
+  `usb.urb_id` rỗng trong USBPcap này, không dùng join đó. IRP ID được tái dùng;
+  parser ghép pending theo bus/address/ID và kiểm request frame, không join toàn file chỉ theo ID.
+- Node checker và Java parser đều xác nhận 264 A0 submissions/264 paired completions, không A0 pending.
+  Hai lượt tự nhiên 132 writes, DATA mỗi lượt8192 byte cùng hash khóa; cả stop/release 7F92/E600
+  đều SUCCESS. Frames1:9–272, frames2:301–564; bảng reset chi tiết trong RESEARCH.
+  Không lệnh vendor từ agent, không tự retry BDA. Những writes này do driver hãng phát tự nhiên
+  trong reconnect đã được duyệt, không được đếm là Android control path PASS.
+- Descriptor frame6 trước nạp có default alt0–3 thiếu82; frame298 giữa hai lượt có alt0 IN82/81,
+  VID:PID không đổi. Sau lượt1 có mười B7 IN errors c0000011 rồi driver tự init lại;
+  có 90/8A/80 tự nhiên sau đó. Chưa biết lý do init hai lần hoặc bridge readiness,
+  không mở frontend/tuning/TS từ agent và không sao chép nhánh BDA thành retry Android.
+- Thêm debug `Tbs5530ResetTranscript` và 5 JVM tests tổng hợp cho IRP reuse/frame pairing,
+  failed completion không bị báo success, missing completion, truncated frame/TSV, hash/address/length sai,
+  mixed devices, immutable results. Không capture/firmware fixture trong Git.
+  Targeted parser PASS exit0,1 phút3 giây/23 tasks; Java8 compile/parser trên TSV thật PASS,
+  major52. Đổi blocker debug thành `ANDROID_ONE_SHOT_PREFLIGHT_AND_UPLOAD_APPROVAL_REQUIRED`;
+  gate vẫn false, không còn mô tả board responses là chưa quan sát.
+- Hướng B đã giải quyết phép đo: 7F92 không STALL ở board/điều kiện Windows quan sát,
+  descriptor chuyển operational-candidate sau lượt đầu. Chưa chứng minh alias/E600-only/Android upload,
+  không đủ byte=READY. Tuner vẫn ở Windows; chưa duyệt return-host hoặc upload Android.
+  Cần kế hoạch one-shot guard/observer tách khỏi init/retry BDA trước phê duyệt phần cứng kế tiếp.
+- Regression sau parser PASS exit0,4 phút48 giây/419 tasks/58 executed/361 up-to-date:
+  230 JVM (216+1+13),49 instrumentation (17+30+2),0 failures/errors/skipped;
+  debug/release/lint0 errors/fatal,9 warnings. Vì chuỗi blocker đổi trong lượt đang chạy,
+  đã khóa mã và chạy lại nguyên full command để không dùng snapshot không xác định làm attestation cuối.
+- DEX kiểm mới parser/comparator/runner/validation chỉ có debug, không release. Export manifest thành công;
+  lệnh Select-String ban đầu sai thứ tự tham số gây exit1 ở bước đọc, đã sửa bằng -Path/-Pattern:
+  minSdk 21/target 37, không diagnostic. Đây là lỗi helper báo cáo, không build hoặc USB fail.
+- **Mã khóa cuối PASS:** nguyên full Gradle command lần cuối exit 0, 4 phút 2 giây,
+  419 tasks/55 executed/364 up-to-date; XML mới 230 JVM (216+1+13), 49 instrumentation (17+30+2),
+  0 failures/errors/skipped. Lint 0 Error/Fatal, 9 Warning; không đổi mã tiếp sau lượt này.
+- Sau UTP cài lại debug thành công, cold launch 996 ms. Metadata thực mới: USB Host=true,
+  không có USB/TBS trên OnePlus, operation/generation 0, DETECTED, pending/cleanup=false,
+  open/claim/close 0. Windows tuner MEDIA/OK, không còn capture process.
+- GitNexus incremental refresh sau parser FAILED do FTS `file_fts` inconsistent (document node thiếu
+  khi delete/COPY). `status` vẫn trả up-to-date theo HEAD index cũ, không dùng kết quả đó để tuyên bố
+  graph mới sẵn sàng. Không drop index/force repair, tiếp tục xác nhận bằng source/diff/tests.
+- AgentMemory đã xác nhận tạo một Lesson về các trường IRP/frame/completion và cleanup capture,
+  chỉ chứa phương pháp công cụ chung, không payload/log/định danh riêng. Không lưu runtime capture
+  hoặc source dự án sang memory. Backend response không khẳng định remote-vs-fallback.
+- Ở kiểm cuối monitor phát hiện TCP ADB mất lần thứ hai: dừng ngay, không build/test/code/USB mới.
+  Người dùng xác nhận nối lại; xác minh mới GM1900/OnePlus/API 30/Host=true, report không USB,
+  operation/generation 0, DETECTED, pending/cleanup=false, open/claim/close 0. Windows tuner OK,
+  không capture process. Không dùng lại connection/session/epoch hoặc tự tiếp tục upload nào.
+
+## 2026-11-04 — Commit và push Phase 2.8 theo yêu cầu
+
+- Người dùng yêu cầu commit các thay đổi hiện có và push lên origin.
+  Nhánh `chore/modernize-android-build`; HEAD và live origin trước thao tác cùng
+  `ef1154d9c60725150e0d2eaab082d7b644748444`, stage trống, một worktree chính.
+  Phạm vi 16 file gồm bảy code/tests debug, sáu hồ sơ và ba file hướng dẫn có trước phiên nghiên cứu.
+  Không sửa nội dung hướng dẫn, không sửa references hoặc reset/clean/merge/rebase/force-push.
+- Preflight Wireless ADB xác minh đúng TCP target OnePlus GM1900/OnePlus/API 30 đang online;
+  không ghi IP/port/serial vào Git. Kiểm phạm vi diff, whitespace và dữ liệu nhạy cảm trước commit;
+  không stage firmware/capture/ZIP/APK/raw logs. Chỉ stage danh sách file đã kiểm.
+- Message dự kiến `feat: document TBS5530 reset evidence and validate USB transcripts`,
+  có Co-authored-by trailer. Kết quả commit/push và SHA được xác minh bằng Git sau thao tác,
+  không ghi trước thành công. Không chạy lại build/tests hoặc USB operation;
+  kết quả 230 JVM/49 instrumentation/debug/release/lint là bằng chứng Phase 2.8 đã có,
+  không phải lượt PASS mới. Android upload/return-host/frontend vẫn NOT RUN.
+- Kiểm staged diff phát hiện CRLF ở bốn file Java mới bị báo trailing whitespace.
+  Đã dừng trước commit, chỉ chuẩn hóa bốn file sang LF và so sánh xác nhận nội dung chữ không đổi;
+  không sửa Git config hoặc tắt whitespace check. `git diff --cached --check` đạt PASS sau chuẩn hóa.

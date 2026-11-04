@@ -20,11 +20,13 @@
 - Windows PowerShell is primary for Git, Android CLI, Gradle, JDK and ADB; verify exact executable path. Git Bash is suitable for ordinary POSIX helpers according to global policy.
 - WSL2 `Ubuntu-22.04` is for genuine Linux-only inspection, PyUSB/libusb and USB/IP diagnostics; invoke explicitly using `wsl.exe -d Ubuntu-22.04 -- ...`. Do not install or maintain a duplicate SDK in WSL2.
 - Use ADB MCP via the existing MCP Proxy for emulator/device interaction when appropriate. Always inspect tool discovery results and the device serial. Emulator UI and native-library smoke tests do NOT prove the TBS5530 hardware driver.
+- **Wireshark and USBPcap are already installed on the Windows development machine (user-confirmed).** Detect executable paths, versions, capture interfaces, permissions and USBPcap driver health at runtime. Do not reinstall, update or reconfigure them automatically. USB capture and any USB ownership/driver changes need task-specific consent; see `.github/instructions/usb-capture-windows.instructions.md`.
 
 ## Language and records
 - **All user-facing discussion, analysis, logs of decisions, reports and project handoffs in Vietnamese**; keep source identifiers, commands, API names and repository instructions/skills in English. Research vendor docs in any language.
 - At session start read the latest sections of `docs/project/STATUS.md`, `ENVIRONMENT.md` and `WORKLOG.md`, plus relevant `RESEARCH.md`, `DECISIONS.md` and `TEST-MATRIX.md`. These contain historical snapshots; prefer the newest dated entry, verify current state before reporting.
 - Add factual evidence with Git SHA, environment, exact commands, actual test results and PASS/FAIL/BLOCKED/NOT RUN; never change previous PASS into a new PASS without rerunning. Do not overwrite historical sections to reflect newer conditions.
+- Preserve each `docs/project/` file's current headings/tables/ADR conventions. Write readable Vietnamese with correct word spacing, Markdown separators and concise paragraphs; inspect `git diff --check` and manually review new text for run-together words. See `.github/instructions/project-records.instructions.md`.
 - **Current branch/runtime phase must be discovered from Git and the top of STATUS.md**, not from this file. After the validated Phase 1.1 baseline, plan toolchain updates as separate, reversible tasks before porting USB hardware logic.
 
 ## Hardware and repository safety

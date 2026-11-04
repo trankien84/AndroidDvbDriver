@@ -1,5 +1,97 @@
 # Architecture decision record (ADR)
 
+## ADR-019 — Phase 2.8: separate documented FX2 reset from TBS history; require board observation
+
+### Bổ sung sau phép đo Windows đã được duyệt — 2026-11-04 18:38 +07
+
+**Status:** Hướng B đã thực hiện phép đo phân biệt trên board thật. Không còn blocker “7F92 có thể
+STALL nên phải đợi TBS”. Trace 3028 packets ghi hai lượt dual-reset tự nhiên của BDA 2.0.0.2;
+264/264 A0 có completion SUCCESS, hai ảnh dựng lại đúng hash khóa. Descriptor trước/sau lượt đầu
+đổi từ default FX2 thiếu82 sang alt0 có82/81. Chi tiết frame/status trong [RESEARCH.md](RESEARCH.md).
+
+**Decision:** Bằng chứng Windows hỗ trợ `TBS_SOURCE_DUAL_RESET` cho chính board trong điều kiện
+quan sát, không chứng minh alias CPUCS, E600-only hoặc Android upload. Không chọn E600-only
+chỉ từ manual khi dual-reset đã quan sát; cũng không sao chép hai lượt tự nhiên của BDA thành retry Android.
+Giữ gate false. Đổi blocker thành preflight/authorization one-shot Android còn thiếu, không gọi phản hồi
+board là chưa quan sát nữa. Chưa xây Android uploader ở lượt này vì chưa đủ guard/observer và chưa duyệt
+return-host/upload; không bật boolean để thay các điều kiện đó.
+
+**Remaining evidence:** cần lý giải hai đường init tự nhiên/B7 errors của BDA hoặc một kế hoạch Android
+một lượt có observer descriptor/epoch độc lập; không biết trạng thái bridge/frontend chỉ từ đủ byte.
+Mười B7 vendor IN completion c0000011 sau lượt đầu không phải A0 fail; không được dùng nhánh retry BDA
+làm recovery. Source Linux no_reconnect và descriptor mới vẫn là cơ sở thiết kế, không bằng chứng Android.
+
+**Recovery/ownership:** người dùng xác nhận không nguồn phụ và đã chuyển host/reconnect; không chứng minh
+EEPROM layout, nhưng giảm khoảng trống nguồn/backfeed của kế hoạch. Một lần mất ADB đã dừng, chỉ tiếp tục
+sau xác nhận nối lại. Worker capture elevated đã được người dùng dừng; kiểm không còn capture process.
+Hiện tuner ở Windows, không chuyển lại hoặc upload Android khi chưa duyệt riêng. Không tiếp tục frontend.
+
+Các phần dưới ghi quyết định trước capture, được giữ nguyên để truy vết thay đổi chứng cứ.
+
+**Date:** 2026-11-04
+
+**Status:** Triển khai và kiểm offline trên working tree từ baseline Phase 2.7
+`ef1154d9c60725150e0d2eaab082d7b644748444`; chọn hướng B. Chưa duyệt capture,
+chuyển host hoặc nạp Android. Không commit/push.
+
+**Context:** TRM v2.2 và generic Linux/libusb độc lập xác định E600 cho FX2.
+Không có tài liệu chip xác nhận 7F92 là alias CPUCS trên FX2. TBS Linux/C/Go vẫn dual-reset;
+đặc biệt C bỏ qua status stop nhưng kiểm release, có short-circuit khiến E600 không được release
+nếu bước trước lỗi. Hai SYS hãng 2.0.0.2/2.1.0.3 đều chứa dual-reset và nguyên ảnh firmware Linux
+8192 byte. Phân tích tĩnh chưa cho biết completion status thật tại 7F92 trên board đang dùng.
+Xem matrix, hashes và RVA trong [RESEARCH.md](RESEARCH.md).
+
+**Decision — evidence:** Không coi câu trả lời TBS là dependency bắt buộc của nghiên cứu.
+Thay điều kiện mở lại duy nhất trong ADR-018 bằng các bằng chứng độc lập có thể kiểm chứng:
+TRM/generic loader cho protocol chip; static SYS cho loader hãng; URB trace cho phản hồi board;
+descriptor/permission mới cho Android sau mọi thử nghiệm được duyệt. Không tự gán hướng A.
+ACK không chứng minh alias, STALL không tự chứng minh vô hại, descriptor không xác nhận revision.
+
+**Decision — plans:** Giữ `Tbs5530FirmwarePlan` main nguyên hành vi dual-reset lịch sử.
+Thêm `Tbs5530Fx2ProtocolPlan` chỉ trong debug với allowlist chính xác
+`TBS_SOURCE_DUAL_RESET` và `DOCUMENTED_FX2_E600_ONLY`, provenance khác nhau.
+Candidate E600-only bỏ đúng hai reset metadata 7F92, giữ từng byte DATA và vùng Main RAM 0000–1FFF.
+Không biến comparator thành uploader, không fallback/auto-select, không chạy tuần tự hai plans để dò.
+Validation ảnh thật vẫn khóa source/entry/size/hash. `hardwareUploadAllowed=false` không đổi;
+blocker mới mô tả dữ liệu board/recovery còn thiếu, không giả vờ đã giải quyết phần cứng bằng đổi tên.
+
+**Decision — lifecycle:** Dry-run fake dùng cùng Session/Binding/Coordinator/Transport,
+kiểm preflight giả lập trước nhận owner và trước/sau từng bước. Mất ADB trước open tiêu thụ attempt
+và không open; mất sau write ghi UNCERTAIN, không retry/corrective writes.
+Token/epoch/quyền/cleanup hiện hữu vẫn kiểm từng transfer. Không force-close một call đồng bộ đang chạy.
+Thành công chỉ TRANSITIONING; không có phép đánh giá READY trong runner.
+Không sửa production facade/profile/registry/XML hoặc thêm đường upload khi launch/attach/grant.
+Không xây hardware backend ở hướng B; guard fake không được mô tả thành guard Android thực tế.
+
+**Decision — measurement/approval:** Ưu tiên trace driver Windows 2.0.0.2 đang cài, không đổi driver.
+Mọi việc offline và kiểm công cụ hoàn thành trước khi hỏi chuyển tuner. Chuyển host có thể tự kích hoạt
+firmware loader hãng, nên cần phê duyệt tác động này và kiểm nguồn/cleanup trước thao tác vật lý.
+Sau mapping đúng tuner→hub/interface/address mới xin phép capture giới hạn 30 giây/8192 KiB;
+không capture cả root hub hoặc thiết bị khác. Nếu cần reconnect để thấy init, xin phép riêng cho
+một reconnect đó. Không mở ChangeMode hoặc tự gọi frontend. Giữ Wireless ADB fail-stop.
+
+**Decision — recovery/gates:** A0 candidate chỉ RAM/CPUCS, không EEPROM. Với đúng FX2,
+power-on sau khi mất mọi nguồn nuôi RAM tải lại EEPROM/default; USB reset/CPU reset không tương đương.
+Nguồn ngoài/backfeed/EEPROM board chưa biết nên recovery vật lý chưa được chứng minh.
+Mỗi attempt tương lai phải khóa plan/hash/VID:PID/attachment epoch/descriptor/quyền/ADB identity,
+owner/pending/preflight/approval/stop criteria và nơi lưu trace; phê duyệt một lần không cho retry.
+Bất kỳ lỗi/short write/timeout/detach/ADB drop nào sau write đều UNCERTAIN, không release khắc phục.
+Sau nạp phải có descriptor/quyền/owner mới và bằng chứng bridge được duyệt riêng; đủ byte không phải READY.
+
+**Alternatives:** (A) chạy E600-only ngay chỉ từ manual; (C) đợi TBS vô thời hạn;
+chạy cả hai plans; chấp nhận IO error khi release theo libusb; cài driver Windows 11/HVCI lên Windows 10.
+Không chọn: chưa có board/runtime/recovery evidence, hoặc tăng tác động không cần thiết.
+License phân phối firmware vẫn là điều kiện phát hành riêng, không chặn kiểm offline nội bộ.
+
+**Verification:** Matrix tests mới và regression trong [TEST-MATRIX.md](TEST-MATRIX.md),
+lệnh/exit trong [WORKLOG.md](WORKLOG.md). Tất cả vendor/firmware thật NOT RUN.
+
+**Rollback/reopen trigger:** Thay đổi chỉ debug/test có thể bỏ theo diff được rà soát, không reset/clean
+working tree hoặc đụng ba file hướng dẫn có trước. Gate/facade production vẫn từ chối nên không có
+USB state cần rollback từ lượt này. Mở lại khi có trace đầy đủ, định danh board đáng tin cậy hoặc tài liệu
+độc lập giải quyết khoảng trống, cùng nguồn/recovery đã đánh giá và offline gates đạt.
+Sau đó mới xem xét một kế hoạch thử Android và phê duyệt riêng; không tự chuyển sang frontend.
+
 ## ADR-018 — Phase 2.7: bootstrap EP0 cùng owner, chỉ dry-run; chặn dual-reset chưa xác minh
 **Date:** 2026-11-04
 **Status:** Triển khai offline trên working tree từ Phase 2.6 `f03e092702edac5134efea633d8a30a51e1716e4`, nhánh `chore/modernize-android-build`; chưa stage/commit/push. Không phê duyệt phần cứng.

@@ -14,10 +14,12 @@ public final class Tbs5530BootstrapDryRun {
     public enum State { UNKNOWN, BOOTSTRAP_CANDIDATE, FIRMWARE_VALIDATED, LOADING,
         TRANSITIONING, OPERATIONAL_CANDIDATE, FAULTED, UNCERTAIN }
     interface Delay { void await(int millis) throws IOException; }
+    interface Preflight { void requireCurrent() throws IOException; }
     private final Tbs5530Session session;
     private final Tbs5530UsbBinding binding;
-    private final Tbs5530FirmwarePlan plan;
+    private final Tbs5530Fx2ProtocolPlan plan;
     private final Delay delay;
+    private final Preflight preflight;
     private final List<String> trace = new ArrayList<>();
     private State state = State.UNKNOWN;
     private boolean acquired, executed;
@@ -27,13 +29,22 @@ public final class Tbs5530BootstrapDryRun {
 
     Tbs5530BootstrapDryRun(Tbs5530Session session, Tbs5530UsbBinding binding,
                           Tbs5530Fx2Fingerprint.Result fingerprint, Tbs5530FirmwarePlan plan, Delay delay) {
-        if (session==null || binding==null || fingerprint==null || plan==null || delay==null) {
+        this(session, binding, fingerprint, Tbs5530Fx2ProtocolPlan.describe(plan,
+                Tbs5530Fx2ProtocolPlan.Id.TBS_SOURCE_DUAL_RESET.name()), delay, () -> { });
+    }
+
+    Tbs5530BootstrapDryRun(Tbs5530Session session, Tbs5530UsbBinding binding,
+                          Tbs5530Fx2Fingerprint.Result fingerprint, Tbs5530Fx2ProtocolPlan plan,
+                          Delay delay, Preflight preflight) {
+        if (session==null || binding==null || fingerprint==null || plan==null || delay==null || preflight==null) {
             throw new IllegalArgumentException("Validated offline inputs required");
         }
         if (fingerprint.candidate!=Tbs5530Fx2Fingerprint.Candidate.BOOTSTRAP_CANDIDATE) {
             throw new IllegalArgumentException("Exact bootstrap fingerprint required");
         }
         this.session=session; this.binding=binding; this.plan=plan; this.delay=delay;
+        this.preflight=preflight;
+        trace.add("OFFLINE plan=" + plan.getId().name() + " provenance=" + plan.getProvenance());
         state=State.BOOTSTRAP_CANDIDATE; trace.add(state.name());
         state=State.FIRMWARE_VALIDATED; trace.add(state.name());
     }
@@ -43,8 +54,18 @@ public final class Tbs5530BootstrapDryRun {
             if(acquired || executed) throw new IllegalStateException("One-shot acquisition");
             acquired=true;
         }
-        binding.startBootstrap(device);
-        epoch=binding.bootstrapEpoch();
+        try {
+            preflight.requireCurrent();
+            binding.startBootstrap(device);
+            epoch=binding.bootstrapEpoch();
+        } catch (IOException | RuntimeException error) {
+            synchronized (this) {
+                executed = true;
+                failure = FailureKind.SESSION_UNAVAILABLE;
+            }
+            change(State.FAULTED);
+            throw error;
+        }
     }
 
     void execute() throws IOException {
@@ -61,6 +82,7 @@ public final class Tbs5530BootstrapDryRun {
                 change(State.LOADING);
                 try {
                     for(Tbs5530FirmwarePlan.Step step:plan.getSteps()) {
+                        preflight.requireCurrent();
                         session.requireUsable(token);
                         if(Thread.currentThread().isInterrupted()) throw new java.io.InterruptedIOException("Cancelled");
                         if(step.getKind()==Tbs5530FirmwarePlan.Kind.DELAY) {
@@ -75,6 +97,7 @@ public final class Tbs5530BootstrapDryRun {
                             if(n!=bytes.length) throw new TransferException(n<0||n>bytes.length
                                     ?FailureKind.IO_FAILURE:FailureKind.SHORT_TRANSFER,"Incomplete firmware step");
                         }
+                        preflight.requireCurrent();
                         session.requireUsable(token);
                     }
                     session.firmwareUploaded(token);

@@ -1,5 +1,254 @@
 # Research log (append-only)
 
+## 2026-11-04 — Phase 2.8: đối chiếu CPUCS độc lập và chọn phép đo URB trên board thật
+
+### Kết luận và phạm vi
+
+**Chọn hướng B: có phép đo phân biệt giả thuyết, nhưng chưa đủ bằng chứng để duyệt nạp Android.**
+`E600-only` là trình tự được tài liệu FX2 và hai loader độc lập hỗ trợ. Điều đó không chứng minh
+board đang cắm là đúng revision, cũng không biến `7F92` thành địa chỉ tương đương với CPUCS.
+Không cần chờ TBS để nghiên cứu tiếp. Bước có giá trị tiếp theo là quan sát phản hồi URB của
+chính board với driver hãng đã cài, sau phê duyệt chuyển thiết bị và phạm vi capture riêng.
+URB là bản ghi yêu cầu/kết quả USB ở phía host, không phải đo tín hiệu điện trên dây.
+
+Baseline thực tế: `ef1154d9c60725150e0d2eaab082d7b644748444`, nhánh
+`chore/modernize-android-build`. Ba references giữ SHA official `2ce787de9f6e81b4294692a45de15596ae2e1322`,
+C `c5fa27eecbe80633cbb365cc44656daea1c0e2e3`, Go `11228b05fb1626bf41c4e1879ace10cd0a8d575c`;
+không fetch/sync hoặc sửa chúng. Toàn bộ nguồn dưới đây truy cập/đối chiếu ngày 2026-11-04.
+
+### Reset-sequence evidence matrix
+
+Các ký hiệu nguồn được mở rộng ngay dưới bảng. `SOURCE-CONFIRMED` là điều source/tài liệu nói;
+`OFFLINE-TESTED` là kết quả kiểm file, không phải hành vi board.
+
+| Claim | source/line | FX2 applicable? | evidence strength | contradiction | outcome |
+|---|---|---|---|---|---|
+| CPUCS là E600; A0/40/index 0, payload 01 giữ reset, 00 release | TRM 2.3.11, 3.8, 7.3 | Có, nếu đúng FX2 | SOURCE-CONFIRMED, tài liệu chip | Không xác nhận chip/revision board | Candidate `DOCUMENTED_FX2_E600_ONLY`, chưa được duyệt chạy |
+| A0 do phần cứng xử lý bất kể RENUM; chỉ RAM nội và CPUCS được tài liệu hóa | TRM 3.8, 5.3, 5.6 | Có | SOURCE-CONFIRMED | Không có mô tả phản hồi A0/7F92 | Không kết luận STALL, ACK, alias hoặc vô hại tại 7F92 |
+| Linux generic chọn 7F92 cho AN2135/AN2235, E600 cho FX2 | Linux generic, dòng 25–29, 85–129 | Có, nhánh FX2 | SOURCE-CONFIRMED, độc lập TBS | Format ảnh generic là record, không phải raw 5530 | Dùng bằng chứng địa chỉ/reset, không sao chép parser ảnh |
+| libusb chọn E600 cho FX2/FX2LP, 7F92 cho nhánh mặc định | libusb, dòng 760–774, 781, 841 | Có, nhánh FX2 | SOURCE-CONFIRMED, độc lập TBS | Nhánh mặc định còn gồm FX1; không khái quát tên họ từ KB | Không dùng libusb để chứng minh mọi FX1 dùng E600 |
+| TBS ghi 7F92 rồi E600 khi stop; không kiểm hai kết quả | Official, dòng 283–287 | Source dành cho TBS5530 | SOURCE-CONFIRMED | Release lại kiểm kết quả; không thể suy stop lỗi vẫn luôn thành công | Trình tự lịch sử, không phải giấy phép ghi 7F92 |
+| Release tại 7F92 lỗi sẽ bỏ qua release E600 do `ret || call` | Official, dòng 291–310; C, dòng 661–680 | Là logic C, không phụ thuộc chip | SOURCE-CONFIRMED | Bác cách giải thích đơn giản “TBS bỏ qua tất cả lỗi 7F92” | Nếu data lỗi, cả hai release bị bỏ qua; nếu release 7F92 lỗi, E600 bị bỏ qua |
+| C dùng cùng dual-reset; Go dừng ngay cả khi stop 7F92 lỗi | C, dòng 654–683; Go, dòng 86–125 | Source board, không đo board | SOURCE-CONFIRMED | Ba nguồn có thể kế thừa cùng thiết kế | Không đếm ba bản sao thành ba phép đo độc lập |
+| Windows 2.0.0.2 và 2.1.0.3 đều dựng A0/7F92 rồi A0/E600 | SYS x64, RVA 1C00 và 4CC0; chi tiết bên dưới | Loader hãng TBS5530 | OFFLINE-TESTED; diễn giải control flow là INFERRED | Không có completion status hoặc xác nhận đã đi qua nhánh này | Chưa tìm thấy loader hãng E600-only trong hai gói công khai đã kiểm |
+| Kết quả lệnh 7F92 bị ghi đè bằng kết quả E600 trong helper Windows | SYS 2.0.0.2, RVA 1CC0–1D74; 2.1.0.3, RVA 4D83–4E38 | Static board loader | INFERRED từ disassembly | Không biết status thật, timeout hoặc nhánh helper transport bên dưới | Cần trace ghép submission/completion theo URB ID |
+| CPU reset không phải power-on reset; endpoint/address/RENUM giữ nguyên | TRM 7.4, 7.5 | Có | SOURCE-CONFIRMED | USB bus reset cũng không xóa RENUM | Không dùng USB reset làm recovery RAM hoặc bắt buộc có disconnect |
+| Ảnh Linux trùng nguyên 8192 byte được nhúng trong cả ba SYS | So khớp byte/hash, offsets bên dưới | Tương hợp firmware ở mức file | OFFLINE-TESTED | Không chứng minh đúng revision hoặc đã chạy trên Android | Giải quyết khác biệt ảnh Linux/Windows trong các gói đã kiểm |
+
+**Nguồn có thể truy vết:**
+
+- [TRM v2.2 chính hãng](https://www.infineon.com/assets/row/public/documents/30/44/infineon-ez-usb-fx2-trm-version2-2-usermanual-en.pdf),
+  tải lại 5790150 byte, SHA-256 `5b7ee974529ad1a074a804ed19f12eb255b1e797ebb0f604a2ef04e328d4419a`.
+  Mục 3.8 xác định Main RAM 0000–1FFF, scratch RAM E000–E1FF và CPUCS E600;
+  không cho phép dùng A0 để ghi bộ nhớ ngoài. Mục 7.3–7.5 phân biệt CPU reset, EEPROM boot và USB bus reset.
+- [Linux generic khóa SHA 05441d697f7f9a927264f4058cbbc6a03dfcac9d](https://github.com/torvalds/linux/blob/05441d697f7f9a927264f4058cbbc6a03dfcac9d/drivers/media/common/cypress_firmware.c).
+  Kiểm đủ byte khi stop/data/release và thoát khi lỗi; không retry. Đây là snapshot source, không phải đề nghị nâng kernel.
+- [libusb khóa SHA 987c1170d0018ba82557823a98ae443e8335e11b](https://github.com/libusb/libusb/blob/987c1170d0018ba82557823a98ae443e8335e11b/examples/ezusb.c).
+  `ezusb_cpucs` dòng 183–205 chấp nhận `LIBUSB_ERROR_IO` khi release vì thiết bị có thể biến mất.
+  **Không sao chép ngoại lệ đó:** thử nghiệm Android vẫn phải ghi `UNCERTAIN` khi release lỗi.
+- [Official TBS đã khóa](https://github.com/tbsdtv/linux_media/blob/2ce787de9f6e81b4294692a45de15596ae2e1322/drivers/media/usb/dvb-usb/tbs5530.c),
+  [C đã khóa](https://github.com/koreapyj/cxd28xx/blob/c5fa27eecbe80633cbb365cc44656daea1c0e2e3/tbs5530.c),
+  [Go đã khóa](https://github.com/Till0196/coax/blob/11228b05fb1626bf41c4e1879ace10cd0a8d575c/internal/coaxd/usb/bridge/tbs/tbs.go).
+  `op_rw` trả trực tiếp kết quả `usb_control_msg`, timeout 2000 ms; không chuẩn hóa lỗi thành thành công.
+  C luôn xin 64 byte ở khối cuối; Go dùng chiều dài thật. Planner Android giữ chiều dài thật.
+- [KB memory 259431](https://community.infineon.com/t5/Knowledge-Base-Articles/Read-and-Write-to-EZ-USB-Internal-Memory-AN21xx-FX-FX1-FX2-FX2LP/ta-p/259431)
+  và [KB legacy 248487](https://community.infineon.com/t5/Knowledge-Base-Articles/Generating-script-file-for-the-older-EZ-USB-series-FX-AN21xx/ta-p/248487)
+  vẫn trả HTTP 403 khi tải trực tiếp. Search trả trích đoạn legacy 7F92 và E600 mặc định;
+  chỉ là hỗ trợ tìm nguồn, không dùng làm bằng chứng board hoặc giải quyết khác biệt FX1 với libusb.
+- Lịch sử đường dẫn TBS được kiểm qua GitHub: commit
+  [`31a88360f9c082e111cc8a1bcc7e078be5e86970`](https://github.com/tbsdtv/linux_media/commit/31a88360f9c082e111cc8a1bcc7e078be5e86970)
+  có message sửa download firmware, nhưng patch thực chỉ tăng hai buffer I²C từ 20 lên 50 byte.
+  Không có thay đổi CPUCS trong patch đó; không lấy tiêu đề commit làm bằng chứng đã sửa reset.
+  Các entry sau của đường dẫn này sửa I²C/strscpy/disconnect, không cung cấp sequence mới.
+
+### Bốn giả thuyết và phép phân biệt
+
+1. **Legacy compatibility — INFERRED, hợp lý nhưng chưa chứng minh ý định tác giả.**
+   Linux generic/libusb phân họ; nhiều file TBS như `tbs5220.c:306/322`, `tbs5925.c:354/370`
+   cùng mẫu 7F92/E600 tại SHA official. Đây là dấu hiệu dùng lại template.
+   Phản biện quan trọng: C kiểm release 7F92 và sẽ không gửi release E600 nếu lỗi, còn Go kiểm cả stop.
+   Vì vậy chưa thể nói board chắc chắn STALL hoặc request bị bỏ qua vô hại.
+2. **Alias/vendor-specific behavior — UNVERIFIED.** Không thấy nguồn chip công khai xác nhận alias.
+   TRM nói A0 được phần cứng xử lý và E600 là thanh ghi duy nhất được ghi bằng lệnh này,
+   nên giả thuyết firmware TBS tự bắt A0 rồi đổi nghĩa cần bằng chứng mạnh hơn.
+   ACK trong trace, nếu có, vẫn không chứng minh 7F92 điều khiển CPU.
+3. **Sai chip hoặc firmware-state — UNVERIFIED.** Descriptor lịch sử khớp FX2 default HS và ảnh hãng
+   có các chuỗi opcode mang địa chỉ E6xx, nhưng firmware đang chạy có thể mô phỏng descriptor.
+   Không có PCB marking/revision thực, không yêu cầu mở vỏ. Tài liệu sản phẩm không cho ánh xạ revision→chip.
+4. **Loader E600-only khác — SOURCE-CONFIRMED cho generic, chưa thấy trong hai Windows packages.**
+   Linux generic/libusb đủ chứng minh candidate FX2 chuẩn. SYS hãng vẫn dual-reset;
+   trace có thể xác minh nhánh nào thực sự chạy, nhưng một lần trace dual-reset không chứng minh E600-only đủ cho board.
+
+### Firmware và Windows binary: kết quả kiểm offline mới
+
+[Download center TBS5530](https://www.tbsdtv.com/download/index.html?id=164&path=4) hiện liên kết hai driver
+ngày 2025-06-10: Windows 2.0.0.2 và Windows 11/HVCI 2.1.0.3; changelog chỉ ghi sửa DVB-S2X modcode.
+Không cài bản 2.1.0.3 lên Windows 10, không chạy setup/dpinst/ChangeMode. Không tuyên bố v1.0 là firmware mới nhất tuyệt đối.
+
+| File chính hãng | Kích thước | SHA-256 |
+|---|---:|---|
+| Archive firmware v1.0, HTTPS | 566825 | `23ecf817383dc29881ac9cb6f704239969e5f711270ad2073497653ba08791cc` |
+| `./dvb-usb-id5530.fw` | 8192 | `b97cf208bb586f706b26aa5450de6bb97375a3e3eabe833cddb0ae3a4f69d0dc` |
+| [ZIP Windows 2.0.0.2](https://www.tbsiptv.com/download/tbs5530/TBS5530_release_v2.0.0.2_20250610.zip) | 2397198 | `02903f0e098cfee5a24f693fa215e98d60149230d6b170d2627221978f16a518` |
+| [ZIP Windows 11 2.1.0.3](https://www.tbsiptv.com/download/tbs5530/TBS5530_release_v2.1.0.3_win11.zip) | 1780082 | `f260993d21731067ab20691df860366508dbcc711984be6030ca340d0e4e8e05` |
+| SYS x64 2.0.0.2 | 404168 | `48f2d8fefd467adc4dafe68c2708439e794c4c1daf69f7db5405b5388cf9e65c` |
+| SYS x86 2.0.0.2 | 202136 | `43234f1d7a73e47dc44c040f1fa28e587afd93126a167fec42b7abbbc2a19d0d` |
+| SYS x64 2.1.0.3 | 411528 | `69c25564e6f9c5a8968446e40ebc836abc5b49841567f10cfbde2b0285f6a783` |
+
+**OFFLINE-TESTED:** nguyên ảnh 8192 byte trùng tại file offsets `35680` trong x64 2.0.0.2,
+`1B890` trong x86 2.0.0.2 và `35350` trong x64 2.1.0.3. SYS đang cài trên Windows có cùng hash
+với SYS x64 2.0.0.2 tải từ hãng; service `tbsBDA.TBS5530` đang Running. Đây không phải kết quả tuner chạy trên Windows hôm nay.
+
+`objdump -d -Mintel` chỉ đọc PE, không thực thi SYS. Ở x64 2.0.0.2, helper RVA `1C00`
+dựng URB function 17, payload 1 byte từ tham số, request A0/index 0, lần lượt value 7F92 và E600;
+call transport tại RVA `1CC0` và `1D4E`. Không có nhánh kiểm status thứ nhất trước lệnh thứ hai;
+giá trị trả về bị ghi đè. Caller RVA `2674/26C2` và `26E5/272D` truyền 01 rồi 00 quanh loader,
+trỏ ảnh tại RVA `35680`. x64 2.1.0.3 có helper RVA `4CC0`, calls `4D83/4E11`, caller
+`5A70/5ABE` và `5AE1/5B29`, cùng cấu trúc. x86 có A0 và value tại VA `113FA/11439`.
+**INFERRED:** đây là đường reset loader; chưa biết setup/completion thật trên board.
+Không đăng disassembly toàn bộ hoặc binary vào Git. Các RVA là địa chỉ tương đối trong ảnh PE;
+VA disassembler x64 2.1.0.3 có thêm image base `140000000`.
+
+Ảnh `RAW_LINEAR`, LJMP tại reset vector trỏ 08FE, vùng dữ liệu 0000–1FFF.
+Có 128 khối × 64 byte, gồm cả hai khối toàn zero; không bỏ zero hoặc tự padding.
+So khớp từng byte qua planner cho cả hai plans đạt `OFFLINE-TESTED`:
+dual-reset 132 writes + delay; E600-only 130 writes + delay 100 ms. Byte cuối bị đổi được hash guard từ chối.
+
+Kiểm chuỗi byte 8051 cho thấy mẫu `MOV DPTR,#E600` tại offsets 04CF/0B53/0B6D/0E62,
+mẫu E680 tại 001C/002A/08D5/08E1/0C80/0C89/0CA4; không thấy mẫu DPTR 7F92.
+**Đó là tìm mẫu byte, chưa phải chứng minh code reachable.** Descriptor candidate tại offset 098A
+mang VID:PID 734c:5530; config candidate 09A6 có Bulk IN82/81, config 09C6 có dạng full-speed khác.
+Không dùng bảng nhúng thay cho descriptor đọc mới sau nạp hoặc bằng chứng endpoint hoạt động.
+
+**License/revision — UNVERIFIED:** archive không có LICENSE/COPYING/README/NOTICE rõ ràng.
+Việc hãng nhúng cùng ảnh trong SYS hỗ trợ kiểm tương hợp, không cấp quyền nhúng vào APK/Git.
+[Datasheet](https://www.tbsiptv.com/download/tbs5530/tbs5530_multi_standard_universal_tv_tuner_box_data_sheet.pdf)
+nói USB 2.0 và phụ kiện nguồn LNB 12 V tùy chọn; không đủ biết board thực có nguồn nào đang duy trì RAM.
+Không coi 100 mA trong descriptor là phép đo nguồn, không bật LNB hoặc yêu cầu mở vỏ.
+
+### Phép đo được chọn, recovery và ngưỡng phê duyệt
+
+**RUNTIME-OBSERVED:** TShark/Wireshark/Dumpcap 4.6.9, USBPcapCMD/driver 1.5.4.0;
+USBPcap service Running, TShark và extcap liệt kê USBPcap1–5. Shell không elevated.
+`dumpcap -D` không liệt kê USBPcap; extcap của TShark có, nên không suy capture hỏng.
+Cấu hình extcap đọc được các tùy chọn snaplen, buffer, devices và capture-from-new-devices;
+chưa có mapping tuner→root hub hoặc phép thử capture/quyền ghi. Không thấy capture cũ trong các thư mục dự án/session đã tìm.
+
+Kế hoạch tối thiểu gồm hai ngưỡng, không tự thực hiện:
+
+1. Xin phép chuyển tuner từ OnePlus sang một cổng laptop do người dùng chọn, sau khi owner Android
+   hết pending và được đóng an toàn. Việc cắm vào Windows có thể làm driver hãng tự nạp RAM ngay;
+   đó là tác động thật phải được duyệt, không phải “chỉ liệt kê”. Xác nhận nguồn OTG và nguồn ngoài/LNB
+   trước khi ngắt; không tự tháo nguồn hay đổi driver. Giữ Wireless ADB, không dùng usbipd/WSL.
+2. Khi tuner đã ở Windows, chỉ đọc VID:PID/topology/root hub/device address và quyền capture.
+   Sau khi có mapping cụ thể mới xin phép capture trên đúng interface, tối đa 30 giây/8192 KiB,
+   snaplen 256 đủ ghi khối 64 byte. Tắt capture-all và descriptor injection; loại thiết bị đang có khác,
+   chỉ theo dõi tuner và lần gắn mới đã duyệt trên hub. Nếu không cô lập được traffic, không capture.
+   Cần thêm một reconnect đã duyệt để thu khởi tạo tự nhiên nếu lần cắm đầu đã qua; không tự mở app
+   có thể tuning/frontend. Nếu BDA tự khởi tạo frontend, chỉ quan sát, không phát thêm lệnh từ agent.
+   Không chạy ChangeMode, vendor probe, A0 IN, I²C hoặc thao tác chỉnh filter.
+
+Phân tích offline theo `usb.urb_id`, request setup, wValue/wIndex/wLength, payload,
+`usb.usbd_status`/`usb.urb_status` và timeline. Chỉ lọc `usb.setup.bRequest==0xa0` sẽ làm mất
+completion không lặp setup; phải ghép URB ID trước khi lọc/xuất bảng.
+ACK tại 7F92 không chứng minh CPU reset; STALL rồi E600 thành công sẽ hỗ trợ giả thuyết compatibility,
+nhưng không chứng minh mọi board vô hại. Thiếu 7F92 chỉ có ý nghĩa nếu capture đầy đủ đường khởi tạo.
+Windows trace không chứng minh đường controlTransfer Android đã chạy.
+
+**Recovery có điều kiện:** kế hoạch A0 được mô hình hóa chỉ ghi RAM/CPUCS, không ghi EEPROM.
+Nếu đúng FX2 và mọi nguồn nuôi RAM được loại bỏ, power-on sẽ tải lại cấu hình/EEPROM boot;
+CPU reset hoặc USB reset không thay thế việc này. Chưa biết nguồn ngoài/backfeed và EEPROM của board,
+nên không hứa “rút USB là chắc phục hồi”. Sau lỗi không gửi release/reset bổ sung hoặc thử plan thứ hai.
+Ghi `UNCERTAIN`, chờ đánh giá nguồn và một thao tác vật lý được duyệt riêng; thu metadata/descriptors/quyền
+mới sau reconnect, không tái dùng epoch/connection. Giấy phép firmware là điều kiện phát hành riêng,
+không chặn phân tích nội bộ.
+
+### Candidate và ranh giới phần mềm
+
+`TBS_SOURCE_DUAL_RESET`: 7F92=01 → E600=01 → 128 DATA → 7F92=00 → E600=00 → delay.
+`DOCUMENTED_FX2_E600_ONLY`: E600=01 → 128 DATA tại 0000..1FC0 → E600=00 → delay.
+Cùng bmRequestType 40, bRequest A0, wIndex 0, timeout 2000 ms; reset payload 1 byte.
+Hai plans là dữ liệu offline có provenance riêng; không có fallback hoặc quyền chạy plan nào.
+
+Thêm comparator trong debug, giữ planner main/Session/Binding/Coordinator/Transport/facade production không đổi.
+Dry-run chỉ nối fake trong tests, thêm preflight giả lập để kiểm mất Wireless ADB trước/sau mỗi bước;
+không tuyên bố đây là guard Android đã triển khai. Gate vẫn false, facade `openBootstrap` vẫn từ chối.
+Không tạo uploader/UI phần cứng khi hướng B còn thiếu trace và recovery.
+[ADR-019](DECISIONS.md) thay dependency “chờ TBS” bằng phép đo có điều kiện; không xóa ADR-018 lịch sử.
+
+### Bổ sung sau chuyển host được duyệt — 18:20 +07
+
+**RUNTIME-OBSERVED:** sau người dùng tự chuyển từ OTG sang USB 2.0 Windows, PnP nhận TBS BDA
+MEDIA/OK với driver 2.0.0.2 đã cài. USBPcap topology đặt tuner tại USBPcap3/address 4,
+trong hub EHCI #2 có thêm webcam/Bluetooth. Chưa bắt trace, chưa biết status 7F92 hoặc việc firmware
+đã chạy thành công. Một lần TCP ADB mất đã fail-stop; chỉ tiếp tục sau xác nhận nối lại và kiểm đúng
+GM1900/API 30, owner không pending/open. Android dumpsys không còn tuner, report UI cũ không dùng làm
+metadata mới. Nguồn chỉ OTG trước khi chuyển là thông tin người dùng xác nhận, không phép đo điện.
+
+### Kết quả trace thật được duyệt — 18:38 +07
+
+**RUNTIME-OBSERVED, Windows BDA 2.0.0.2, cùng board 734c:5530:** phép đo hướng B đã thu được dữ liệu
+phân biệt giả thuyết. Lượt đầu 30 giây không kịp reconnect, file 296 byte/0 packets: **FAILED**,
+không suy giao thức. Người dùng sau đó duyệt RIÊNG một lượt 180 giây/8 MiB và một reconnect mới.
+Lượt hai có 3028 packets, 232084 byte, SHA-256 pcapng
+`e3220b64da4adac60862406569ef5151c430f050f6b179096a925b803e913f4f`,
+đầu/cuối packet 18:30:59.221881–18:31:04.273827 +07. Tất cả ở bus 3/address 4, không frame bị cắt.
+Raw capture chứa firmware nên chỉ ở session local, không đăng hoặc đưa vào Git.
+
+| Lượt tự nhiên của BDA | Bước | Frame request/completion | Payload | Completion USBD_STATUS |
+|---|---|---|---|---|
+| 1 | A0/7F92 stop | 9/10 | 01 | 00000000 SUCCESS |
+| 1 | A0/E600 stop | 11/12 | 01 | 00000000 SUCCESS |
+| 1 | 128 DATA, 0000–1FFF | 13–268 | 8192 byte, hash khóa | Tất cả SUCCESS |
+| 1 | A0/7F92 release | 269/270 | 00 | 00000000 SUCCESS |
+| 1 | A0/E600 release | 271/272 | 00 | 00000000 SUCCESS |
+| 2 | A0/7F92 stop | 301/302 | 01 | 00000000 SUCCESS |
+| 2 | A0/E600 stop | 303/304 | 01 | 00000000 SUCCESS |
+| 2 | 128 DATA, 0000–1FFF | 305–560 | 8192 byte, hash khóa | Tất cả SUCCESS |
+| 2 | A0/7F92 release | 561/562 | 00 | 00000000 SUCCESS |
+| 2 | A0/E600 release | 563/564 | 00 | 00000000 SUCCESS |
+
+Cả 264 A0 submissions được ghép completion đầy đủ bằng **usb.irp_id + bus/address + frame request**.
+USBPcap dùng `usb.irp_id`, không phải `usb.urb_id` (trường sau trống ở capture này).
+IRP ID được tái dùng qua nhiều requests, nên không join toàn bộ file chỉ bằng ID.
+`usb.request_in` kiểm đúng frame đối ứng, status phải lấy ở completion, không lấy giá trị submission.
+Dựng lại hai ảnh DATA đều đúng 8192 byte/hash khóa, không padding/bỏ zero, không có A0 pending.
+Parser Java debug và kiểm Node độc lập cùng cho kết quả; fixture tests không chứa capture/firmware thật.
+
+**Giả thuyết được giải quyết:** “7F92 luôn STALL trên board này” bị phản bác trong điều kiện quan sát:
+cả bốn writes 7F92 có completion SUCCESS. Không còn dùng việc thiếu xác nhận alias từ TBS làm blocker.
+**Điều chưa được chứng minh:** SUCCESS không đo CPU state hoặc chứng minh 7F92 là CPUCS/alias;
+không chứng minh mọi board/revision, E600-only trên board hoặc Android control path.
+
+**Chuyển descriptor:** frame 6 trước lượt 1 có alt0–3 và endpoints default 01/81/02/04/86/88,
+không82. Frame 298, khoảng 1,939 giây sau đầu trace và trước lượt 2, trả config mới alt0 với IN82/81.
+Đây là bằng chứng descriptor thực trên Windows, không chỉ bảng nhúng trong firmware.
+VID:PID vẫn 734c:5530 và USB address vẫn 4; không suy cùng connection/epoch hoặc không có disconnect.
+Sau lượt 1, Windows tự gửi vendor IN B7 mười lần, completion `c0000011`; không phải A0 và không có
+lệnh đó do agent gửi. Có vendor 90/8A/80 tự nhiên sau đó. Không xem Windows tự khởi tạo frontend là
+phê duyệt agent gọi frontend hoặc bằng chứng DVB-T2/TS.
+
+**Vì sao vẫn giữ hướng B cho Android, không tự nâng thành A:** driver hãng tự phát hai lượt upload
+trong một reconnect; agent không retry hoặc ra lệnh lần hai. Trace cho thấy descriptor đã đổi trước
+lượt 2, nhưng chưa biết lý do driver mở/init lần hai, tính đầy đủ của bridge sau đúng một lượt hoặc
+điều kiện Android không phụ thuộc nhánh B7/90/8A/80 của BDA. Candidate thực nghiệm Android hợp lý
+nhất hiện là `TBS_SOURCE_DUAL_RESET` (132 writes), vì đã quan sát trên chính board; không chọn
+E600-only chỉ vì ít lệnh hơn. E600-only vẫn là chuẩn chip nhưng chưa đo trên board.
+Không cần xác minh alias để nghiên cứu tiếp; điều kiện tiếp theo là kế hoạch one-shot Android tách khỏi
+retry của BDA, nhận diện lại/observer sau nạp và phê duyệt return-host/upload riêng.
+Không được biến lần BDA thứ hai thành mẫu auto-retry Android.
+
+**Cleanup capture:** TShark đã dừng theo giới hạn; pipeline còn worker elevated nên script exit 1
+ở deadline, không phải parser hoặc firmware transfer fail. Dừng parent thường thành công; dừng worker
+PID cụ thể bị Access denied. Người dùng đã dừng worker bằng quyền Administrator; kiểm lại không còn
+TShark/USBPcap process. Không restart service/filter hoặc thay driver. Hai trace không có write từ agent.
+Tuner hiện ở Windows, chưa trả về OnePlus; Android firmware/READY/TS vẫn **NOT RUN**.
+
+Câu hỏi TBS tùy chọn: chip/PCB revision; semantics A0/7F92; lý do helper Windows bỏ status đầu;
+EEPROM/nguồn RAM và recovery; ảnh/hash cho revision; quyền phân phối. Chưa liên hệ hãng.
+Firmware/CPU reset/vendor IN hoặc OUT/I²C do agent chủ động gửi, Android upload/tuning/TS: **NOT RUN**.
+Các lệnh tự nhiên của BDA đã được ghi rõ trong bảng runtime phía trên, không phải Android bring-up.
+
 ## 2026-11-04 — Phase 2.7: fingerprint mặc định FX2, firmware chính hãng và giới hạn nạp
 
 ### Baseline và nguồn

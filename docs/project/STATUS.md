@@ -1,5 +1,83 @@
 # Port TBS5530 sang Android — trạng thái hiện tại
 
+## Checkpoint phát hành Phase 2.8 — 2026-11-04 19:10 +07
+
+- Người dùng yêu cầu commit các thay đổi hiện có và push lên origin của nhánh hiện tại.
+  Preflight xác nhận `chore/modernize-android-build`, HEAD và live origin cùng
+  `ef1154d9c60725150e0d2eaab082d7b644748444`, stage trống; phạm vi 16 file gồm
+  mã/tests debug, sáu hồ sơ và ba file hướng dẫn đã có trước tác vụ Git.
+- Message dự kiến: `feat: document TBS5530 reset evidence and validate USB transcripts`.
+  Chỉ ghi nhận commit/push thành công sau kiểm tra Git; không đưa firmware, capture, APK hoặc raw logs vào Git.
+  Các ghi chú “chưa commit/push” bên dưới giữ nguyên trạng thái lịch sử trước checkpoint này.
+- Không chạy lại build/tests hoặc thao tác USB trong tác vụ Git. Bằng chứng gần nhất vẫn là
+  230 JVM/49 instrumentation, debug/release và lint 0 errors/9 warnings của Phase 2.8.
+  Android upload vẫn NOT RUN; yêu cầu commit/push không cấp quyền thử phần cứng.
+
+## Phase 2.8 — Đã đo dual-reset Windows; Android upload chưa chạy, 2026-11-04
+
+**Checkpoint mới nhất, sau capture 18:38 +07:** hướng B đã thu dữ liệu board thật, không đợi TBS.
+Trace được duyệt riêng có 3028 packets trên đúng tuner; hai lượt dual-reset do BDA tự phát,
+264/264 A0 completions SUCCESS, hai ảnh DATA đều đúng 8192 byte/hash khóa.
+7F92 không STALL trong điều kiện quan sát, nhưng chưa chứng minh nó là alias CPUCS.
+Descriptor Windows frame 6 thiếu82; frame 298 sau lượt đầu có IN82/81 ở alt0.
+Không có lệnh vendor/I²C từ agent; Windows tự khởi tạo và tự nạp hai lượt, không phải Android retry.
+
+Lượt trace 30 giây đầu rỗng vì reconnect muộn; chỉ sau phê duyệt mới mới đo 180 giây.
+TShark dừng theo giới hạn; worker elevated còn sót được người dùng dừng, kiểm không còn capture processes.
+Hiện tuner ở Windows/BDA OK; Wireless ADB đã phục hồi đúng OnePlus sau hai lần fail-stop,
+đều chỉ tiếp tục sau xác nhận của người dùng.
+**Android firmware/READY/frontend/TS NOT RUN.** Candidate thử trên board có cơ sở nhất hiện là dual-reset,
+không tự đổi E600-only. Còn thiếu kế hoạch/guard/observer one-shot Android và phê duyệt return-host/upload;
+không sao chép hai lượt BDA hoặc B7/vendor init thành retry/khởi tạo frontend Android.
+
+Thêm parser transcript debug với 5 tests tổng hợp; parser Java và Node ghép đúng IRP/frame và hash
+trên trace thật. Mã cuối đạt **230 JVM/49 instrumentation**, build debug/release, lint 0 errors/9 warnings
+trong 4 phút 2 giây; Java 8/major 52 và release isolation đạt.
+Sau UTP đã cài lại debug: OnePlus không có USB, owner không pending/open; tuner Windows vẫn OK.
+GitNexus refresh cuối lỗi FTS nên không dùng graph đó làm xác nhận mã cuối;
+source/diff và tests là chứng cứ. Chi tiết [TEST-MATRIX.md](TEST-MATRIX.md).
+[RESEARCH.md](RESEARCH.md) có bảng frame/status; [ADR-019](DECISIONS.md) có bổ sung sau đo.
+Các đoạn dưới là checkpoint offline/trước capture, không phải trạng thái capture mới nhất.
+
+**Đã xác định protocol FX2 chuẩn và đường reset trong driver Windows hãng; chưa nạp firmware thật.**
+HEAD thực tế `ef1154d9c60725150e0d2eaab082d7b644748444`, nhánh `chore/modernize-android-build`,
+là checkpoint Phase 2.7. Working tree có sẵn ba thay đổi hướng dẫn; giữ nguyên, không stage/commit/push
+hoặc sửa references. Kết quả lịch sử 218 JVM/49 instrumentation không được dùng thay kết quả mới.
+
+- **SOURCE-CONFIRMED:** TRM FX2 v2.2, Linux generic và libusb chọn CPUCS E600 cho FX2.
+  `DOCUMENTED_FX2_E600_ONLY` là candidate độc lập, không phải source TBS hoặc quyền chạy hardware.
+  Source TBS không chỉ “bỏ qua lỗi 7F92”: bỏ status stop, nhưng lỗi release 7F92 làm bỏ release E600.
+- **OFFLINE-TESTED:** hai gói Windows chính hãng 2.0.0.2/2.1.0.3 vẫn dựng dual-reset.
+  Cả ba SYS x64/x86 đã kiểm nhúng nguyên ảnh Linux 8192 byte, cùng hash đã khóa.
+  SYS 2.0.0.2 đang cài trùng hash gói hãng. Không có completion URB để biết phản hồi board ở 7F92;
+  không chứng minh alias, STALL hoặc request vô hại. Matrix, RVA/hash và phản biện ở [RESEARCH.md](RESEARCH.md).
+- **Quyết định B, không đợi hãng:** chuẩn bị quan sát khởi tạo tự nhiên của driver Windows đã cài.
+  Wireshark/TShark 4.6.9, USBPcap 1.5.4.0 và driver Running đã xác minh; chưa capture hoặc chuyển tuner.
+  Phải được duyệt chuyển host vì BDA có thể tự nạp RAM. Sau mapping đúng root hub/interface/address
+  mới duyệt capture giới hạn; không lấy `tshark -D` làm capture PASS. Recovery còn thiếu dữ liệu nguồn ngoài/backfeed/EEPROM.
+- **Mã debug:** thêm comparator hai plan có allowlist/provenance, không sửa planner/main ownership,
+  facade operational/profile/registry/XML. Dry-run fake kiểm preflight trước/sau bước; test lỗi từng
+  write của cả plans, mất ADB và one-shot. Thành công chỉ TRANSITIONING, không READY.
+  Gate vẫn false, không có uploader hoặc entrypoint phần cứng. [ADR-019](DECISIONS.md) mở lại ADR-018
+  bằng chứng cứ độc lập thay vì bắt buộc chờ TBS.
+- **Kiểm thử mới trên mã cuối:** 225 JVM và 49 instrumentation trên GM1900/API 30 đều đạt,
+  build debug/release và lint 0 errors/9 warnings. Lượt regression cuối mất 2 phút 29 giây/419 tasks;
+  mã cuối giữ gate false. Chi tiết trong [TEST-MATRIX.md](TEST-MATRIX.md).
+  Java 8/major 52 và release isolation đạt; runtime API 21/USB 16 KiB chưa chạy mới.
+- **Hardware NOT RUN:** không A0 IN/OUT, CPU reset/release, I²C, mode/configuration/alternate,
+  EEPROM, frontend hoặc TS; không claim/open raw cycle mới. Wireless ADB được giám sát đúng OnePlus,
+  không pair lại hoặc dùng emulator. Firmware/descriptor sau nạp/IN82/readiness đều chưa có bằng chứng mới.
+
+**Checkpoint sau đó:** người dùng đã duyệt và tự chuyển tuner sang cổng USB 2.0 Windows,
+không có nguồn phụ. Một lần mất TCP ADB đã dừng ngay; chỉ tiếp tục sau xác nhận nối lại.
+Windows hiện nhận TBS BDA 2.0.0.2/OK; mapping USBPcap3/address 4 đã xác minh, chưa capture.
+Android không còn tuner theo dumpsys; report Activity cũ không được coi là attachment mới.
+
+**Bước tiếp theo:** xin duyệt capture giới hạn và một reconnect trên đúng cổng đã xác định.
+Chưa đủ điều kiện đề nghị upload Android;
+không thử kế hoạch khác khi một attempt lỗi, không tự chuyển sang CXD2878/frontend.
+Các mục Phase 2.7 bên dưới giữ nguyên như lịch sử, kể cả dependency hỏi TBS đã được ADR-019 thay thế.
+
 ## Checkpoint phát hành Phase 2.7 — 2026-11-04
 
 - Người dùng yêu cầu commit và push toàn bộ thay đổi Phase 2.7 cùng đợt sửa thứ tự, cách diễn đạt tài liệu lên `origin/chore/modernize-android-build`. Preflight xác nhận HEAD và live origin cùng `f03e092702edac5134efea633d8a30a51e1716e4`, stage trống, đúng 18 file; không đưa firmware, APK, logs hoặc định danh thiết bị vào Git.
