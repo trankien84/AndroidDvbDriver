@@ -36,7 +36,7 @@ public final class Tbs5530AndroidBootstrap implements AutoCloseable {
                 Tbs5530FirmwareValidation.Format.RAW_LINEAR);
         Tbs5530Fx2ProtocolPlan plan = Tbs5530Fx2ProtocolPlan.describe(locked,
                 Tbs5530Fx2ProtocolPlan.Id.TBS_SOURCE_DUAL_RESET.name());
-        Tbs5530BootstrapTelemetry telemetry = new Tbs5530BootstrapTelemetry(snapshot -> audit(context, snapshot),
+        Tbs5530BootstrapTelemetry telemetry = new Tbs5530BootstrapTelemetry(new Tbs5530NativeAudit(context.getFilesDir()),
                 android.os.SystemClock::elapsedRealtimeNanos, "ANDROID_ELAPSED_REALTIME_NS", authorization.runEpoch());
         port = new Port(context, plan, new Tbs5530OneShotBootstrap.Guard() {
             public void requireCurrent() throws IOException { requireAuthorization(); }
@@ -46,6 +46,7 @@ public final class Tbs5530AndroidBootstrap implements AutoCloseable {
             public void requireNative(int ordinal) throws IOException {
                 requireAuthorization(); authorization.requireNative(ordinal); requireAuthorization();
             }
+            public void requireDispatch(int ordinal) throws IOException { authorization.requireDispatch(ordinal); }
         });
         port.telemetry = telemetry;
         binding = new Tbs5530UsbBinding(session, port, runtime, runtime, error -> {
@@ -53,33 +54,16 @@ public final class Tbs5530AndroidBootstrap implements AutoCloseable {
             revoked.set(true);
         }, 30000, 10000);
         runner = new Tbs5530OneShotBootstrap(session, binding, port, device, plan,
-                () -> { requireAuthorization(); port.requireUploadEpoch(); }, store, millis -> {
+                new Tbs5530OneShotBootstrap.Guard() {
+                    public void requireCurrent() throws IOException { requireAuthorization(); port.requireUploadEpoch(); }
+                    public void requireStartBudget() throws IOException { requireCurrent(); authorization.requireStartBudget(); }
+                }, store, millis -> {
                     try { Thread.sleep(millis); }
                     catch (InterruptedException error) { Thread.currentThread().interrupt(); throw new IOException("Delay interrupted"); }
                 }, binding::bootstrapRawDescriptors);
         runner.telemetry(telemetry);
-    }
-
-    private static void audit(Context context, Tbs5530BootstrapTelemetry.Snapshot s) throws IOException {
-        android.util.AtomicFile file = new android.util.AtomicFile(new java.io.File(context.getFilesDir(),
-                "phase29-native-audit-" + s.runEpoch + ".json"));
-        java.io.FileOutputStream output = null;
-        try {
-            org.json.JSONObject json = new org.json.JSONObject();
-            json.put("run_epoch", s.runEpoch); json.put("monotonic_timebase", s.timebase);
-            json.put("planned_ordinal", s.plannedOrdinal);
-            json.put("guard_requested", s.guardRequested); json.put("guard_accepted", s.guardAccepted);
-            json.put("native_call_started", s.nativeCallStarted); json.put("native_call_completed", s.nativeCallCompleted);
-            json.put("full_length_completed", s.fullLengthCompleted); json.put("image_bytes_full_length", s.imageBytesFullLength);
-            json.put("payload_bytes_full_length", s.payloadBytesFullLength);
-            json.put("events", new org.json.JSONArray(s.events));
-            output = file.startWrite();
-            output.write(json.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            file.finishWrite(output);
-        } catch (IOException | org.json.JSONException | RuntimeException error) {
-            if (output != null) file.failWrite(output);
-            throw new IOException("Native audit unavailable", error);
-        }
+        runner.rawAudit((phase, bytes) -> Tbs5530DurableFile.write(new java.io.File(context.getFilesDir(),
+                "phase29-raw-" + telemetry.snapshot().runEpoch + "-" + phase + ".bin"), bytes));
     }
 
     private final java.util.concurrent.atomic.AtomicReference<Throwable> revocation = new java.util.concurrent.atomic.AtomicReference<>();
@@ -198,6 +182,7 @@ public final class Tbs5530AndroidBootstrap implements AutoCloseable {
         }
         void finishWrites() { writesClosed.set(true); }
         synchronized List<String> results() { return new ArrayList<>(results); }
+        void telemetry(Tbs5530BootstrapTelemetry value) { telemetry = value; }
         Tbs5530BootstrapTelemetry.Snapshot boundaries() { return telemetry.snapshot(); }
         public List<Tbs5530UsbBinding.Device> devices() throws IOException { return metadata.devices(); }
         public boolean hasPermission(Tbs5530UsbBinding.Device device) throws IOException { return metadata.hasPermission(device); }
@@ -268,10 +253,11 @@ public final class Tbs5530AndroidBootstrap implements AutoCloseable {
                         telemetry.guardAccepted(current);
                         telemetry.nativeIntent(current);
                         requireDevice(expected);
-                        guard.requireNative(current); requireUploadEpoch();
+                        guard.requireNative(current); requireDevice(expected); requireUploadEpoch();
                         if (writesClosed.get()) throw new Tbs5530BootstrapStop(
                                 Tbs5530BootstrapStop.Kind.AUTHORIZATION_REVOKED, "Write gate closed during acknowledgment");
                         long eventEpoch = events.get();
+                        guard.requireDispatch(current);
                         ordinal = current;
                         telemetry.nativeStarted(current); nativeStarted = true;
                         int n = raw.controlTransfer(type, request, value, index, bytes, offset, length, timeout);

@@ -69,13 +69,14 @@ public final class Tbs5530Fx2Fingerprint {
             }
         }
         Match match=diff.isEmpty()?Match.MATCH:matches>0?Match.PARTIAL_MATCH:Match.NO_MATCH;
+        // bInterval is not a polling constraint for bulk IN; preserve it as evidence, not a gate.
         boolean operational=false;
         for(Tbs5530RawDescriptors.Entry entry:raw.entries) {
             Map<String,Integer> f=entry.fields;
             if(Integer.valueOf(5).equals(f.get("type")) && Integer.valueOf(0).equals(f.get("interface_id"))
                     && Integer.valueOf(0).equals(f.get("alternate")) && Integer.valueOf(1).equals(f.get("configuration_value"))
                     && Integer.valueOf(0x82).equals(f.get("address")) && Integer.valueOf(128).equals(f.get("direction"))
-                    && Integer.valueOf(2).equals(f.get("attributes")) && Integer.valueOf(0).equals(f.get("interval"))
+                    && Integer.valueOf(2).equals(f.get("attributes"))
                     && (Integer.valueOf(64).equals(f.get("wMaxPacketSize")) || Integer.valueOf(512).equals(f.get("wMaxPacketSize")))) {
                 operational=true;
             }

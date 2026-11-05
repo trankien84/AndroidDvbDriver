@@ -311,6 +311,38 @@ public class Tbs5530ApprovalDeterministicTest {
         assertFalse(f.storage.files.containsKey("phase29-write-request.json"));
         denied(Kind.AUDIT_FAILED, () -> f.approval.requireWrite(1));
     }
+    @Test public void delayAfterFinalAuthorizationStillStopsAtDispatchWithoutIo() throws Exception {
+        Fixture f = new Fixture(); f.hostAfter(0,true); f.approval.requireWrite(1); f.approval.requireNative(1);
+        f.clock.time += 1500;
+        denied(Kind.PRE_NATIVE_ACK_TIMEOUT, () -> f.approval.requireDispatch(1));
+        Fixture once = new Fixture(); once.hostAfter(0,true); once.approval.requireWrite(1); once.approval.requireNative(1);
+        once.approval.requireDispatch(1);
+        denied(Kind.AUTHORIZATION_REVOKED, () -> once.approval.requireDispatch(1));
+    }
+    @Test public void exactAckDeadlineEdgesHaveNoGracePeriod() throws Exception {
+        for (long elapsed : new long[]{1499,1500,1501}) {
+            Fixture f = new Fixture();
+            f.storage.afterWrite = () -> {
+                if (f.storage.files.containsKey("phase29-write-request.json")) {
+                    f.clock.time += elapsed; f.ack(); f.storage.afterWrite = null;
+                }
+            };
+            if (elapsed < 1500) { f.approval.requireWrite(1); f.approval.requireNative(1); }
+            else denied(Kind.PRE_NATIVE_ACK_TIMEOUT, () -> f.approval.requireWrite(1));
+        }
+    }
+    @Test public void startBudgetStopsBeforeConsumeOrRequestAndUsesPermitExpiry() throws Exception {
+        Fixture f = new Fixture(true); f.clock.time += 60001;
+        f.permit.put("heartbeat_elapsed_ms",f.clock.time); f.storage.permit(f.permit);
+        denied(Kind.PERMIT_EXPIRED,f.approval::requireStartBudget);
+        assertTrue(f.storage.attempts.isEmpty()); assertFalse(f.storage.files.containsKey("phase29-write-request.json"));
+        Fixture exact = new Fixture(true); exact.clock.time += 60000;
+        exact.permit.put("heartbeat_elapsed_ms",exact.clock.time); exact.storage.permit(exact.permit);
+        exact.approval.requireStartBudget();
+        Fixture shortPermit = new Fixture(true);
+        shortPermit.permit.put("expires_elapsed_ms",shortPermit.clock.time + 239999); shortPermit.storage.permit(shortPermit.permit);
+        denied(Kind.PERMIT_EXPIRED,shortPermit.approval::requireStartBudget);
+    }
     @Test public void persistenceAndRequestWriteFailuresAreTypedAndTerminal() throws Exception {
         Fixture f = new Fixture(); f.storage.failConsume = true;
         denied(Kind.AUDIT_FAILED, f.approval::consume);

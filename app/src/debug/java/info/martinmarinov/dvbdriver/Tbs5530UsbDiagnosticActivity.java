@@ -145,16 +145,9 @@ public final class Tbs5530UsbDiagnosticActivity extends Activity {
             json.put("model",android.os.Build.MODEL);json.put("manufacturer",android.os.Build.MANUFACTURER);
             json.put("android_version",android.os.Build.VERSION.RELEASE);json.put("api",android.os.Build.VERSION.SDK_INT);
             json.put("usb",Tbs5530DiagnosticMetadata.structured(getApplicationContext()));
-            android.util.AtomicFile file = new android.util.AtomicFile(new java.io.File(getFilesDir(),"tbs5530-diagnostic.json"));
-            java.io.FileOutputStream output = null;
-            try {
-                output = file.startWrite();
-                output.write(json.toString(2).getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                file.finishWrite(output);
-            } catch (java.io.IOException error) {
-                if (output != null) file.failWrite(output);
-                throw error;
-            }
+            info.martinmarinov.drivers.usb.tbs5530.Tbs5530DurableFile.write(
+                    new java.io.File(getFilesDir(),"tbs5530-diagnostic.json"),
+                    json.toString(2).getBytes(java.nio.charset.StandardCharsets.UTF_8));
             reportWriteFailed = false;
             lastBootstrapExport = bootstrapRevision;
         } catch (java.io.IOException | org.json.JSONException | RuntimeException error) {

@@ -1,5 +1,308 @@
 # Research log (append-only)
 
+## 2026-11-06 — Phase 2.9 đạt firmware bring-up: 132 full-length và raw OPERATIONAL_CANDIDATE
+
+**RUNTIME-OBSERVED:** Sau hai reservations chỉ ở host đã tiêu thụ và các sửa UID/private/no-clamp, người dùng duyệt riêng transaction thứ ba, physical current=true/UI-ready=true. Fresh target/boot/model/API/firmware/guard đạt; raw trước upload mới 189 byte/FX2_DEFAULT/MATCH, open/read/close 1/1/1, transfer 0, duration 18 ms. APK đã cài khớp build 40fc…411e, pin 91% lúc preflight. Người dùng tự bấm UI; parent không bấm upload thay. Helper chạy đúng một lần với GUID mới sau approval, không reuse/fallback/retry/recovery.
+
+**Upload thực hoàn tất:** Report lúc 00:03:48 +07 có planned/guard_requested/guard_accepted/native_started/native_completed/full_length đều 132, image 8192/payload 8196, 132 API results đều đúng requested length; hai release ở bước 131/132 trả 1/1 byte. Plan TBS_SOURCE_DUAL_RESET và hash ảnh khóa giữ nguyên, tổng 132 A0 OUT. Sau NATIVE_CALL_END full-length cuối có FINAL_RELEASE_FULL_LENGTH_DETACH_OBSERVATION_REQUIRED rồi STOP JAVA_IO_EXCEPTION; snapshot epoch 1/attachment events 1/cleanup NONE/pending false. Source đi qua delay 100 ms và releaseUpload trước acquireObservation; duration 106486 ms không phải USB-only. Không tự reupload/corrective release khi observation chưa có quyền hoặc attachment mới.
+
+**Observation riêng được duyệt:** Người dùng approve_read_once cho đóng/mở owner mới, fresh USB permission và một raw read/0 transfer. Report 00:10:59 +07 hoàn chỉnh 50 byte/no issues/hash 22e2…add5, có alt 0/interface 0/config 1/bulk IN 0x82+0x81/512 byte; classifier cũ UNKNOWN vì 0x82 có bInterval=1. Không mặc định lỗi firmware hoặc nạp lại. Microsoft USB endpoint descriptor xác nhận polling interval không dùng cho bulk; chỉ sửa nhánh candidate debug, giữ parser/default fingerprint và main transport guard. Unit repro FAIL trước sửa, focused PASS sau sửa rồi full gates mới.
+
+**Binary và classifier cuối:** Người dùng duyệt riêng update APK giữ data và một raw read mới, không upload/vendor/claim/reset. Trong lúc install test riêng ADB TCP offline, không reconnect tự động; người dùng khôi phục TCP mới, giữ nguyên OTG/nguồn, pin lại cùng boot/model/API. APK observation 12a9…526e cập nhật tại chỗ, so cả legacy và current-attempt consumed không đổi true. Raw cuối 00:32:55.837 +07 là COMPLETE_RETURNED_TREE/50 byte/no issues, hash `22e2f1df9f66c58dbb6c554e400b6b8abcb78ee4f277e03679bc0fac7a25add5`, OPERATIONAL_CANDIDATE, open/read/close 1/1/1, claim/release/transfer 0/0/0, 29 ms, pending/cleanup false. Binary thực được port checked-sync lưu private rồi export 50 byte, hash/length khớp, không phải reconstruction. Fixture offline từ numeric fields không khớp hash được giữ đúng là fixture, không dùng làm raw evidence. Probe sysfs cached descriptor không tìm được path đọc được; không chmod hoặc đọc bus thêm.
+
+| Raw cuối, numeric fields | Giá trị thực |
+| --- | --- |
+| Device | VID:PID 734c:5530, USB 2.00, EP0 packet 64, class/subclass/protocol 0/0/0, bcdDevice 1, 1 config |
+| Configuration | value 1, wTotalLength 32, 1 interface, attributes 128, max power 50 units ×2 mA |
+| Interface | interface 0/alt 0, 2 endpoints, class 255/subclass 0/protocol 0 |
+| Endpoint 0x82 | IN/bulk, attributes 2, wMaxPacketSize 512, bInterval 1 |
+| Endpoint 0x81 | IN/bulk, attributes 2, wMaxPacketSize 512, bInterval 0 |
+
+Default fingerprint vẫn PARTIAL_MATCH là đúng vì cây 50 byte operational không phải cây 189 byte default; OPERATIONAL_CANDIDATE được xét riêng theo endpoints, không READY. Không đưa strings/unknown payload vào docs/Git. Nguồn USB công khai và ba reference SHAs/file ở ADR-023; TBS/C/Go chỉ đối chiếu địa chỉ/type, không chứng minh DVB tuning/TS hoặc trạng thái chip.
+
+### Timeline/latency của đúng 132 native calls mới
+
+N=132, nearest-rank ceil(p×N), cùng Android monotonic ở boundary/ACK; không trộn 24 steps ngày 04-11 hoặc 2 host failures trước native. `helper_usb_calls=0` chỉ nói host helper không gọi USB, không phủ nhận 132 Android calls.
+
+| Phân đoạn thực | p50 | p95 | p99 | max | Tổng / ghi chú |
+| --- | --- | --- | --- | --- | --- |
+| Request→Android ACK observed, ms | 738 | 1001 | 1046 | 1067 | 101432 ms qua 132 steps |
+| Request→native call start, ms | 759,066 | 1022,626 | 1066,429 | 1089,356 | Bao request storage/handshake/audit/checks, không USB-only |
+| Guard accepted→native, ms | 12,136 | 17,406 | 26,315 | 36,624 | Bao audit +device/permission/native/dispatch guard |
+| Durable intent event→native, ms | 12,127 | 17,391 | 26,304 | 36,619 | Không tách riêng sync syscall hoặc CPU serialize |
+| Native API start→return, ms | 0,304 | 0,466 | 0,947 | 6,155 | Tổng 48,664 ms, 132 full-length, 0 short/negative/exception |
+| Transaction duration | — | — | — | 106486 ms | Upload/transition/cleanup và observation stop; không dùng làm USB latency |
+
+| Ordinal band | ACK p50/p95/p99/max (ms) | Native p50/p95/p99/max (ms) |
+| --- | --- | --- |
+| 1–33 | 616/713/948/948 | 0,290/0,466/0,612/0,612 |
+| 34–66 | 690/794/796/796 | 0,310/0,756/0,947/0,947 |
+| 67–99 | 798/890/923/923 | 0,301/0,497/0,626/0,626 |
+| 100–119 | 917/985/1008/1008 | 0,315/0,417/0,424/0,424 |
+| 120–132 | 992/1067/1067/1067 | 0,306/6,155/6,155/6,155 |
+
+ACK có xu hướng tăng ở ordinal cuối trong transaction thật, trong khi native gần phẳng; không quy thành FX2/USB chậm. Production UI export/full report/scheduler chưa được tách chi phí đủ để gọi là root bottleneck. Max ACK 1067 ms và request→native 1089,356 ms vẫn dưới 1200 ms và deadline 1500 ms, 0 timeout; giữ timeout, không tối ưu suy đoán hoặc upload nữa để đo. Audit cuối 50659 byte/794 events, gồm 132 intent+132 result+1 transition+1 stop. Suy từ source là 266 critical checkpoints, không phải trace syscall/fsync count; byte serialize tích lũy và thời gian audit riêng của lượt thật NOT MEASURED. Số đo fake được giữ riêng.
+
+### Trước–sau cuối phần cứng và giới hạn
+
+| Hạng mục | Trước / cấu hình cũ | Sau / cấu hình mới | Giả thuyết | Thay đổi mã cụ thể | Số đo trước | Số đo sau | Tác động | Rủi ro còn lại |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Native bring-up | Attempt 04-11 consumed/uncertain | Một transaction thực mới sau approval thứ ba | Authorization trước native có thể chặn, không mặc định do USB | Watch/ApprovalSession/DurableFile/Port, không đổi plan/hash | 23 native full/1344 image bytes, không release | 132 native full/8192 image/8196 payload, 2 release full | Đủ plan một lần, không retry | Không bảo đảm frontend hoặc toàn bộ firmware functions |
+| ACK/native latency | Hardware cũ thiếu native-only timestamps | Boundaries monotonic/host ledger mới | Cần phân biệt orchestration và native USB | Telemetry và typed stop, tách ACK/USB/audit | Durations 24 steps cũ không cùng ý nghĩa | ACK 738/1001/1046/1067 ms; native 0,304/0,466/0,947/6,155 ms | Không tăng USB timeout vì ACK | Mẫu chưa bảo đảm zero-failure |
+| Descriptor | Default 189 byte, thiếu 0x82 | Operational 50 byte, 0x82/0x81 bulk 512 | Upload đủ byte chưa tự chứng minh operational profile | Raw inspection với permission/owner mới, không vendor | Hash e288…52de | Hash 22e2…add5/OPERATIONAL_CANDIDATE | Gate firmware bring-up đạt | Không READY/DVB lock/TS |
+| Classifier | Đòi bulk IN interval 0 | Không dùng interval làm bulk IN polling gate | Điều kiện polling có thể áp dụng nhầm cho bulk IN | Debug fingerprint bỏ interval gate, USB reference và negative tests | Raw thực interval 1 bị UNKNOWN | Một raw read riêng bằng classifier mới, cùng hash 50 byte | Không sửa hardware descriptor để làm PASS | Main operational guard chưa được kiểm streaming |
+| Raw evidence | Standalone report chỉ fields/hash | Binary thực riêng private | Fields/hash chưa đủ lưu raw bytes đã quan sát | AndroidRawDescriptorPort checked sync/save bounded và test | Chưa lưu post binary từ lần đọc đầu | Saved 50 byte/hash khớp, 29 ms/1 read/0 transfer | Có bằng chứng mở lại ngoài Git | Raw có thể chứa định danh, không publish |
+| Audit/ledger | 2 host failures trước native, legacy true | 3 new host consumed/1 upload terminal, 275 records | Reservation không đồng nghĩa native đã gọi | Ledger append/fsync và snapshot terminal, không viết lại lịch sử | 8 records sau 2 host failures | 92018 bytes/275 records, giữ terminal cũ UNVERIFIED | Phân biệt approval/native/observation riêng | Không chống chủ máy cố ý rollback ledger |
+
+**Regression mã cuối:** Full JVM 259 =245 drivers +1 usbxfer +13 service, 0 failures/errors/skipped; build debug/release/lint PASS 2 phút 45 giây/357 tasks/70 executed/287 up-to-date, 0 errors/10 warnings. App 47 methods/9,315 giây và library 37/1,398 giây rerun PASS; service 2 PASS trước đó không đổi nguồn, tổng 86 methods riêng biệt có phạm vi. Static 127 TBS classes major 52/minSdk 21/targetSdk 37, uploader/raw port chỉ debug, firmware entries 0/harness vắng/zipalign cả hai exit 0. APK cuối SHA `12a97e1745c031ec5c80565c6816d00f2e53b50d92aef3a47957b4011f57526e`. Nguồn/records vẫn working tree, không stage/commit/push; FTS index failed không được repair hoặc dùng làm bằng chứng cuối.
+
+**Kết luận final:** OPERATIONAL_CANDIDATE; Phase 2.9 đạt mục tiêu firmware bring-up theo gate 132 full-length +operational raw. Không READY/I²C/frontend/tune/PLP/MPEG-TS/EEPROM/flash PASS, không tự chuyển phase hoặc ngầm vendor init. Owner đã đóng/cleanup xong; legacy và upload-attempt consumed true, không helper/permit/GUID thứ tư hoặc reset/power-cycle/recovery. Host terminal trước observation vẫn UPLOAD_COMPLETE_OPERATIONAL_UNVERIFIED/firmware_pass=false/ready=false theo đúng thời điểm kết thúc; observation được duyệt riêng sau đó là evidence mới, không sửa ledger cũ thành PASS.
+
+## Chốt Phase 2.9 sau UID split/private channel/no-clamp — 2026-11-05
+
+**RUNTIME-OBSERVED/OFFLINE-TESTED:** Controller đọc clock/boot ở shell UID, chỉ file I/O qua run-as; instrumentation dùng đúng app-private của `.phase29offline`, seed legacy request/permit rồi chờ fresh grant và UI 3500 ms trước owner. No-clamp: POLL sample sau app-file read; host_seen giữ NOW raw; PUT chỉ chờ tối đa 2 ×10 ms lấy tick thật hoặc fail alignment, chạm deadline dừng trước ghi permit. Không gán created/request/minimum vào timestamp, không grace/host wall clock hoặc nâng ACK/heartbeat. Marker sau write/rename vẫn không chứng minh fsync host permit.
+
+| Lượt cùng private UID/no-clamp | ACK p50/p95/p99/max (ms) | Tổng Android (ms) | Request-start→dispatch max (ms) | Native audit tổng (ms) | Run-as/file-child dispatch attempts | Fake full-length / raw files / reads / USB thật |
+| --- | --- | --- | --- | --- | --- | --- |
+| Verified 1 | 505/588/625/626 | 71.721 | 646,489 | 2.247,719 | 281 | 132 /2 /2 /0 |
+| Verified 2 | 524/603/854/911 | 78.765 | 933,022 | 2.353,683 | 284 | 132 /2 /2 /0 |
+| Verified 3 | 543/625/662/670 | 80.427 | 689,997 | 2.407,101 | 282 | 132 /2 /2 /0 |
+| Baseline callback audit cũ, đo sau ba lượt | 536/632/646/760 | 80.026 | 781,834 | 2.184,238 | 281 | 132 /2 /2 /0 |
+
+Mỗi lượt 132/132 PASS, 8192 image bytes/8196 payload bytes giả đúng plan, 264 audit checkpoints/6.711.056 byte serialize và 3 helper ADB subprocess, không actual USB. Ba verified riêng 396 samples, nearest-rank ceil(p×N): p50/p95/p99/max 526/606/669/911 ms; không gộp baseline hoặc FAIL. Ordinal 120–132 max 570/669/581 ms, p50 533/534/519 ms; baseline tail max 592 ms. Tổng chậm nhất 80,427 giây gồm UI wait so reserve 240 giây còn 159,573 giây dự phòng quan sát, không phải bảo đảm worst-case native USB. ACK max 911 ms và dispatch max 933,022 ms dưới 1200 ms; giữ ACK 1500/heartbeat 2000/USB 2000/TTL 300000/benchmark 240000 ms.
+
+### Bảng trước–sau cuối, không đánh đồng sửa đúng với speedup
+
+| Hạng mục | Cấu hình cũ | Cấu hình mới | Giả thuyết/nguồn bằng chứng | Thay đổi mã | Số đo cũ | Số đo mới | Tác động | Rủi ro còn lại |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Clock permission | Cả controller dưới app run-as | Clock/boot shell, I/O run-as | Runtime uptime shell PASS/app Permission denied; clock lỗi -990 bị clamp | Watch UID split +clock read/format/range checks | 2 host reservations dừng trước native, heartbeat không tiến | Legacy/UIwait3500 →3 ×132 PASS | Giữ heartbeat thật, không timestamp giả | OEM khác cần probe; không thay quyền |
+| Channel storage parity | Benchmark shell/external | Test app-private đúng UID/file path | Runtime run-as external denied dù shell đọc được | Run/Watch exact private offline prefix, Context canonical private test | Clean shell max 490 ms trước đó không cùng permission | Private no-clamp max 626/911/670 ms | Test gần production hơn | Không gọi tăng latency là USB chậm; UI export thật chưa đo |
+| Timestamp | POLL trước read/host_seen Max, PUT clamp nhỏ | Sample sau read, tick thực bounded | Source và no-clamp/stalled/cross-deadline mocks | Watch/Test raw NOW/no Max/no minimum assignment | Checkpoint private có clamp max 1116 ms | 3 no-clamp PASS, dispatch max 933,022 ms | Không grace hoặc sửa timestamp | Counter 10 ms, thời điểm lấy mẫu vẫn có giới hạn |
+| Audit | AtomicFile full snapshots | Full snapshots +checked sync/verify | Lỗi sync/rename có thể chỉ log | DurableFile/NativeAudit giữ intent/result | Same-UID baseline audit 2184,238 ms | 2247,719/2353,683/2407,101 ms | Tăng kiểm lỗi với chi phí nhỏ, không journal suy đoán | Filesystem/USB không nguyên tử; intent không chứng minh call |
+| 132-step latency | Clean namespace bắt đầu ngay | Legacy seed +UI wait 3500 ms +same UID | Mock cũ thiếu trạng thái production | FullPathBenchmark fixture và host cold-start | Historical 611/705/783/1476 và 359/506/714/759 ms | 505/588/625/626; 524/603/854/911; 543/625/662/670 ms | Dữ liệu đúng điều kiện mới, không hứa speedup | Không so sánh hai môi trường như A/B kiểm soát |
+| Tổng phiên | Chưa có idle-UI parity | Total 80,427 giây max, reserve 240 giây | Không bắt đầu khi TTL còn quá ngắn | Start budget vẫn giữ | Trước private UID khoảng 54 giây | 71,721/78,765/80,427 giây | Có dự phòng thực đo | 132 USB timeout 2 giây worst-case vẫn có thể vượt TTL |
+| Processes/logs | Helper 3 ADB, không đếm app children | Helper 3 ADB +run-as 281/284/282 attempts | Counter dispatch mới | Watch metric không gọi là total OS forks | Device fork count NOT MEASURED | Dispatch attempts có thật; audit 264 writes/6.711.056 bytes mỗi lượt | Thấy chi phí privilege boundary | Chi phí CPU/OS forks/flush syscall NOT MEASURED |
+| Fail-stop/ledger | Legacy/malformed có thể property error; pulse clock giả | Prior/current classify, permission/read errors typed | Host fixture/mocks +runtime failures lưu | Watch/Test fail-closed, no repair | 2 consumed host/0 firmware writes | Ledger 8 records/hash không đổi qua fakes | Không rearm approvals đã tiêu thụ | Hardware khác cần approval/GUID mới |
+| Raw/native | Chỉ fields/hash trong report | Raw before/after private sink +native boundaries | Fake byte/fault tests và source | Runner RawAudit, giữ metadata khi lỗi | Thiếu raw binary evidence cho attempt | 2 raw files/2 reads, 132 fake full-length mỗi run | Không thêm USB read hoặc leak raw vào report/Git | Chưa có operational descriptor thật mới |
+
+**Gate cuối và phạm vi:** Production Java không đổi sau full JVM 257 methods/debug/release/lint/major 52/minSdk 21/release isolation, library 37 +service 2 instrumentation PASS có phạm vi trước đó; app 46 rerun sau private UID/no-clamp PASS 9,12 giây. Host mock 61 checks gồm 10 production/2 benchmark, clock/file/UID/no-clamp faults đã PASS; lần xác nhận cuối được ghi WORKLOG. Export 34 synthetic evidence files và failed namespaces trước gỡ 2 test packages; production/legacy guard và canonical ledger 8 records/hash giữ nguyên. Không GUID/permit/hardware helper thứ ba hoặc vendor write mới.
+
+**Kết luận:** SOFTWARE_READY_AWAITING_HARDWARE_APPROVAL cho transaction độc lập khác. Hai host approvals đã tiêu thụ không được reuse; cả hai chưa có native firmware A0 OUT. Phase 2.9 chưa hoàn tất firmware bring-up; không READY/frontend/TS/phase mới. Cần approval/nguồn/UI mới rồi fresh preflight, không tự retry/recovery từ software PASS.
+
+## 2026-11-05 — Approval độc lập thứ hai: initial grant đã có nhưng heartbeat không tiến khi chờ UI
+
+### Checkpoint private UID parity đã chạy, còn phải bỏ mọi clamp timestamp
+
+**RUNTIME-OBSERVED:** Sau chuyển instrumentation channel sang app-private và I/O qua run-as offline, ba lượt verified liên tiếp có seed legacy files/UI-wait 3500 ms đều 132/132 PASS, USB thật 0. ACK p50/p95/p99/max lần lượt 512/575/606/668, 524/603/986/1116, 516/587/815/952 ms; tổng Android 77.066/79.626/78.549 ms, final dispatch max 688,233/1137,309/971,735 ms. Mỗi lượt fake/full-length 132, audit 264/6.711.056 byte, raw files/reads 2/2; 3 helper ADB subprocess, run-as/file-child dispatch attempts 281/282/283, không phải số OS forks thực. Baseline audit cũ cùng path/UID/legacy wait được đo sau đó: ACK 520/597/632/654 ms, tổng 78.394 ms, audit 2.191,032 ms, 281 dispatch attempts. Ba verified audit tổng 2.313,524/2.367,759/2.289,114 ms; không gắn nhãn speedup khi đổi permission model.
+
+**Chưa chốt software-ready từ checkpoint này:** Source review timestamp cho thấy POLL.NOW lấy trước app-file read rồi host_seen dùng max với request; PUT còn clamp minimum dưới 10 ms. Dù app vẫn reject late deadline và các lượt đều PASS, user yêu cầu không tự sửa timestamp. Đang chuyển clock sample sau read và chờ sample thực ở tick tiếp hoặc fail alignment, không clamp/minimum giả hoặc gia hạn deadline. Cần 3 lượt mã sau sửa lại; giữ các số đo trên đúng checkpoint, không tự gọi là số cuối.
+
+### Root cause mới đã probe: clock permission khác giữa shell và run-as
+
+**RUNTIME-OBSERVED:** Trên cùng target/boot GM1900/API30, `adb shell cat /proc/uptime` exit 0 và parse được hai số thập phân; `adb shell run-as info.martinmarinov.dvbdriver cat /proc/uptime` exit 1, Permission denied. Probe tiếp theo xác nhận `boot_id` đọc được và khớp pin ở cả shell/run-as, nên lỗi quyền quan sát là cụ thể với uptime, không gán chung mọi `/proc` đều bị cấm. Không thay quyền, su/root hoặc đọc/ghi USB. Benchmark cũ ở shell UID không đại diện cho production loop chạy dưới app UID; cùng protocol/worker/audit vẫn chưa đủ parity về quyền.
+
+**SOURCE/OFFLINE-CONFIRMED có phạm vi:** Agent tái hiện clock read lỗi tạo -990 rồi bị clamp lặp về challenge-created. Đã bỏ clock fallback giả, thêm read/format/range/alignment checks, lỗi phải DEVICE_CLOCK_UNAVAILABLE. `continue` cũ nằm trong foreach selector, chưa chứng minh nó bỏ vòng heartbeat ngoài; không gọi giả thuyết ban đầu là root cause đã xác nhận. Cần split UID: controller clock/boot giữ shell có quyền, chỉ app-private GET/PUT qua run-as, không host wall clock hoặc cache timestamp.
+
+**Parity file I/O mới đã probe:** Sau UID split, live fake lần kế tiếp dừng Initial host approval missing sau 30,07 giây. Probe cùng file challenge test cho thấy shell đọc `/sdcard/Android/data/...phase29offline/...` exit 0, nhưng run-as offline exit 1/Permission denied; không diễn giải thành host mất liveness hoặc grant chậm. Run-as offline `pwd` xác nhận root `/data/user/0/info.martinmarinov.dvbdriver.phase29offline` hợp lệ. Chuyển channel instrumentation sang app-private dưới đúng root này và canonical validation; không sửa quyền hoặc tùy tiện mở access external storage. Benchmark shell app_process cũ vẫn giữ namespace cũ, không dùng thay parity test mới.
+
+**Gate bổ sung:** Mock sau clock validation PASS 50 negatives/10 production fixtures/6 clock faults, chờ 3500 ms với legacy request rồi 132 ACK; nhưng live test mới seed legacy request trong BenchmarkOnly đã FAIL INVALID_REQUEST_BINDING trước clock vì classifier chưa dùng chung ở mode này. Giữ FAIL/evidence trong test namespace; không native thật/canonical ledger change. Đang đồng bộ classifier và privilege split, cần live fake đúng UID app-file I/O +UI wait trước bất kỳ approval khác.
+
+**RUNTIME-OBSERVED:** Sau fix stale-frame và software gates mới, user duyệt riêng transaction khác/physical current=true, rồi UI-ready riêng. Dùng GUID mới sau approval, không reuse. Fresh target/boot/API/legacy guard đạt; debug APK mới cập nhật tại chỗ, SAF file 8192/hash khóa, permission mới, raw 189/FX2_DEFAULT/MATCH/14 ms với open/read/close 1/1/1 và transfer 0. User vẫn dùng cùng OnePlus/OTG theo xác nhận, không thay nguồn hoặc recovery.
+
+Helper lần này publish initial permit đúng protocol 2/run epoch/authorized ordinal 0, không còn StrictMode lỗi. Tuy nhiên không có request mới/UI upload, helper kết thúc TOTAL_SESSION_DEADLINE 300 giây với ACK 0/observation 0. Một lần đọc trạng thái sau hơn 120 giây thấy permit current-run nhưng heartbeat vẫn bằng initial challenge time, expires=heartbeat+300000; app foreground qua UI hierarchy. Current app attempt-store/native-audit files đều 0, report vẫn RAW READ_AND_CLOSED. Không native A0 hoặc CPU release/reset mới; không diễn giải đây là USB timeout hay tuner không nhận firmware.
+
+**Giả thuyết cần source/repro:** Nhánh bỏ qua stale request có thể `continue` trước periodic heartbeat, khiến grant stale sau 2000 ms trong khi chờ user bấm. Chưa quy lỗi cho user; cần fixture giữ old request tồn dư ít nhất 3500 ms trước khi Android ghi v2 request, đồng thời core approval vẫn requireCurrent thành công. Parent bổ sung seed legacy request/permit và UI-wait 3500 ms vào instrumentation test namespace; agent chỉ fix/mock host, không ADB/ledger mutation.
+
+**Safety/ledger:** GUID lần hai đã consumed, không reuse dù không native; cả hai failed reservations giữ nguyên. Ledger nay 8 records: enrollment 1/prior consumed 1/production start 2/new consumed 2/fail 2, parent pin hash sau lượt hai. UI đóng/revoke, không rerun helper hoặc recovery. Firmware bring-up vẫn chưa hoàn tất; chỉ hỏi transaction mới sau khi lỗi chờ UI được sửa và gates mới có evidence.
+
+## 2026-11-05 — Transaction mới được duyệt dừng ở host stale-frame, trước native USB
+
+### Chốt sửa và kiểm lại sau lỗi production, không retry phần cứng
+
+**SOURCE-CONFIRMED/OFFLINE-TESTED:** Chỉ helper `Watch-TBS5530-BootstrapApproval.ps1` và fixtures host được sửa để nhận diện prior challenge/run trước khi đọc protocol/fields current, bỏ RAW report khỏi bootstrap assertion, giữ current malformed fail-closed trước reservation/grant. Không xóa legacy request/permit, không sửa canonical ledger hoặc authorization timeout. Mock PASS 45 negative checks, 7 production first-start/terminal/replay cases, 132 loops/133 exports, ADB/USB 0. Runner thêm kiểm AUDIT_FAILED ở suppressed chain tại full-length final release+detach; lượt repro FAIL đã giữ, targeted và full JVM sau sửa PASS.
+
+| Gate sau sửa | Kết quả mới | Phạm vi |
+| --- | --- | --- |
+| Full JVM/debug/release/lint | PASS 257 methods | 243 drivers +1 usbxfer +13 service; wrapper 3 phút22 giây/357 tasks, 0 failures; lint không thêm errors/warnings |
+| App/library instrumentation | PASS 46/37 methods | App 9,129 giây, library 1,426 giây, namespaces cách ly; service 2 PASS trước đó không đổi source |
+| Baseline cùng harness | PASS 132/132 | ACK 364/452/472/474 ms, tổng Android 55.762 ms, audit 2.116,481 ms, dispatch max 496,952 ms |
+| Mã cuối 1 | PASS 132/132 | ACK 363/436/451/457 ms, tổng Android 54.124 ms, audit 2.355,839 ms, dispatch max 483,531 ms |
+| Mã cuối 2 | PASS 132/132 | ACK 367/453/461/468 ms, tổng Android 54.714 ms, audit 2.264,148 ms, dispatch max 491,587 ms |
+| Mã cuối 3 | PASS 132/132 | ACK 364/447/464/466 ms, tổng Android 51.845 ms, audit 2.261,369 ms, dispatch max 494,749 ms |
+| Ordinal 120–132, baseline/mã 1/mã 2/mã 3 | ACK max 443/432/432/455 ms | p50 lần lượt 359/359/352/362 ms, p95/p99 bằng max vì N=13 |
+
+Mỗi lượt xác nhận 132 fake full-length, 264 native audit checkpoints/6.711.056 byte serialize, hai raw fixture files và đúng hai descriptor reads, USB thật 0; chỉ một test method chạy nhiều lần, không tăng số method. Ba verified mã cuối riêng có 396 samples, nearest-rank 365/447/463/468 ms; request-start→dispatch max 494,749 ms, giữ ACK 1500/heartbeat 2000/USB 2000/TTL 300000/benchmark 240000 ms và reserve 240000 ms. Không gộp FAIL host thật hoặc các benchmark trước để làm đẹp số. Tổng Android 54,714 giây là max mới, vẫn chỉ mô hình fake chứ không bảo đảm USB thật.
+
+**Trước–sau bổ sung:** Lỗi host thật trước fix dừng 0 ACK/0 native vì legacy frame; sau fix production-first-start fixture đạt và current malformed vẫn deny, không đo speedup hardware. Final-release audit bị suppressed trước sửa có test FAIL; sau sửa observation không được tiếp khi audit lỗi, vẫn giữ đủ 132 native giả/counters/typed provenance và UNCERTAIN. Chi phí audit/fsync/subprocess không thay cơ chế; snapshot vẫn full, ACK vẫn per-step, không cache permit. Canonical ledger thật 5 records đã pin hash không đổi trong tất cả phép fake; GUID vừa consumed không được dùng lại. Mã Android mới nhất sau fix chưa cài vào production, cần update giữ data nếu có approval khác.
+
+**RUNTIME-OBSERVED:** Sau checkpoint software, người dùng duyệt riêng đúng một transaction và physical conditions=true, rồi xác nhận sẵn sàng tự bấm UI. Parent không suy approval từ prompt. Fresh preflight đã cập nhật debug APK tại chỗ với SHA-256 `ae337e4aea703a3d1aadb024fb49ce5a00d2e786f6a3c313a61842724deb80a6`, guard legacy so nguyên; OnePlus GM1900/API30/boot pin, pin 100%, quyền USB mới. Raw READ_AND_CLOSED mới 189 byte/hash `e2887bad8b5a0e8dcaaa69bd636a01a2d11e53fe4b532b5b14828a2d3df952de`, FX2_DEFAULT/MATCH/BOOTSTRAP_CANDIDATE, open/read/close 1/1/1 và claim/release/transfer 0/0/0. Đây là descriptor pre-upload mới, không phải recovery lịch sử hoặc operational profile.
+
+**Firmware/SAF:** File local trên OnePlus đã có, 8.192 byte/hash khóa, không copy ảnh mới hoặc nhúng APK/Git. Lần đầu gõ URL bằng key events bị IME tiếng Việt đổi `tar` thành `tả`; phát hiện bằng đọc UI rồi dùng Android CLI setText để đặt source/entry đúng nguyên chuỗi, không đổi IME/device settings. SAF hiển thị đúng file đã kiểm; chỉ chọn sau user UI-ready để không ăn TTL sớm. Challenge mới có protocol 2/run epoch/new-attempt-required/legacy true/hash/plan đúng.
+
+**Blocker — SOURCE-CONFIRMED và runtime:** Helper reserve GUID sau approval và append/fsync `NEW_APPROVAL_CONSUMED`, sau đó `AssertBinding` truy cập StrictMode `Value.approval_protocol` trên request legacy chỉ có `challenge,ordinal`, phát sinh property-not-found trước initial permit mới. Old permit cũng thiếu protocol/run epoch, không được thay grant mới; helper có ACK 0/observation 0, ledger ghi HOST_HELPER_ERROR. Production report vẫn RAW_DESCRIPTOR_INSPECTION/READ_AND_CLOSED, pending/cleanup=false, app per-attempt prefs mới 0, native audit/raw files cho run mới 0; không có firmware/vendor A0 write mới hoặc CPU release. Không diễn giải lỗi này thành ACK deadline/USB timeout hoặc firmware failure sau partial upload.
+
+**Hiệu năng không phải nguyên nhân lỗi mới:** Lỗi phát sinh trước initial permit, ACK/observation 0/0, không có sample runtime nào để quy cho deadline 1.500 ms, sync chậm, native timeout hoặc chip FX2. Không tăng ACK/heartbeat/USB/TTL để che lỗi binding. Các lượt fake trước đó vẫn giữ số đo đúng nhưng clean namespace chưa đại diện cho production leftovers; sửa bằng thêm fixture thay vì xóa file thật.
+
+**Safety outcome:** Host GUID mới đã tiêu thụ dù chưa tới UI upload/native; không được dùng lại, reset/rearm hoặc xóa entry. UI đã đóng để thu hồi challenge, không rerun helper hoặc gửi corrective/recovery. Legacy attempt 04-11 vẫn 23 native full-length/1344 image bytes/CONSUMED_UNCERTAIN độc lập. Không cần rút/cắm OTG vì lần này chưa reset CPU; mọi recovery khác vẫn cần hỏi riêng.
+
+**Đối chiếu thời hạn:** API SystemClock chính thức được đọc lại: `elapsedRealtime` bao gồm deep sleep, trong khi `uptimeMillis` không bao gồm; `/proc/uptime` của Linux là counter từ boot, không được nhầm với API `SystemClock.uptimeMillis`. ACK/heartbeat là Windows↔ADB↔Android authorization; `UsbDeviceConnection.controlTransfer` có timeout riêng. Property-not-found trước grant không phải căn cứ nới bất kỳ timeout nào.
+
+**Fix sau lỗi — OFFLINE-TESTED:** Helper đã phân loại frame trước truy cập fields bắt buộc: challenge hợp lệ khác current là prior/stale, same-current malformed thành INVALID_REQUEST_BINDING, thiếu challenge không phân biệt được vẫn deny. Observation old-run được lọc trước fields của current; RAW report không bị kiểm như bootstrap binding. Current malformed bị chặn trước reservation/initial grant. Fixture production dùng đúng legacy request `{challenge,ordinal}`, old permit và RAW report rồi đổi sang request v2 sau grant, thêm terminal ACK 0/replay; mock PASS 45 negative checks, 7 production cases, 132 loops/133 exports, không ADB/USB hoặc ledger thật. Không xóa file historical hoặc nới current binding.
+
+**Fault tightly coupled sau final release:** JVM mới chứng minh AUDIT_FAILED bị suppressed dưới USB_DETACHED ở full-length 132 có thể bị nhánh expected-final-detach cũ bỏ qua. Lượt tái hiện FAIL; sửa runner kiểm cả sanitized cause/suppressed chain, giữ original stop/native result nhưng không tiếp observation khi audit lỗi. Targeted runner PASS; full gates và benchmark mã cuối ghi ở checkpoint tiếp theo, không gọi đây là lỗi đã xảy ra trên tuner.
+
+**Coverage gap cần sửa trong cùng Phase 2.9:** Benchmark sạch luôn tạo namespace mới nên không tái hiện file legacy tồn dư ở app production. Cần production-first-start fixture có đúng request `{challenge,ordinal}` và permit v1, không xóa dữ liệu; frame chứng minh thuộc challenge/run cũ có thể được bỏ qua nhưng frame current malformed phải fail-closed. Không nới validator/binding hoặc tự sửa ledger thật để chạy lại. Test/live no-USB sau sửa phải ghi riêng; hardware attempt kế tiếp cần approval/GUID/UI/preflight mới.
+
+## 2026-11-05 — Phase 2.9: đo full-path không USB, kiểm audit và giữ ACK 1.500 ms
+
+### Checkpoint cuối có raw evidence riêng — mới hơn tất cả số đo phía dưới
+
+**Đã đóng một thiếu sót bằng chứng:** `Tbs5530RawDescriptors` cố ý không giữ bytes/unknown payload để bảo vệ báo cáo; chỉ fields/hash chưa đáp ứng yêu cầu lưu raw descriptors của firmware attempt. Thêm sink riêng cho runner debug: đọc đúng một lần trước upload và một lần ở observation lease mới, lưu checked-durable vào hai file app-private theo run epoch, không thêm USB read hoặc nhúng bytes vào JSON/report/APK/Git. Source parser và operational guard không đổi. JVM fault tests chứng minh raw-save lỗi trước upload không consume/native; lỗi sau đủ 132 giữ full-length và metadata, UNCERTAIN, không retry.
+
+**Kết quả mã cuối — OFFLINE-TESTED/RUNTIME-OBSERVED:** JVM 256 methods = 242 drivers +1 usbxfer +13 service, 0 failure; debug/release/lint PASS 2 phút 42 giây, lint 0 errors/10 warnings. App isolated 46 methods/8,181 giây và library 37/1,421 giây chạy lại PASS sau thay đổi; service native-load/registry 2 PASS trước đó không đổi nguồn. Benchmark cuối kiểm bytes của cả hai raw fixture files và xác nhận `descriptor_reads=2`, `raw_descriptor_files=2` ở mỗi lượt; không đọc tuner thật.
+
+| Lượt mã cuối có raw sink | ACK p50/p95/p99/max (ms) | Tổng Android / wrapper host UTC (ms) | Audit tổng (ms) | Request-start → dispatch max (ms) | Hoàn tất / fake full-length / raw files / descriptor reads / USB thật |
+| --- | --- | --- | --- | --- | --- |
+| Baseline callback audit cũ | 363/465/471/472 | 55.221 / 69.305,293 | 2.104,114 | 500,913 | PASS 132/132 /132 /2 /2 /0 |
+| Mã cuối 1 | 362/452/463/474 | 54.036 / 67.986,521 | 2.293,906 | 494,732 | PASS 132/132 /132 /2 /2 /0 |
+| Mã cuối 2 | 361/449/466/472 | 52.618 / 66.389,942 | 2.356,181 | 491,537 | PASS 132/132 /132 /2 /2 /0 |
+| Mã cuối 3 | 365/447/463/490 | 54.340 / 67.081,527 | 2.347,036 | 513,080 | PASS 132/132 /132 /2 /2 /0 |
+
+| Audit tail cuối | Baseline | Mã cuối 1 | Mã cuối 2 | Mã cuối 3 |
+| --- | --- | --- | --- | --- |
+| Audit p50/p95/p99/max, ms | 7,678/12,341/14,186/19,907 | 8,059/12,696/29,063/29,565 | 8,185/14,446/23,320/28,652 | 8,213/13,417/18,547/40,674 |
+| Ordinal 120–132 ACK p50/p95/p99/max, ms | 360/409/409/409 | 364/444/444/444 | 363/462/462/462 | 350/438/438/438 |
+| Request storage p95, ms | 10,255 | 9,417 | 12,168 | 9,925 |
+| ACK accepted → dispatch p95/max, ms | 15,680/18,028 | 16,386/32,117 | 17,469/31,208 | 17,214/42,514 |
+
+Ba lượt mã cuối liên tiếp riêng: 396/396 ACK hợp lệ, 0 timeout, nearest-rank p50/p95/p99/max 363/450/466/490 ms. Giữ ACK 1.500 ms; max ACK 490 ms và dispatch 513,080 ms đều dưới mục tiêu 1.200 ms. Tổng Android chậm nhất 54,340 giây so reserve 240 giây còn 185,660 giây dự phòng quan sát, không chứng minh worst-case USB. Native audit vẫn 264 checkpoints và 6.711.056 byte/lượt, cộng đúng hai checked raw writes ngoài cửa sổ ACK; helper vẫn 3 ADB subprocess/lượt. Không quy chênh lệch vài giây giữa các lượt cho code. GC delta baseline 63/862 ms, ba mới 67/860, 67/880 và 65/878, blocking GC 0 ở cả bốn lượt cuối; không thay số 1 blocking GC ở lượt marker trước thành 0.
+
+Marker completion file/clock không đổi semantics: temp-write + rename ACK không có explicit fsync và không dùng timestamp marker để cấp quyền; native audit và canonical host ledger vẫn sync riêng. Summary JSON cuối đã lọc IDs lưu ngoài Git, có toàn bộ percentile và ordinal bands; các bảng bên dưới giữ checkpoint trước raw sink, không phải số đo mới nhất.
+
+### Bổ sung sau marker ghi file — checkpoint trước raw sink
+
+**SOURCE-CONFIRMED:** `request_elapsed_ms` được lấy trước serialize/write request, không phải timestamp hoàn tất durable publication. `host_ack_elapsed_ms` được gán trước temp-write/rename permit, không phải ACK đã fsync. Để không đặt nhãn sai, harness mới đo riêng start/end của request storage và observation storage; helper đọc thêm uptime ngay sau temp-write + rename trong cùng PUT frame, không ghi permit lần hai hoặc đổi timestamp dùng để kiểm authorization. Marker `benchmark_host_ack_persisted` có scope `TEMP_WRITE_RENAME_COMPLETE_NO_EXPLICIT_FSYNC`; durable status là `NOT_MEASURED`. Host ACK file là metadata authorization ngắn hạn, không được coi thay thế audit Android và ledger canonical append/fsync. Không tuyên bố đã đo fsync của permit hoặc khả năng khôi phục ACK sau crash.
+
+**RUNTIME-OBSERVED:** Sau marker đã chạy lại baseline và ba lượt mã cuối liên tiếp trên cùng OnePlus/boot/kênh, mỗi lượt 132/132 PASS, 264 audit checkpoints/6.711.056 byte, fake calls/full-length 132/132, USB thật 0. JSONL riêng giữ các lượt mới, không trộn vào bốn lượt ban đầu hoặc lỗi. Ghép marker theo `(run, ordinal, host_ack_elapsed_ms)` được đúng một marker cho mỗi sample; 528 marker cho ordinal 1–132, các marker ordinal 0 là initial/heartbeat, không tính thành writes.
+
+| Lượt marker cuối | ACK p50/p95/p99/max (ms) | Runner / tổng Android (ms) | Tổng wrapper host UTC (ms) | Audit tổng / p50/p95/p99/max (ms) | Ordinal 120–132 p50/p95/p99/max (ms) |
+| --- | --- | --- | --- | --- | --- |
+| Baseline callback cũ | 339/437/453/467 | 43.797 / 44.888 | 54.279,901 | 2.025,589 / 6,892/12,569/22,930/40,934 | 166/315/315/315 |
+| Mã cuối 1 | 352/440/456/525 | 51.805 / 51.952 | 66.218,737 | 2.443,531 / 8,558/14,404/26,407/50,923 | 349/440/440/440 |
+| Mã cuối 2 | 357/440/459/468 | 53.068 / 53.353 | 67.430,042 | 2.221,107 / 8,027/12,718/14,965/15,138 | 359/448/448/448 |
+| Mã cuối 3 | 362/441/464/468 | 53.483 / 53.820 | 66.791,771 | 2.292,820 / 8,226/12,561/16,446/37,160 | 367/451/451/451 |
+
+Ba lượt mã cuối riêng có 396 ACK, nearest-rank 358/440/464/525 ms. Request-start → final dispatch max lần lượt 548,464/484,658/492,292 ms, đều dưới 1.200 ms; không chỉ kiểm margin tại ACK observation. Không gắn nhãn tối ưu nhanh hơn: baseline lượt marker nhanh hơn ba lượt mới, GC/scheduler/mạng không được kiểm soát và checked audit chủ đích tăng kiểm lỗi. ACK/heartbeat/USB/TTL không đổi.
+
+| Phân đoạn được đo thật | Baseline p50/p95/p99/max (ms) | Mã cuối 1 | Mã cuối 2 | Mã cuối 3 |
+| --- | --- | --- | --- | --- |
+| Request storage start → sync/commit/readback hoàn tất | 6,167/10,396/12,619/14,327 | 6,834/10,629/13,286/18,047 | 6,903/9,971/11,875/13,266 | 6,893/10,293/16,504/16,990 |
+| Host observed → marker sau rename ACK | 290/340/390/390 | 300/380/400/430 | 310/370/400/420 | 300/380/410/420 |
+| ACK timestamp gốc → marker sau rename | 120/130/130/140 | 120/130/140/140 | 120/130/130/130 | 120/130/130/130 |
+| Marker sau rename → Android ACK observed | 8/16/17/21 | 8/15/18/19 | 9/16/18/18 | 8/16/19/19 |
+| Observation storage start → sync/commit/readback hoàn tất | 9,352/15,744/20,242/20,361 | 9,744/17,363/33,114/43,992 | 9,542/15,160/19,216/19,882 | 9,398/15,809/17,108/20,039 |
+| Guard ACK accepted → final dispatch | 9,845/15,573/16,245/24,917 | 12,305/19,460/49,439/52,617 | 11,685/16,318/17,959/18,766 | 11,801/17,297/29,911/39,137 |
+
+Marker uptime chỉ có độ phân giải 10 ms và được lấy sau rename; Android có thể quan sát ACK trước marker được đọc. Do đó delta marker → observed có min -2/-4/-3/-2 ms; request-verified → host observed cũng có mẫu âm vì đọc song song sau rename và trước app readback xong. Giữ nguyên số đo, không clamp, không cộng grace hoặc dùng các marker này để cấp quyền. Không coi thứ tự sampling hai process là quan hệ nguyên tử; thời gian native guard dùng `elapsedRealtime` riêng và vẫn từ chối đúng deadline.
+
+**Tác động trước–sau cuối:** Native audit vẫn 264 writes, snapshot 539–50.489 byte, 6.711.056 byte serialize/lượt; helper vẫn 3 ADB subprocess/lượt. Thêm bốn timestamp vào observation test làm log chuẩn hóa minified tăng từ 65.231 lên 88.463 byte/lượt (không tính newline cuối); ledger marker riêng 1.612.172 byte tại checkpoint, không thêm native call/permit write. GC delta của baseline là 61 lần/686 ms, ba lượt mới là 66/855, 66/906 và 65/895; lượt mới thứ hai có 1 blocking GC/8 ms, không che bằng tuyên bố mọi lượt blocking GC đều 0. Thread CPU vẫn NOT MEASURED, chưa có căn cứ quy GC toàn process cho riêng native audit. Stop kinds của ba lượt mới là NONE; lỗi cũ vẫn giữ. Tổng Android chậm nhất 53,820 giây so reserve 240 giây còn 186,180 giây dự phòng quan sát; không bảo đảm worst-case USB thật. Tất cả nhận định khác ở bảng trước–sau ban đầu vẫn có phạm vi checkpoint, không thay thành số liệu marker mới.
+
+**Baseline/Git — SOURCE-CONFIRMED:** Nhánh `chore/modernize-android-build`, HEAD và live origin `92a25b4962ff487c169e67649f454e277bcc60e6`, working tree sạch đầu phiên; các sửa trong mục này chưa stage/commit/push. Không thay protocol FX2, firmware, toolchain, references hoặc phase. ADR-021 ghi chính sách mới; ADR-018/019/020 và attempt 04-11 được giữ nguyên.
+
+**Phạm vi — RUNTIME-OBSERVED:** OnePlus GM1900/API30, cùng boot đã pin; app/test `.phase29offline` với path canonical riêng, manager/connection giả và Context chặn mọi yêu cầu USB service. Test dựng ảnh tổng hợp 8.192 byte, không đọc payload firmware thật. Đường được chạy gồm approval core, production `Port`, audit, binding/coordinator/session, worker `Tbs5530AndroidRuntime`, 132 fake calls, delay 100 ms, đóng upload lease rồi mở observation lease mới; raw operational là fixture, không phải descriptor tuner. Không khởi tạo `AndroidManager`, không gọi `UsbManager.openDevice`, `UsbDeviceConnection.controlTransfer`, claim/setInterface, reset hoặc frontend thật. Activity/SAF và physical foreground thực không nằm trong phép đo latency này; regression Activity riêng dùng facades giả. Không gọi đây là hardware PASS.
+
+### Đối chiếu evidence cũ và các lượt lỗi mới
+
+- **OFFLINE-TESTED:** Đọc lại JSONL ngoài Git của phiên trước, 687 records: hai terminal PASS có đúng 132 observations/lượt; nearest-rank lần lượt 611/705/783/1.476 ms và 359/506/714/759 ms. Lượt FAIL riêng có 76 observations/77 ACK, 720/785/809/809 ms. Không gộp FAIL vào PASS hoặc dựng timestamp attempt 04-11.
+- **FAIL được giữ:** Full-path đầu không tạo được thư mục scoped storage, instrumentation assertion ở bước tạo namespace; helper bản trung gian chờ hết 240 giây, 0 ACK/0 USB. Sửa bằng `getExternalFilesDir()` và kiểm canonical path, không đổi quyền lưu trữ hệ thống. Host wrapper nay phát hiện child exit sớm, kể cả ADB exit 0 nhưng instrumentation FAIL, và xuất evidence lỗi có giới hạn.
+- **FAIL được giữ:** Một lượt fail-closed vì test đặt install identity `isolated-full-path` thay vì `benchmark-only`; sửa fixture đúng binding, không nới validator. Fault không host sau sửa storage dừng sau 30,067 giây, `Initial host approval missing`, 0 USB và chưa tạo runner.
+- **RUNTIME-OBSERVED:** Kênh ADB thực từng OFFLINE giữa các lượt, được xác nhận bằng cả hai công cụ; không reconnect tự động. Người dùng tự khôi phục, sau đó target TCP mới được kiểm cùng model/API/boot và guard production không đổi. Tất cả lượt dưới đây dùng namespace/challenge mới, không resume lượt lỗi.
+
+### Benchmark có thể so sánh trong phiên
+
+Mỗi lượt có 132 request/ACK/final authorization, 264 native audit checkpoints, 132 fake full-length, 8.192 image bytes giả/8.196 payload bytes giả, USB thật 0. Percentile dùng nearest-rank `ceil(p × N)`, không nội suy; thời gian request/host observation/ACK/Android observation lấy cùng timebase boottime của thiết bị, không trộn host wall clock. Timestamp host đọc từ `/proc/uptime` có độ phân giải thô hơn `elapsedRealtimeNanos`, không coi là đo nano giây chính xác.
+
+| Lượt | Audit | ACK p50/p95/p99/max (ms) | Hoàn tất | Runner / tổng Android (ms) | Tổng wrapper host (ms) | Tổng audit (ms) | GC count / GC time runtime (ms) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Baseline trong phiên | AtomicFile cũ, cùng harness | 357 / 450 / 488 / 500 | PASS 132/132 | 53.150 / 54.386 | 68.847,644 | 2.185,105 | 67 / 870 |
+| Mã mới 1 | Checked sync + commit readback | 351 / 430 / 449 / 452 | PASS 132/132 | 48.167 / 49.929 | 63.590,253 | 2.355,012 | 52 / 702 |
+| Mã mới 2 | Checked sync + commit readback | 359 / 442 / 451 / 459 | PASS 132/132 | 53.005 / 53.521 | 67.339,874 | 2.310,075 | 67 / 922 |
+| Mã mới 3 | Checked sync + commit readback | 360 / 436 / 457 / 458 | PASS 132/132 | 53.122 / 53.481 | 67.303,971 | 2.244,889 | 67 / 918 |
+
+Tổng wrapper được tính riêng từ hai UTC timestamps host đã ghi trong JSONL, bao cả preflight/export/cleanup, không phải đồng hồ monotonic hoặc thành phần đem cộng vào ACK trên Android. Không quy 13–15 giây ngoài runtime Android thành chậm USB; số subprocess của wrapper/deploy ngoài 3 subprocess helper chưa được đếm (`NOT MEASURED`).
+
+Ba lượt mã mới liên tiếp có 396/396 ACK hợp lệ, 0 timeout; nearest-rank gộp riêng ba lượt này là 358/437/452/459 ms. Max 459 ms nhỏ hơn mục tiêu tham khảo 1.200 ms; không suy 396 mẫu bảo đảm zero-failure. Chênh lệch latency giữa các lượt không được quy hết cho code: scheduler/mạng/GC không được kiểm soát. GC là số liệu toàn process test, blocking GC count 0 ở cả bốn lượt; CPU theo thread chưa đo (`NOT MEASURED`). Baseline trong phiên chỉ thay callback audit về bản cũ, không khôi phục toàn bộ mã 04-11 hoặc môi trường của hai benchmark lịch sử.
+
+| Khoảng ordinal | Baseline ACK p50/p95/p99/max (ms) | Mã mới 1 | Mã mới 2 | Mã mới 3 |
+| --- | --- | --- | --- | --- |
+| 1–33 | 357/444/449/449 | 300/384/421/421 | 354/442/446/446 | 360/452/458/458 |
+| 34–66 | 348/437/459/459 | 330/403/442/442 | 361/417/451/451 | 371/428/428/428 |
+| 67–99 | 361/473/482/482 | 361/437/448/448 | 359/448/459/459 | 359/443/457/457 |
+| 100–119 | 364/471/488/488 | 365/449/452/452 | 349/437/443/443 | 362/406/407/407 |
+| 120–132 | 350/500/500/500 | 363/430/430/430 | 359/442/442/442 | 360/451/451/451 |
+
+### Ranh giới thời gian và chi phí audit
+
+**SOURCE-CONFIRMED:** Thứ tự `Port` là guard request → ACK accepted → durable native intent → kiểm device/quyền → final authorization → kiểm device/quyền/epoch/gate → dispatch deadline không I/O → fake/native API → durable result. Pre-native intent audit nằm sau ACK accepted nhưng vẫn trong hạn ACK tại dispatch; post-native audit nằm sau call, ảnh hưởng ngân sách toàn phiên và bước tiếp, không phải USB timeout. Observation metadata được lưu đồng bộ trong `requireWrite`, nên thời điểm `ack_observed` chưa bao hết chi phí final checks.
+
+| Phân đoạn, đơn vị ms | Baseline p95 / max nếu phù hợp | Mã mới 1 | Mã mới 2 | Mã mới 3 |
+| --- | --- | --- | --- | --- |
+| Request published → host observed, p95 | 106 | 83 | 93 | 105 |
+| Host observed → host ACK, p95 | 270 | 220 | 260 | 240 |
+| Host ACK → Android observed, p95 | 139 | 138 | 139 | 140 |
+| ACK guard accepted → dispatch, p95 / max | 16,465 / 35,041 | 18,066 / 43,376 | 17,010 / 20,471 | 16,497 / 23,478 |
+| Fake API, max | 0,712 | 3,005 | 0,507 | 0,603 |
+| Audit checkpoint, p50/p95/p99/max | 7,486/12,765/29,044/36,640 | 8,220/14,291/35,074/40,720 | 8,287/13,375/14,280/18,834 | 8,126/12,806/16,991/22,853 |
+
+**Audit-cost riêng — RUNTIME-OBSERVED:** Hai mode storage-only cùng 264 checkpoints và 6.711.056 byte serialize: cũ tổng 1.604,809 ms, p50/p95/p99/max 5,904/7,666/9,178/14,865 ms; checked commit tổng 2.077,883 ms, 7,094/11,035/26,426/34,744 ms. Trong full-path, snapshot đầu/cuối 539/50.489 byte, mỗi lượt vẫn serialize 6.711.056 byte. Cũ có 264 `finishWrite` gọi sync nội bộ, mới thêm 264 checked `FD.sync`; không có buffered writer/flush riêng hoặc ghi bất đồng bộ. Tổng serialization full-path cũ 575,332 ms; mới 514,158/573,628/558,193 ms. Checked sync mới tổng 1.294,726/1.168,892/1.114,550 ms; `finishWrite` mới 184,922/183,899/186,430 ms. Tổng audit trước API cũ/mới là 1.222,803/1.291,550/1.285,044/1.239,977 ms và sau API là 962,302/1.063,462/1.025,031/1.004,911 ms theo thứ tự baseline rồi ba lượt mới. Đây là số lần gọi API sync; số syscall/storage flush vật lý chưa trace (`NOT MEASURED`). Chưa có bằng chứng full snapshot là nút thắt chính, nên loại phương án journal/fixed-size làm mất hoặc phức tạp hóa lịch sử intent.
+
+### Bảng trước–sau và lý do thay đổi
+
+| Hạng mục | Cấu hình cũ | Cấu hình mới | Giả thuyết | Thay đổi mã cụ thể | Số đo cũ | Số đo mới | Tác động | Rủi ro còn lại |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| ACK p50/p95/p99/max | ACK 1.500 ms, persistent channel | Giữ ACK 1.500 ms | Audit có thể gây outlier | Đo cùng core/Port/audit/worker, thêm dispatch guard | Baseline phiên 357/450/488/500 ms; lịch sử khác harness max 1.476 ms | 3 lượt 351/430/449/452; 359/442/451/459; 360/436/457/458 ms | Đủ margin quan sát, không nới deadline | Không chứng minh speedup do code hoặc zero-failure |
+| Hoàn tất và tổng phiên | Standalone chỉ approval; không native audit | Full-path fake | Chưa đủ bằng chứng end-to-end | FullPathRig và instrumentation cách ly | 2 lượt lịch sử 132 PASS; full-path baseline 54.386 ms | 3 × 132 PASS; tổng 49.929/53.521/53.481 ms | Kiểm được owner/cleanup/observation fixture | Không thay hardware bring-up |
+| Audit serialize/write | Full snapshot mỗi boundary | Giữ full snapshot | O(N²) có thể là bottleneck | Tách `Tbs5530NativeAudit` để đo đúng callback | 264 writes/6.711.056 byte | Không giảm write/bytes; audit full-path 2.244,889–2.355,012 ms | Không tối ưu suy đoán | GC process và UI export chưa được quy nguyên nhân |
+| Audit sync/commit | `finishWrite` log lỗi | Checked sync + readback | Callback có thể không biết commit lỗi | `Tbs5530DurableFile`, dùng cho audit/approval/report | Storage-only 1.604,809 ms; sync lỗi có thể bị log | 2.077,883 ms, fault sync/commit bị từ chối | Tăng độ kiểm được lỗi, chấp nhận chi phí tăng | Không nguyên tử hóa filesystem với USB; power-loss vẫn UNCERTAIN |
+| Final deadline/device | Check trước final storage/native guard | Kiểm lại device sau guard và dispatch one-use không I/O | Metadata/final checks có thể vượt hạn | `requireDispatch`, Port và controller delegate | Chưa có dispatch guard riêng | Exact 1.499/1.500/1.501 ms và dispatch delay tests PASS | ACK muộn không được grace | Vẫn có race rất ngắn trước API |
+| Start budget | Chỉ TTL 300 giây | Cần còn ≥240 giây trước consume | Chuẩn bị lâu có thể hết TTL sau reset | `requireStartBudget` và runner gate | NOT MEASURED | Mã mới tổng tối đa 53,521 giây, reserve 240 giây | Không bắt đầu với phần TTL quá ngắn | USB thật chưa đo; không bảo đảm worst-case 132 timeout |
+| ADB subprocess | Helper persistent 3 | Giữ 3/helper/run | Startup từng command gây trễ | Không bỏ fresh nonce/ordinal, pin boot/identity | 3 ở hai lượt lịch sử và baseline | 3 ở mỗi lượt mới | Không tăng process theo 132 bước | Không bao wrapper/deploy; Wi-Fi vẫn có thể mất |
+| Log/evidence | Failure có thể mất child output; terminal phụ thuộc pending | Export lỗi bounded, terminal theo epoch/boundaries | Poll có thể bỏ lỡ pending ngắn | Host helper/ledger/wrapper | Baseline observation export chuẩn hóa 65.231 byte | Mỗi lượt mới cũng 65.231 byte sau chuẩn hóa minified, không tính newline cuối; ledger gồm các FAIL/PASS ~1,26 MB tại checkpoint | Bảo toàn kết quả trước khi cleanup | Stream stdout/stderr bị giới hạn 256 Ki ký tự, ghi rõ truncated |
+| Stop kinds | Preflight/child exit có thể chờ tổng timeout | Phân biệt child/total/guard/terminal | Preflight bị gán nhầm firmware success/timeout | Early exit + terminal validation + ledger tests | FAIL tổng 240 giây, 0 ACK | Mock negative PASS; các FAIL giữ riêng | Không biến lỗi trước native thành firmware PASS | Failure export chỉ khi kênh cũ còn đồng bộ |
+| Native fake/full length | Chưa đo native audit ở standalone | Production Port với fake manager/Raw | Counter adapter có thể bị nhầm native | Giữ counters theo boundary + fault tests | Baseline 132/132 fake | Mỗi lượt mới 132/132 fake, 0 USB thật | Short/negative/post-audit giữ result và fail-stop | Không gọi fake là native hardware |
+| Host ledger thật | Prior consumed đã enroll | Không đổi nội dung ledger thật | Duplicate/corrupt/restart có thể reuse | Strict ledger framing/key/enrollment checks | 1 enrollment +1 prior consumed | Không cấp approval/GUID/permit thật | Bảo toàn attempt cũ | Không chống chủ máy cố ý rollback file |
+| Hardware | Attempt 04-11: 23 native full-length/1.344 image bytes, không release | Chưa có attempt mới | Không suy từ benchmark sang board | Không gửi USB trong phiên software | CONSUMED/UNCERTAIN; recovery default lịch sử | NOT RUN; descriptor thật mới NOT OBSERVED | Giữ điểm dừng đúng approval | Chưa đạt mục tiêu firmware bring-up |
+
+### File thay đổi và nguyên nhân
+
+| File / nhóm file | Thay đổi trong Phase 2.9 | Cách kiểm |
+| --- | --- | --- |
+| `Tbs5530DurableFile.java` mới | Checked sync và kiểm nội dung commit, phát hiện lỗi mà AtomicFile chỉ log | Instrumentation fsync/commit fault và số đo audit-cost |
+| `Tbs5530NativeAudit.java` mới | Tách đúng serializer/writer production để dùng chung với phép đo, không giảm events | Full-path 264 checkpoints/lượt và native boundary fault tests |
+| `Tbs5530AndroidBootstrap.java` | Dùng audit mới, thêm seam telemetry package-private cho fake Port, kiểm lại device sau authorization và dispatch deadline cuối | Port/facade regression, dispatch fault và full-path fake |
+| `Tbs5530Fx2Fingerprint.java`, `Tbs5530OperationalDescriptorTest.java` | Bỏ đúng interval=0 gate của bulk IN trong nhánh debug candidate; không sửa parser/default fingerprint hoặc main operational transport | Repro FAIL, quét interval 0..255/negative fields PASS, runtime raw 50 byte OPERATIONAL_CANDIDATE |
+| `Tbs5530AndroidRawDescriptorPort.java` | Lưu actual raw riêng app-private bằng checked sync, không đưa binary vào report/Git hoặc thêm USB read trong cùng inspection | Injected storage test và user-approved read cuối, binary 50 byte/hash khớp report |
+| `Tbs5530OneShotBootstrap.java` | Guard có budget/dispatch hooks; kiểm budget trước consume và native đầu tiên; lưu raw descriptor qua sink riêng trước/sau mà không thêm USB read | JVM runner budget/raw-evidence failure và regression 132-step |
+| `Tbs5530ApprovalSession.java`, `Tbs5530ApprovalProtocol.java` | Start reserve 240 giây; dispatch kiểm clock/foreground/nonce không I/O, không đổi ACK/heartbeat/TTL | Deterministic deadline/budget/replay tests |
+| `Tbs5530BootstrapApproval.java` | Storage output dùng checked durable writer, không sửa legacy/per-attempt preferences policy | Isolated storage/approval tests và so production guard |
+| `Tbs5530DiagnosticController.java`, `Tbs5530UsbDiagnosticActivity.java` | Delegate budget/dispatch; report export cũng phát hiện commit lỗi | Diagnostic/report instrumentation và APK debug-only isolation |
+| `Tbs5530ApprovalDeterministicTest.java`, `Tbs5530OneShotBootstrapTest.java` | Thêm exact deadline edges, chậm sau final guard và insufficient start budget | Clock/store giả, JVM và isolated instrumentation |
+| `FullPathRig.java`, `Tbs5530FullPathBenchmarkTest.java` mới | Cùng worker/owner/approval/audit qua fake Manager/Raw, synthetic image/descriptors, namespace test canonical và timeline runtime | Baseline và các lượt 132-step không USB; hard stop khi xin USB service thật |
+| `Tbs5530DurabilityFaultTest.java`, `Tbs5530AuditCostTest.java` mới | Fault trước/sau native/commit/dispatch và so chi phí writer cũ/mới | Test package cách ly, không production preferences hoặc hardware |
+| `Watch-TBS5530-BootstrapApproval.ps1` | Nhận terminal theo run epoch/boundaries dù pending quá nhanh; fail-stop và export lỗi có giới hạn | Host negative mocks và live no-USB |
+| `Get-TBS5530-ApprovalTarget.ps1` | Deadline kiểm trước/sau preflight thay vì để preflight ăn quá budget im lặng | Mock preflight/identity/deadline |
+| `Tbs5530-ApprovalLedger.ps1` | Strict JSON/framing/duplicate/enrollment checks; API namespace/evidence failure, không repair ledger | Mock ledger và đọc canonical counts không đổi |
+| `Tbs5530-ApprovalTiming.ps1` | Giới hạn stream capture và phát hiện instrumentation FAIL dù child exit 0 | Failure-evidence/early-exit mocks |
+| `Run-TBS5530-ApprovalBenchmark.ps1` | Chọn instrumentation isolated, bảo toàn original exception/child evidence/namespace | Wrapper mocks, các lỗi runtime đã giữ và full-path PASS |
+| `Test-TBS5530-ApprovalChannel.ps1` | Tái hiện các nhánh terminal/ledger/deadline/child/evidence mới | PowerShell 7, 26 negative checks/132 shell loops ở checkpoint đã ghi |
+| Sáu hồ sơ `docs/project/` | Thêm bằng chứng mới, ADR-021, bảng trước–sau và handoff; không sửa lịch sử FAIL/consumed | `git diff --check`, kiểm source lines mới và đối chiếu JSONL/XML |
+
+### Quyết định timeout/ngân sách và giới hạn kết luận
+
+Giữ ACK=1.500, heartbeat=2.000, USB=2.000 ms/call, TTL=300.000 và benchmark=240.000 ms. Ba lượt cùng kênh mới đều có max dưới 1.200 ms, nên không có căn cứ đổi ACK lên 2.000 ms hoặc đổi heartbeat/USB timeout. Ngân sách bắt đầu tối thiểu 240 giây lớn hơn tổng full-path giả chậm nhất 53,521 giây khoảng 186,479 giây; đây là khoảng dự phòng quan sát, không phải giới hạn đã chứng minh cho USB thật. Tổng theoretical 132 × (1.500 + 2.000) = 462 giây vượt TTL 300 giây; không che rủi ro này bằng tăng timeout. Phần cứng chỉ được xét sau phê duyệt riêng, fresh preflight/nguồn và chấp nhận khả năng fail-stop để lại CPU halt/UNCERTAIN.
+
+**Nguồn công khai:** [UsbDeviceConnection](https://developer.android.com/reference/android/hardware/usb/UsbDeviceConnection), [SystemClock](https://developer.android.com/reference/android/os/SystemClock), [AtomicFile](https://developer.android.com/reference/android/util/AtomicFile), [AOSP Android 11 AtomicFile.java](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android11-release/core/java/android/util/AtomicFile.java). Android CLI docs search đã chạy; không dùng kết quả tìm kiếm thay source/test. Firmware plan/hash và lịch sử board vẫn theo ADR-018/019/020, không dùng email hãng làm Git artifact.
+
 ## 2026-11-05 — Phase 2.9: phân biệt handshake trước native và kết quả USB
 
 **Baseline đã kiểm:** `d76bbfb63dd21d55af6ce27fdff0543eb500db72`, nhánh

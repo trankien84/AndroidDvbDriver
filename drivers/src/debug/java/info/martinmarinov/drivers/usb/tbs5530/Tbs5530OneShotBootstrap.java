@@ -15,11 +15,14 @@ public final class Tbs5530OneShotBootstrap {
         void requireCurrent() throws IOException;
         default void requireWrite(int ordinal) throws IOException { requireCurrent(); }
         default void requireNative(int ordinal) throws IOException { requireCurrent(); }
+        default void requireStartBudget() throws IOException { requireCurrent(); }
+        default void requireDispatch(int ordinal) throws IOException { }
         default String runEpoch() { return null; }
     }
     public interface AttemptStore { void consume() throws IOException; }
     interface Delay { void await(int millis) throws IOException; }
     interface Descriptors { byte[] read(long epoch) throws IOException; }
+    interface RawAudit { void save(String phase, byte[] bytes) throws IOException; }
     public static final class Snapshot {
         public final State state;
         public final int attempted, completed, bytes;
@@ -58,6 +61,21 @@ public final class Tbs5530OneShotBootstrap {
     private Throwable stopCause;
     private Tbs5530BootstrapTelemetry telemetry = new Tbs5530BootstrapTelemetry();
     private Tbs5530RawDescriptors.Result before, after;
+    private RawAudit rawAudit = (phase, bytes) -> { };
+
+    void rawAudit(RawAudit audit) { rawAudit = audit; }
+    private Tbs5530RawDescriptors.Result readAndAudit(String phase) throws IOException {
+        byte[] bytes = descriptors.read(epoch);
+        Tbs5530RawDescriptors.Result result = Tbs5530RawDescriptors.parse(bytes);
+        synchronized (this) { if ("before".equals(phase)) before = result; else after = result; }
+        if (bytes != null && bytes.length <= Tbs5530RawDescriptors.MAX_BYTES) {
+            try { rawAudit.save(phase, bytes); }
+            catch (IOException | RuntimeException error) {
+                throw new Tbs5530BootstrapStop(Tbs5530BootstrapStop.Kind.AUDIT_FAILED,"Raw descriptor audit failed",error);
+            }
+        }
+        return result;
+    }
 
     void telemetry(Tbs5530BootstrapTelemetry telemetry) { this.telemetry = telemetry; }
     Tbs5530BootstrapTelemetry telemetry() { return telemetry; }
@@ -125,7 +143,7 @@ public final class Tbs5530OneShotBootstrap {
         final long token = session.getGeneration();
         try {
             preflight();
-            before = Tbs5530RawDescriptors.parse(descriptors.read(epoch));
+            before = readAndAudit("before");
             requireIdentity(before);
             if (Tbs5530Fx2Fingerprint.assess(before).candidate != Tbs5530Fx2Fingerprint.Candidate.BOOTSTRAP_CANDIDATE) {
                 throw new Tbs5530BootstrapStop(Tbs5530BootstrapStop.Kind.HASH_PLAN_MISMATCH,
@@ -133,6 +151,7 @@ public final class Tbs5530OneShotBootstrap {
             }
             Tbs5530ControlIo io = binding.bootstrapControlIo(epoch);
             preflight();
+            guard.requireStartBudget();
             store.consume();
             try {
                 session.transaction(token, () -> {
@@ -181,6 +200,7 @@ public final class Tbs5530OneShotBootstrap {
     private boolean expectedFinalReleaseDetach(Throwable error) {
         Tbs5530BootstrapTelemetry.Snapshot s = telemetry.snapshot();
         if (s.fullLengthCompleted != 132 || s.nativeCallStarted != 132 || s.nativeCallCompleted != 132) return false;
+        if (Tbs5530BootstrapStop.sanitizedChain(error).contains(Tbs5530BootstrapStop.Kind.AUDIT_FAILED.name())) return false;
         for (Throwable cause = error; cause != null; cause = cause.getCause()) {
             if (cause instanceof Tbs5530BootstrapStop) {
                 return ((Tbs5530BootstrapStop) cause).kind == Tbs5530BootstrapStop.Kind.USB_DETACHED;
@@ -223,7 +243,7 @@ public final class Tbs5530OneShotBootstrap {
     void observe() throws IOException {
         try {
             guard.requireCurrent();
-            after = Tbs5530RawDescriptors.parse(descriptors.read(epoch));
+            after = readAndAudit("after");
             requireIdentity(after);
             if (Tbs5530Fx2Fingerprint.assess(after).candidate != Tbs5530Fx2Fingerprint.Candidate.OPERATIONAL_CANDIDATE) {
                 throw new Tbs5530BootstrapStop(Tbs5530BootstrapStop.Kind.OBSERVATION_FAILED, "Operational descriptor not observed");

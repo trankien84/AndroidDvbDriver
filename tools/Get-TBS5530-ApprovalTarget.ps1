@@ -10,6 +10,9 @@ function Get-TBS5530ApprovalTarget {
         $start.RedirectStandardOutput = $true; $start.RedirectStandardError = $true
         $child = [Diagnostics.Process]::new(); $child.StartInfo = $start
         try {
+            if ($DeadlineTimestamp -gt 0 -and [Diagnostics.Stopwatch]::GetTimestamp() -ge $DeadlineTimestamp) {
+                throw 'FAIL-STOP: toàn bộ harness đã hết hạn trước identity preflight.'
+            }
             if (-not $child.Start()) { throw 'FAIL-STOP: không tạo được identity preflight.' }
             $output = $child.StandardOutput.ReadToEndAsync(); $errors = $child.StandardError.ReadToEndAsync()
             $waitMs = 5000
@@ -20,6 +23,9 @@ function Get-TBS5530ApprovalTarget {
             }
             if (-not $child.WaitForExit($waitMs)) { $child.Kill(); throw 'FAIL-STOP: identity preflight quá hạn; không reconnect.' }
             if ($child.ExitCode -ne 0) { throw 'FAIL-STOP: identity preflight mất kết nối.' }
+            if ($DeadlineTimestamp -gt 0 -and [Diagnostics.Stopwatch]::GetTimestamp() -ge $DeadlineTimestamp) {
+                throw 'FAIL-STOP: toàn bộ harness đã hết hạn sau identity preflight.'
+            }
             return $output.Result
         } finally { $child.Dispose() }
     }

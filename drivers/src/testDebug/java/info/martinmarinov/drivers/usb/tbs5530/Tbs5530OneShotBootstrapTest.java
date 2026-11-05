@@ -21,7 +21,7 @@ public class Tbs5530OneShotBootstrapTest {
         final List<String> calls = new ArrayList<>();
         Tbs5530UsbBinding.Events events;
         boolean permission = true, present = true, approved = true, duplicate, consumed, closeFails, operational;
-        boolean wrongIdentity, malformed;
+        boolean wrongIdentity, malformed, insufficientBudget;
         int writes, opens, closes, reads, failAt = -1, denyBeforeAt = -1;
         String failure = "short";
         Runnable during = () -> { };
@@ -31,7 +31,12 @@ public class Tbs5530OneShotBootstrapTest {
                     (r, d) -> () -> { }, errors::add, 30000, 10000);
             runner = new Tbs5530OneShotBootstrap(session, binding, this, device,
                     Tbs5530Fx2ProtocolPlan.describe(plan, "TBS_SOURCE_DUAL_RESET"),
-                    () -> { if (!approved) throw new IOException("No current approval/ADB/observer/power"); },
+                    new Tbs5530OneShotBootstrap.Guard() {
+                        public void requireCurrent() throws IOException { if (!approved) throw new IOException("No current approval/ADB/observer/power"); }
+                        public void requireStartBudget() throws IOException {
+                            if (insufficientBudget) throw new Tbs5530BootstrapStop(Tbs5530BootstrapStop.Kind.PERMIT_EXPIRED,"Synthetic low budget");
+                        }
+                    },
                     () -> { if (consumed) throw new IOException("Consumed"); consumed = true; },
                     ms -> assertEquals(100, ms), binding::bootstrapRawDescriptors);
         }
@@ -80,7 +85,14 @@ public class Tbs5530OneShotBootstrapTest {
                 }
                 result = failure.equals("negative") ? -1 : length - 1;
             }
-            telemetry.nativeReturned(ordinal + 1, value, length, result);
+            try { telemetry.nativeReturned(ordinal + 1, value, length, result); }
+            catch (IOException audit) {
+                if (ordinal == 131 && failure.equals("detach-audit")) {
+                    Tbs5530BootstrapStop detached = new Tbs5530BootstrapStop(Tbs5530BootstrapStop.Kind.USB_DETACHED,"Synthetic final detach");
+                    detached.addSuppressed(audit); throw detached;
+                }
+                throw audit;
+            }
             return result;
         }
         void load() throws IOException { runner.acquire(); runner.execute(); }
@@ -120,6 +132,35 @@ public class Tbs5530OneShotBootstrapTest {
             }
         }
     }
+    @Test public void rawDescriptorEvidenceIsSavedWithoutAnotherReadOrEmbeddingBytesInReport() throws Exception {
+        Rig r = new Rig(); List<String> phases = new ArrayList<>();
+        r.runner.rawAudit((phase, bytes) -> {
+            phases.add(phase);
+            assertArrayEquals("before".equals(phase) ? Tbs5530Fx2FingerprintTest.bootstrap() : operational(),bytes);
+        });
+        r.load(); r.runner.releaseUpload(); r.operational = true;
+        r.runner.acquireObservation(); r.runner.observe(); r.runner.releaseUpload();
+        assertEquals(java.util.Arrays.asList("before","after"),phases); assertEquals(2,r.reads);
+    }
+    @Test public void rawAuditFailureNeverConsumesBeforeUploadAndNeverReplaysAfterUpload() throws Exception {
+        for (String failedPhase : new String[]{"before","after"}) {
+            Rig r = new Rig();
+            r.runner.rawAudit((phase, bytes) -> { if (phase.equals(failedPhase)) throw new IOException("Injected raw audit failure"); });
+            if (failedPhase.equals("before")) { r.failLoad(); assertFalse(r.consumed); assertEquals(0,r.writes); }
+            else {
+                r.load(); r.runner.releaseUpload(); r.operational = true; r.runner.acquireObservation();
+                try { r.runner.observe(); fail(); } catch (IOException expected) { }
+                assertEquals(132,r.writes); assertEquals(132,r.runner.snapshot().boundaries.fullLengthCompleted);
+                assertEquals(Tbs5530OneShotBootstrap.State.UNCERTAIN,r.runner.snapshot().state); r.runner.releaseUpload();
+            }
+            assertEquals("AUDIT_FAILED",r.runner.snapshot().failure);
+        }
+    }
+    @Test public void insufficientStartBudgetNeverConsumesOrResetsCpu() throws Exception {
+        Rig r = new Rig(); r.insufficientBudget = true; r.failLoad();
+        assertFalse(r.consumed); assertEquals(0,r.writes); assertEquals(0,r.runner.snapshot().boundaries.nativeCallStarted);
+        assertEquals("PERMIT_EXPIRED",r.runner.snapshot().failure);
+    }
     @Test public void missingPreflightBlocksBeforeOpen() throws Exception {
         for (int cause = 0; cause < 4; cause++) {
             Rig r = new Rig();
@@ -157,6 +198,19 @@ public class Tbs5530OneShotBootstrapTest {
         assertEquals(Tbs5530OneShotBootstrap.State.OPERATIONAL_CANDIDATE, r.runner.snapshot().state);
         assertEquals(132, r.writes); assertEquals(2, r.opens); assertEquals(2, r.closes);
         assertNotEquals(Tbs5530Session.State.READY, r.session.getState());
+    }
+    @Test public void fullLengthFinalDetachCannotHideSuppressedPostNativeAuditFailure() throws Exception {
+        Rig r = new Rig(); r.failure = "detach-audit";
+        int[] checkpoints = {0};
+        r.runner.telemetry(new Tbs5530BootstrapTelemetry(s -> {
+            if (++checkpoints[0] == 264) throw new IOException("Injected final result audit failure");
+        }));
+        r.during = () -> { if (r.writes == 132) r.events.detached(r.device); };
+        try { r.load(); fail("Audit failure must not authorize observation"); } catch (IOException expected) { }
+        assertEquals(132,r.writes); assertEquals(132,r.runner.snapshot().boundaries.fullLengthCompleted);
+        assertEquals(Tbs5530OneShotBootstrap.State.UNCERTAIN,r.runner.snapshot().state);
+        assertTrue(r.runner.snapshot().failureChain.contains("AUDIT_FAILED"));
+        r.runner.releaseUpload(); assertEquals(1,r.closes);
     }
     @Test public void shortFinalReleaseWithDetachCannotBecomeTransitionSuccess() throws Exception {
         Rig r = new Rig(); r.failAt = 131; r.failure = "short";

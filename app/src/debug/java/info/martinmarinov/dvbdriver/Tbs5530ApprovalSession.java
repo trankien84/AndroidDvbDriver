@@ -221,6 +221,25 @@ public class Tbs5530ApprovalSession {
             throw stop(Kind.AUTHORIZATION_REVOKED, "Replayed, stale or future acknowledgment", null);
         validate(permit, observed);
     }
+    synchronized void requireDispatch(int ordinal) throws IOException {
+        if (stopped.get() != null) throw stopped.get();
+        if (!foreground) throw stop(Kind.FOREGROUND_LOST, "Foreground lost at dispatch", null);
+        if (ordinal != acknowledged || !nativeChecked || acceptedNonce == null)
+            throw stop(Kind.AUTHORIZATION_REVOKED, "No authorized native dispatch", null);
+        if (clock.now() >= acceptedDeadline)
+            throw stop(Kind.PRE_NATIVE_ACK_TIMEOUT, "Acknowledgment expired at USB dispatch", null);
+        acceptedNonce = null;
+    }
+    void requireStartBudget() throws IOException {
+        try {
+            JSONObject permit = currentPermit();
+            long now = clock.now();
+            long remaining = Math.min(created + Tbs5530ApprovalProtocol.SESSION_MS,
+                    permit.getLong("expires_elapsed_ms")) - now;
+            if (remaining < Tbs5530ApprovalProtocol.START_BUDGET_MS)
+                throw stop(Kind.PERMIT_EXPIRED, "Insufficient remaining budget before first native write", null);
+        } catch (JSONException error) { throw stop(Kind.AUTHORIZATION_REVOKED, "Invalid start budget", error); }
+    }
     void consume() throws IOException {
         synchronized (Tbs5530ApprovalSession.class) {
             if (!hardware && storage.consumed()) throw stop(Kind.ATTEMPT_CONSUMED, "Physical attempt already consumed; no retry", null);

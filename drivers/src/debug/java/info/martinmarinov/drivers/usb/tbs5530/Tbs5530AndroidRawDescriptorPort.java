@@ -23,6 +23,13 @@ public final class Tbs5530AndroidRawDescriptorPort implements Tbs5530RawDescript
     @Override public Tbs5530UsbBinding.Registration listen(Tbs5530UsbBinding.Events events) throws IOException {
         return metadata.listen(events);
     }
+    static byte[] persistObservation(java.io.File directory, String observationId, byte[] bytes) throws IOException {
+        if (observationId == null || !observationId.matches("[a-f0-9-]{36}")) throw new IOException("Invalid observation ID");
+        if (bytes != null && bytes.length <= Tbs5530RawDescriptors.MAX_BYTES) {
+            Tbs5530DurableFile.write(new java.io.File(directory,"phase29-raw-observation-" + observationId + ".bin"),bytes);
+        }
+        return bytes;
+    }
     private static void worker() throws IOException {
         if (Looper.myLooper() == Looper.getMainLooper()) throw new IOException("USB inspection requires a worker");
     }
@@ -39,12 +46,13 @@ public final class Tbs5530AndroidRawDescriptorPort implements Tbs5530RawDescript
         if (selected == null || !manager.hasPermission(selected)) throw new IOException("Attachment or permission changed");
         UsbDeviceConnection raw = manager.openDevice(selected);
         if (raw == null) return null;
+        final String observationId = java.util.UUID.randomUUID().toString();
         return new Tbs5530RawDescriptorInspection.Connection() {
             private boolean closed;
             @Override public synchronized byte[] getRawDescriptors() throws IOException {
                 worker();
                 if (closed) throw new IOException("Connection closed");
-                return raw.getRawDescriptors();
+                return persistObservation(application.getFilesDir(), observationId, raw.getRawDescriptors());
             }
             @Override public synchronized void close() throws IOException {
                 worker();

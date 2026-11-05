@@ -9,7 +9,6 @@ import info.martinmarinov.drivers.usb.tbs5530.Tbs5530BootstrapStop;
 import info.martinmarinov.drivers.usb.tbs5530.Tbs5530BootstrapStop.Kind;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
@@ -45,9 +44,7 @@ final class Tbs5530BootstrapApproval extends Tbs5530ApprovalSession {
         }
     }
     private static void writeFile(File file, String content) throws IOException {
-        AtomicFile atomic = new AtomicFile(file); FileOutputStream out = null;
-        try { out = atomic.startWrite(); out.write(content.getBytes(StandardCharsets.UTF_8)); atomic.finishWrite(out); }
-        catch (IOException error) { if (out != null) atomic.failWrite(out); throw error; }
+        info.martinmarinov.drivers.usb.tbs5530.Tbs5530DurableFile.write(file, content.getBytes(StandardCharsets.UTF_8));
     }
     static final class AndroidStorage implements Storage {
         private final File directory;

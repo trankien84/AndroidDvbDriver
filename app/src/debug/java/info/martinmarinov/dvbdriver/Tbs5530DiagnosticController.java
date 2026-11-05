@@ -183,6 +183,8 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
                         public void requireCurrent() throws IOException { approval.requireCurrent(); }
                         public void requireWrite(int ordinal) throws IOException { approval.requireWrite(ordinal); }
                         public void requireNative(int ordinal) throws IOException { approval.requireNative(ordinal); }
+                        public void requireStartBudget() throws IOException { approval.requireStartBudget(); }
+                        public void requireDispatch(int ordinal) throws IOException { approval.requireDispatch(ordinal); }
                         public String runEpoch() { return approval.runEpoch(); }
                     }, approval::consume);
             if (preparationInvalidated.get()) throw new IOException("Prepared attachment changed");

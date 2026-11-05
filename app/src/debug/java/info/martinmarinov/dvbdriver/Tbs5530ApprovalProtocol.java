@@ -9,5 +9,6 @@ final class Tbs5530ApprovalProtocol {
     static final long ACK_MS = 1500;
     static final long HEARTBEAT_MS = 2000;
     static final long SESSION_MS = 300000;
+    static final long START_BUDGET_MS = 240000;
     private Tbs5530ApprovalProtocol() { }
 }
