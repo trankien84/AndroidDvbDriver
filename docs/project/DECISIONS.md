@@ -2,6 +2,68 @@
 
 ## ADR-020 — Phase 2.9: debug-only one-shot Android EP0 execution with expiring approval
 
+### Bổ sung ngày 2026-11-05 — New audited attempt không rearm attempt cũ
+
+**Decision:** Giữ nguyên `phase29-attempt.consumed=true` của lượt ngày 04-11.
+Một attempt tương lai chỉ được xét khi người dùng duyệt riêng, operator cấp GUID mới,
+host ledger canonical ngoài Git đã có audit lịch sử và append/fsync
+`NEW_APPROVAL_CONSUMED` trước permit đầu tiên. GUID đã xuất hiện thì bị từ chối,
+kể cả UI chưa bấm; không tự cấp lại nếu crash hoặc helper chết.
+App ghi consumed trong preferences riêng theo GUID trước native write; không xóa hoặc
+đổi false cờ legacy. Install/challenge/run epoch/attachment/plan/hash đều phải khớp.
+Uninstall/clear data xóa preferences thật; ledger host độc lập vẫn từ chối reuse GUID.
+Không bảo đảm chống chủ máy cố ý xóa/rollback ledger; missing/corrupt ledger phải dừng,
+không repair/reset tự động.
+
+**Implemented and verified có phạm vi:** Đã ghi audit lịch sử ở canonical ledger qua
+initializer chỉ host, `CreateNew` không overwrite, không ADB/app state/permit/grant.
+20 deterministic cases chạy trên Android, tests store cách ly và host mock kiểm duplicate/restart.
+Đây không phải phê duyệt hardware mới. Chưa chạy helper production với new approval flags.
+
+**Decision — channel:** Giữ fresh nonce/ordinal trước mọi native write, ACK deadline
+1500 ms, heartbeat 2000 ms, session TTL 300000 ms và USB timeout 2000 ms riêng biệt.
+Kênh ADB persistent pin target/boot, không reconnect; initial identity đầy đủ và boot
+identity kiểm mỗi poll/put. Benchmark tổng 240 giây không được hiểu là nới một ACK.
+Missing grant trước consume chỉ deny eligibility, không poison preparation bởi UI polling;
+sau consume/write hoặc mất foreground thì revoke là trạng thái không thể resume.
+
+**Evidence/limits:** 132/132 live-no-USB request→ACK→Android observe PASS, p50 611 ms,
+p95 705 ms, p99 783 ms, max 1476 ms. Margin max chỉ 24 ms, không phải bảo đảm hardware.
+Khóa write gate và audit vẫn cần thiết; không tự tăng deadline hoặc tự thử firmware.
+
+### Bổ sung ngày 2026-11-05 — Bảo toàn attempt và provenance trước native
+
+**Status:** Triển khai và kiểm thử trong cùng Phase 2.9 từ baseline `d76bbfb`.
+Không có phê duyệt hoặc thực thi hardware attempt mới; approval cũ đã CONSUMED.
+Không tạo phase phụ hoặc chuyển frontend.
+
+**Decision:** Không coi request tới transport là native call. Report giữ legacy counters
+có nhãn rõ nghĩa và thêm run epoch, planned ordinal, guard requested/accepted,
+native started/completed, full-length count, image bytes và payload bytes.
+Giữ stop kind có kiểu dữ liệu riêng qua exception chain; lỗi cleanup bổ sung chứ không
+xóa nguyên nhân đầu. IOException tại Port cũng đóng write gate, như RuntimeException.
+Không corrective release, retry hoặc fallback.
+
+**Decision — durability/test boundary:** Test approval không được dùng hoặc xóa store production.
+Uninstall/clear data thật sự xóa app-private preferences; không tuyên bố consumed tồn tại
+qua uninstall. Cần audit độc lập phía host và preflight lại sau đổi cài đặt.
+Không cài lại APK production đang giữ consumed để làm instrumentation xanh.
+Library instrumentation chỉ được chạy khi manifest chứng minh package/targetPackage
+cách ly và test dùng manager/raw giả; app tests cần namespace/store test riêng.
+
+**Decision — critical boundary:** Audit intent phải ghi được trước native call; nếu lỗi thì
+không gọi USB. Sau audit, kiểm lại quyền ghi/device/epoch. Audit intent không phải call start;
+không thể nguyên tử hóa USB và filesystem. Kết quả thật có thể đã về nhưng lỗi owner/audit
+sau đó vẫn làm transaction dừng; giữ cả native result lẫn stop provenance, không xóa byte đã trả.
+Timestamp native trên Android dùng elapsed realtime để đối chiếu cùng đồng hồ với handshake;
+clock trên JVM chỉ là mô phỏng, không dùng làm thời gian đo điện thoại.
+
+**Reopen trigger:** Chỉ xem xét một transaction mới sau gates phần mềm và phép đo không USB,
+phê duyệt mới riêng, token/ledger/epoch minh bạch và preflight phần cứng mới.
+Không reset, clear, copy hoặc rearm cờ consumed của transaction ngày 04-11.
+Giới hạn Android public USB API và race sau kiểm cuối ở ADR gốc vẫn còn nguyên.
+
+
 ### Bổ sung sau một attempt được duyệt — 22:51 +07
 
 Người dùng đã duyệt riêng chuyển host/nguồn OTG/upload và tự xác nhận UI. Approval đã

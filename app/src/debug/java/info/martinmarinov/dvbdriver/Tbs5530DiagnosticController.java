@@ -118,7 +118,8 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
     void foreground(boolean value) {
         main(); foreground = value;
         if (approval != null) approval.foreground(value);
-        if (!value && bootstrap != null && bootstrap.snapshot().pending) bootstrap.close();
+        if (!value && bootstrap != null && bootstrap.snapshot().pending) bootstrap.revoke(
+                info.martinmarinov.drivers.usb.tbs5530.Tbs5530BootstrapStop.Kind.FOREGROUND_LOST);
     }
 
     boolean canPrepareFirmware() { return canRequestPermission() && snapshot.devices.size() == 1 && bootstrap == null; }
@@ -181,6 +182,8 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
                     new info.martinmarinov.drivers.usb.tbs5530.Tbs5530OneShotBootstrap.Guard() {
                         public void requireCurrent() throws IOException { approval.requireCurrent(); }
                         public void requireWrite(int ordinal) throws IOException { approval.requireWrite(ordinal); }
+                        public void requireNative(int ordinal) throws IOException { approval.requireNative(ordinal); }
+                        public String runEpoch() { return approval.runEpoch(); }
                     }, approval::consume);
             if (preparationInvalidated.get()) throw new IOException("Prepared attachment changed");
             if (preparationObserver != null) { preparationObserver.close(); preparationObserver = null; }
@@ -385,8 +388,13 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
         if (bootstrapOperation && bootstrap != null) {
             info.martinmarinov.drivers.usb.tbs5530.Tbs5530OneShotBootstrap.Snapshot s = bootstrap.snapshot();
             out.append("Bootstrap: ").append(s.state).append("; epoch=").append(s.epoch)
-                    .append("; attempted/completed=").append(s.attempted).append('/').append(s.completed)
-                    .append("; bytes=").append(s.bytes).append("; failure=").append(s.failure).append('\n');
+                    .append("; plannedOrdinal=").append(s.boundaries.plannedOrdinal)
+                    .append("; guard requested/accepted=").append(s.boundaries.guardRequested).append('/').append(s.boundaries.guardAccepted)
+                    .append("; native started/completed=").append(s.boundaries.nativeCallStarted).append('/').append(s.boundaries.nativeCallCompleted)
+                    .append("; full length=").append(s.boundaries.fullLengthCompleted)
+                    .append("; image bytes=").append(s.boundaries.imageBytesFullLength)
+                    .append("; failure=").append(s.failure).append('\n');
+            out.append("Trạng thái firmware: ").append(firmwareState(s)).append('\n');
             out.append("Không READY, không frontend hoặc TS; không retry.\n");
             return out.toString();
         }
@@ -398,6 +406,13 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
                     .append("; close hoàn tất: ").append(raw.closeCompleted).append('\n');
             if (raw.descriptors != null) out.append("Raw bytes: ").append(raw.descriptors.length)
                     .append("; parser: ").append(raw.descriptors.status).append("; SHA-256: ").append(raw.descriptors.sha256).append('\n');
+            if (raw.descriptors != null) {
+                info.martinmarinov.drivers.usb.tbs5530.Tbs5530Fx2Fingerprint.Candidate candidate =
+                        info.martinmarinov.drivers.usb.tbs5530.Tbs5530Fx2Fingerprint.assess(raw.descriptors).candidate;
+                out.append("Trạng thái từ raw: ").append(candidate
+                        == info.martinmarinov.drivers.usb.tbs5530.Tbs5530Fx2Fingerprint.Candidate.BOOTSTRAP_CANDIDATE
+                        ? "FX2_DEFAULT" : candidate.name()).append('\n');
+            }
             out.append("Không claim, không transfer; không suy alternate đang active hoặc streaming readiness.\n");
             return out.toString();
         }
@@ -451,10 +466,21 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
             assessed.put("differences", new org.json.JSONArray(fingerprint.differences));
             assessed.put("hardware_upload_allowed", false); assessed.put("firmware_running", "NOT_PROVEN");
             json.put("fx2_fingerprint", assessed);
+            json.put("firmware_state", fingerprint.candidate
+                    == info.martinmarinov.drivers.usb.tbs5530.Tbs5530Fx2Fingerprint.Candidate.BOOTSTRAP_CANDIDATE
+                    ? "FX2_DEFAULT" : fingerprint.candidate.name());
         }
         return json;
     }
 
+    private static String firmwareState(info.martinmarinov.drivers.usb.tbs5530.Tbs5530OneShotBootstrap.Snapshot s) {
+        if (s.state == info.martinmarinov.drivers.usb.tbs5530.Tbs5530OneShotBootstrap.State.OPERATIONAL_CANDIDATE) return "OPERATIONAL_CANDIDATE";
+        if (s.boundaries.fullLengthCompleted == 132) return "UPLOAD_COMPLETE_OPERATIONAL_UNVERIFIED";
+        if (s.boundaries.nativeCallStarted > 0) return "FIRMWARE_UPLOAD_INCOMPLETE";
+        return s.before != null && info.martinmarinov.drivers.usb.tbs5530.Tbs5530Fx2Fingerprint.assess(s.before).candidate
+                == info.martinmarinov.drivers.usb.tbs5530.Tbs5530Fx2Fingerprint.Candidate.BOOTSTRAP_CANDIDATE
+                ? "FX2_DEFAULT" : "NOT_OBSERVED";
+    }
     private org.json.JSONObject bootstrapReport() throws org.json.JSONException {
         info.martinmarinov.drivers.usb.tbs5530.Tbs5530OneShotBootstrap.Snapshot s = bootstrap.snapshot();
         org.json.JSONObject json = new org.json.JSONObject();
@@ -462,6 +488,17 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
         json.put("timestamp_epoch_ms", System.currentTimeMillis()); json.put("duration_ms", s.durationMillis);
         json.put("epoch", s.epoch); json.put("pending", s.pending); json.put("cleanup_pending", bootstrap.cleanupPending());
         json.put("attempted", s.attempted); json.put("completed", s.completed); json.put("transferred_bytes", s.bytes);
+        json.put("legacy_counter_semantics", "ADAPTER_REQUESTED_AND_OWNER_VALIDATED_NOT_NATIVE");
+        json.put("run_epoch", s.boundaries.runEpoch); json.put("monotonic_timebase", s.boundaries.timebase);
+        json.put("planned_ordinal", s.boundaries.plannedOrdinal);
+        json.put("guard_requested", s.boundaries.guardRequested); json.put("guard_accepted", s.boundaries.guardAccepted);
+        json.put("native_call_started", s.boundaries.nativeCallStarted); json.put("native_call_completed", s.boundaries.nativeCallCompleted);
+        json.put("full_length_completed", s.boundaries.fullLengthCompleted);
+        json.put("image_bytes_full_length", s.boundaries.imageBytesFullLength);
+        json.put("payload_bytes_full_length", s.boundaries.payloadBytesFullLength);
+        json.put("boundary_events", new org.json.JSONArray(s.boundaries.events));
+        json.put("cleanup_failure", s.cleanupFailure); json.put("firmware_state", firmwareState(s));
+        json.put("failure_chain", new org.json.JSONArray(s.failureChain));
         json.put("plan", "TBS_SOURCE_DUAL_RESET");
         json.put("firmware_size", info.martinmarinov.drivers.usb.tbs5530.Tbs5530FirmwareValidation.SIZE);
         json.put("firmware_sha256", info.martinmarinov.drivers.usb.tbs5530.Tbs5530FirmwareValidation.SHA256);

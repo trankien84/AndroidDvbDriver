@@ -1,5 +1,57 @@
 # Kiểm kê môi trường
 
+## 2026-11-05 — Phase 2.9: môi trường kiểm cuối, không hardware attempt mới
+
+- Toolchain không đổi trong phiên. Full JVM cuối 253 methods PASS; debug/release/lint
+  PASS, 0 errors/10 warnings. Output app được tái tạo riêng để bỏ class harness mồ côi
+  do lần compile trước khi chuyển source ra tools; không xóa SDK/caches/source/app data.
+- `tools/Build-TBS5530-OfflineTestApp.ps1` chỉ build applicationId `.phase29offline`
+  và test package riêng, kiểm bằng aapt; không install/deploy/ADB trong script đó.
+  Instrumentation thực chạy 22 methods app và 7 methods library trên OnePlus, manager/raw giả.
+  Production preferences so trước/sau giữ nguyên consumed=true.
+- Harness benchmark dùng app_process dưới shell, namespace riêng trong Downloads,
+  không Context/UsbDeviceConnection/production app data. Đủ 132 observations PASS;
+  ledger mẫu ngoài Git giữ cả các lượt lỗi trước. Namespace lượt thành công đã xóa sau export.
+  Không chuyển target sang AVD hoặc chạy test USB thật.
+- Canonical host ledger đã enroll prior CONSUMED/UNCERTAIN audit, không cấp new approval
+  hoặc sửa app state. Không đưa ledger, permit, firmware, APK hoặc logs vào Git.
+- Bản debug sửa trong working tree chưa cài vào package production. Tuner/nguồn/permission
+  cần preflight mới trước mọi đề nghị upload; sự hiện diện USB không chứng minh firmware.
+- Helper/parser cuối đã chạy live không USB đủ 132 vòng: p50 359/p95 506/p99 714/max 759 ms.
+  Sau export đã dọn namespace test; cả hai package `.phase29offline` mới đã gỡ, không gỡ
+  package production hoặc `drivers.test` có trước. Production consumed/preferences không đổi.
+- GitNexus refresh cuối FAILED do FTS `file_fts` inconsistent/COPY. Không force/drop/repair;
+  graph cuối không được dùng làm chứng cứ an toàn. Không thay environment vì lỗi index này.
+
+## 2026-11-05 — Phase 2.9: giữ toolchain và bảo toàn ứng dụng đã consumed
+
+- Git HEAD thực `d76bbfb63dd21d55af6ce27fdff0543eb500db72`, nhánh
+  `chore/modernize-android-build`; một worktree, sạch trước sửa. Không commit/push,
+  fetch/sync, đổi branch hoặc sửa ba reference checkouts.
+- Đọc lại build/wrapper và SDK: AGP 9.5.0, Gradle 9.8.2 với distribution checksum đã khai báo;
+  JDK trên PATH 25.0.5.0.3, compileSdk 37.2 revision 2, Build-Tools 37.0.0,
+  NDK 30.0.16248370, CMake 4.1.2. Giữ minSdk 21/target 37/Java source-target 8.
+  Không khảo sát hoặc tuyên bố latest stable; không cài/gỡ/nâng công cụ.
+- OnePlus GM1900/API 30 có đúng một TCP serial online và alias mDNS cùng thiết bị.
+  Kiểm identity và USB Host trước tác vụ; monitor chỉ đọc mỗi 10 giây trong cửa sổ kiểm thử.
+  `dumpsys usb` xác nhận tuner `734c:5530` trên Android, không mở connection hoặc transfer.
+  Preferences production `phase29-attempt` vẫn `consumed=true`; report raw trên app
+  là checkpoint recovery cũ, không phải đọc descriptor mới ngày 05-11.
+- Ảnh firmware đã có ngoài Git được đọc lại: 8192 byte, SHA-256
+  `b97cf208bb586f706b26aa5450de6bb97375a3e3eabe833cddb0ae3a4f69d0dc`.
+  Không copy/deploy/upload ảnh trong phiên này. Không capture, USB ownership/driver/nguồn,
+  permission grant, vendor/I²C, reset hoặc release CPU.
+- AVD hiện có `TBS5530_Runtime_API37`, x86_64/google_apis, image android-37.0;
+  chỉ đọc cấu hình, không boot hoặc chuyển target từ OnePlus sang emulator.
+- VS Code `runTask` không resolve label assembleDebug dù task tồn tại; dùng Gradle Wrapper
+  trực tiếp. Editor báo các debug Java files ngoài classpath; kết quả compile/tests thật
+  được ghi riêng, không sửa global Java settings để che diagnostics.
+- GitNexus CLI không nhận `status --json`; dùng `status` sau đó refresh `analyze --index-only`.
+  Đầu phiên status cho đúng HEAD đã index; graph chỉ dùng điều hướng, không thay source/tests.
+  Agent explore readiness không khởi động được do `400 model not supported`; parent đọc
+  ba nguồn trực tiếp, không lặp agent hoặc tác động references.
+
+
 ## 2026-11-04 — Phase 2.9: tuner trở lại OnePlus, attempt đã tiêu thụ — 22:51 +07
 
 - Người dùng duyệt riêng chuyển host, nguồn chỉ OTG/không backfeed và một lượt firmware;

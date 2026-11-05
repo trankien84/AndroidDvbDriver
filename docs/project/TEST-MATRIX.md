@@ -1,5 +1,75 @@
 # TBS5530 test matrix
 
+## 2026-11-05 — Phase 2.9: helper cuối và lượt 132 không USB thứ hai
+
+| Gate | Kết quả | Giới hạn |
+|---|---|---|
+| Helper mock cuối | PASS | Parser, wrapper binding, tổng deadline vs ACK/transport, canonical ledger enrollment/CreateNew/fsync/duplicate/restart/corrupt, 132 shell loops, pretty report trên 64 KiB, reject trên 256 KiB và pinned identity |
+| Android fake runtime cuối | PASS 20 cases | Cùng core approval, clock/storage giả, không USB |
+| Live ADB benchmark mã cuối | PASS 132/132, timeout 0 | p50 359/p95 506/p99 714/max 759 ms; helper 3 ADB subprocess, 0 USB; export ledger ngoài Git rồi xóa đúng namespace test |
+| Hai lượt 132 PASS | PASS có phạm vi, 264 samples | p95 694/p99 781/max 1476 ms; không gồm 76 observations của lượt FAIL. Không tuyên bố mọi outlier đã biến mất |
+| Production helper | OFFLINE MOCK ONLY | Overall tối đa 300 giây như TTL, ACK 1500/heartbeat 2000/native timeout 2000 ms không đổi. Không chạy flags production |
+| Cleanup test artifacts | PASS | Xóa hai namespace benchmark lỗi sau giữ evidence, hai package `.phase29offline` tạo trong phiên; không gỡ library test có trước, production consumed/preferences không đổi |
+| GitNexus cuối | FAILED refresh, không dùng graph như bằng chứng cuối | FTS `file_fts` inconsistent/COPY; không drop/rebuild/force hoặc sửa repo. Source/diff/tests vẫn là bằng chứng |
+
+## 2026-11-05 — Phase 2.9: kết quả cuối phần mềm, chưa upload mới
+
+Các gates dưới đây là kết quả mới, không thay hoặc xóa các lượt FAIL phía sau.
+
+| Gate | Kết quả mới nhất | Phạm vi |
+|---|---|---|
+| Full JVM sau fix final-release | PASS 253 methods | drivers 239 + usbxfer 1 + dvbservice 13; XML 0 failures/errors/skipped. Gồm đúng detach sau full-length write 132 chỉ chuyển observation, short release vẫn UNCERTAIN |
+| Build debug/release/lint | PASS exit 0 | Full command sau typed cleanup cuối 2 phút 24 giây, 326 tasks/65 executed/261 up-to-date. Rebuild riêng output app trước đó PASS 3 phút 31 giây, 312 tasks; không deploy app production |
+| APK static cuối | PASS | Harness standalone vắng cả debug/release; approval/uploader chỉ debug. 119 TBS classes major52, minSdk21/target37, không `.fw` APK. Lint 0 errors/10 warnings, không suppress mới |
+| Approval/report instrumentation distinct | PASS 22 methods | 20 deterministic + 1 AndroidStorage isolation + 1 report-revision; chạy subclass và report class, không đếm lặp base. App/test `.phase29offline`, không tuner access |
+| Port injected instrumentation | PASS 7 methods | `drivers.test`, manager/raw fake; âm/ngắn/IOException/RuntimeException, ACK timeout, native-boundary expiry, mất device/quyền sau ACK |
+| Tổng targeted instrumentation mới | PASS 29 methods riêng biệt | 22 app + 7 drivers; không gọi là full 56 historical instrumentation suite hoặc hardware PASS |
+| Live ADB no-USB benchmark | PASS 132/132; timeout 0 | Cùng core requireWrite/requireNative; p50 611/p95 705/p99 783/max 1476 ms; 3 ADB subprocess phần helper, namespace test đã export và xóa sau PASS |
+| Safety margin benchmark | Còn rủi ro tail | Max cách deadline 1500 ms chỉ 24 ms. Không bao native transfer/production native-audit/UI overhead; không tự nới deadline hoặc bảo đảm firmware thành công |
+| Host prior audit | PASS lưu local ngoài Git | Initializer canonical CreateNew/fsync ghi prior CONSUMED/UNCERTAIN; hardware_approval=false/new_approval_issued=false/app modified=false |
+| Consumed production | PASS bảo toàn | Preferences nội dung không đổi sau các suite; legacy true, không tạo production new-attempt preferences hoặc permit mới |
+| Hardware mới | NOT RUN / AWAITING_EXPLICIT_NEW_HARDWARE_APPROVAL | Không upload/reset/release, không vendor/I²C/frontend/TS. Candidate duy nhất dual-reset; cần preflight mới và phê duyệt riêng |
+| API21 runtime | NOT RUN | Static min21/major52 không chứng minh runtime API21 |
+
+## 2026-11-05 — Phase 2.9: rerun cách ly và benchmark có giới hạn
+
+Các kết quả sau mới hơn snapshot 249 JVM phía dưới; vẫn không USB thật.
+
+| Gate | Kết quả | Bằng chứng / giới hạn |
+|---|---|---|
+| Approval/report instrumentation rerun | PASS 42 executions | OnePlus/API30, app `.phase29offline` và test target riêng. 20 deterministic methods chạy qua base và subclass, thêm 1 isolation + 1 report revision; không gọi là 42 tình huống độc lập. Không launch Activity thật hoặc mở UsbManager |
+| Port instrumentation rerun | PASS 7 tests | `drivers.test` tự instrument; thêm đúng ACK nhưng mất device/permission và permit hết hạn sau audit intent. 0 native hardware calls |
+| Consumed production sau hai suite | PASS bảo toàn | Nội dung preferences production đọc trước/sau không đổi, consumed=true. Không reinstall/uninstall/clear app production |
+| Full JVM một lượt sau bổ sung | FAIL 1 method cũ | `repeatedDetachAndCancelRacesDoNotLeakOrReplay`, chờ thread vào fake transfer 1 giây ở ConcurrencyTest:73 hết hạn; không sửa hoặc tăng timeout để che lỗi |
+| Focused concurrency rerun | PASS 10 methods | Không sửa mã, wrapper focused exit0/55 giây. Chưa kết luận nguyên nhân scheduler chỉ từ rerun; full gates cuối phải chạy lại |
+| App-process deterministic rerun | PASS 20 fake cases | Cùng core Java approval, runtime Android thật, clock/storage giả; không phải hardware test |
+| Persistent channel benchmark 60 giây | FAIL / PARTIAL 76 observed, 77 ACK | 76 request→ACK→Android observe hợp lệ: p50 720/p95 785/p99=max 809 ms. Chưa đủ 132. Sau lỗi discovery+identity vẫn online đúng target, monitor không báo mất ADB; không reconnect |
+| Phân loại timeout benchmark | Đang sửa/kiểm lại tại checkpoint | Giới hạn tổng 60 giây không đủ cho 132 vòng khoảng 700 ms. Không đổi ACK 1500 ms, heartbeat 2000 ms, permit TTL 5 phút hoặc USB timeout 2000 ms. Bound tổng phải tách khỏi deadline từng write |
+
+## 2026-11-05 — Phase 2.9: kiểm phần mềm sau attempt đã consumed
+
+Baseline `d76bbfb63dd21d55af6ce27fdff0543eb500db72` cộng working tree.
+Không dùng kết quả 241 JVM/56 instrumentation lịch sử thay kết quả mới.
+Không cài lại, uninstall hoặc clear data package production đang giữ consumed.
+
+| Gate | Kết quả mới | Bằng chứng / giới hạn |
+|---|---|---|
+| Git / evidence đầu phiên | PASS chỉ đọc | Nhánh đúng, một worktree, sạch đầu phiên. Đọc JSON sanitized attempt/recovery đã có; không dựng timestamp thiếu |
+| Production attempt | RUNTIME-OBSERVED bảo toàn | SharedPreferences consumed=true. So nội dung trước/sau library test và isolated app test: không đổi |
+| Firmware local | OFFLINE-TESTED PASS | 8192 byte/hash khóa, đọc ảnh đã có ngoài Git; không copy/upload |
+| Targeted JVM lần đầu | PASS 17 methods | OneShotBootstrapTest 14 + BootstrapTelemetryTest 3; compile app và Android tests cùng lượt, exit 0 |
+| Full JVM / regression snapshot | PASS 249 methods | drivers 235 + usbxfer 1 + dvbservice 13; XML 0 failures/errors/skipped. Có 132 vị trí pre-native ACK fail và 4×132 native fault scenarios trong các methods, không tính thành số methods |
+| Native boundary injected trên OnePlus | PASS lượt đầu 5 tests | Chỉ package/targetPackage `info.martinmarinov.drivers.test`; manager/raw giả. IOException, RuntimeException, âm/ngắn, ACK fail, không thêm USB call sau gate đóng. Không phải USB hardware test |
+| Approval app instrumentation cách ly lần đầu | FAIL 1/27 | Dùng app suffix `.phase29offline` và test riêng, không production. 26 methods qua; assertion package/path isolation ở ApprovalTest:21 chưa nhận namespace mới. Tiếp tục sửa/kiểm lại trong Phase 2.9, không bỏ gate |
+| Android app_process fake suite lượt đầu | PASS 13 tests | Harness chỉ core approval và clock/storage giả; dependency scan 0 USB references, không Context/prefs production |
+| Live-no-USB benchmark lần đầu | FAILED trước handshake | Fake suite 13 PASS, sau đó wrapper truyền `DeadlineTimestamp` nhưng helper snapshot chưa có parameter; không phát approval thật, không gọi USB. Namespace riêng có hard stop 60 giây |
+| Build debug/release/lint snapshot | PASS exit 0 | Wrapper 3 phút 25 giây, 387 tasks/63 executed/324 up-to-date. Lint 0 errors/11 warnings; một warning mới SdCardPath thuộc harness test-only, đang xử lý tách khỏi APK |
+| Release DEX snapshot / bytecode | PASS static | Runner/adapter/approval/telemetry/harness vắng release; 120 TBS classes major52; minSdk21/target37. Không `.fw` trong APK debug/release |
+| ADB / owner | RUNTIME-OBSERVED | Đúng OnePlus GM1900/API30/USB Host; tuner còn được liệt kê. Report raw production là checkpoint cũ READ_AND_CLOSED/pending=false, không descriptor mới |
+| Hardware attempt mới / frontend / TS | NOT RUN | Không A0/vendor/I²C/EEPROM/CPU reset/release, không capture/chuyển nguồn/usbipd/permission grant. Approval cũ không tái dùng |
+| API21 runtime | NOT RUN | Static minSdk/major52 không thay test thiết bị API21 |
+
+
 ## 2026-11-04 — Phase 2.9: một attempt Android thật và recovery riêng
 
 Các kết quả này mới hơn checkpoint offline phía dưới. Không chạy lại instrumentation/build

@@ -1,5 +1,202 @@
 # Research log (append-only)
 
+## 2026-11-05 — Phase 2.9: phân biệt handshake trước native và kết quả USB
+
+**Baseline đã kiểm:** `d76bbfb63dd21d55af6ce27fdff0543eb500db72`, nhánh
+`chore/modernize-android-build`; working tree sạch đầu phiên, một worktree.
+Đã đọc trực tiếp JSON attempt đã lọc lưu ngoài Git của phiên trước, không yêu cầu xuất lại.
+Report recovery đang có trên app là dữ liệu ngày 04-11, không phải phép đọc descriptor mới.
+Lần kiểm chỉ đọc ngày 05-11 xác nhận đúng một TCP OnePlus GM1900/API 30, USB Host
+và tuner `734c:5530`; alias mDNS không được tính thành thiết bị thứ hai.
+Preferences production vẫn có `consumed=true`; không sửa hoặc cài lại ứng dụng đó.
+
+### Timeline có thể chứng minh từ report lịch sử
+
+`UNVERIFIED` nghĩa là report cũ không lưu trường đó. Thời gian ở cột cuối bao gồm
+handshake, adapter và kiểm owner; **không phải** thời gian riêng của native USB.
+Không cộng dồn các duration để dựng timestamp giả.
+
+| Ordinal | Request published / monotonic | Helper observed / target verified / heartbeat / ACK published | Android ACK observed | Native start / end monotonic | API result có trong report | Stop / duration đã ghi |
+|---|---|---|---|---|---|---|
+| 20 | UNVERIFIED | UNVERIFIED cho từng bước | UNVERIFIED | UNVERIFIED | 64/64; DATA 0x0440 | FULL_LENGTH; 1.134.606 µs |
+| 21 | UNVERIFIED | UNVERIFIED cho từng bước | UNVERIFIED | UNVERIFIED | 64/64; DATA 0x0480 | FULL_LENGTH; 1.158.729 µs |
+| 22 | UNVERIFIED | UNVERIFIED cho từng bước | UNVERIFIED | UNVERIFIED | 64/64; DATA 0x04C0 | FULL_LENGTH; 1.145.002 µs |
+| 23 | UNVERIFIED | UNVERIFIED cho từng bước | UNVERIFIED | UNVERIFIED | 64/64; DATA 0x0500 | FULL_LENGTH; 1.208.014 µs |
+| 24 | UNVERIFIED | ACK cuối phiên là 24 theo worklog; thời điểm UNVERIFIED | UNVERIFIED | Không có call 24 trong API results | Không gọi native; DATA dự kiến 0x0540/64 | FAILED_OR_UNKNOWN cũ; 1.510.321 µs |
+
+**OBSERVED:** JSON có 24 adapter requests, 23 API results full length, 1346 payload bytes;
+1344/8192 bytes thuộc ảnh. Không có release CPU. `attempted` cũ tăng trước guard,
+`completed` chỉ tăng sau khi transport trả về và owner vẫn hợp lệ.
+Không được đổi tên hai số này thành native calls.
+
+**SOURCE-CONFIRMED:** helper cũ thực hiện mỗi vòng: một `devices -l`, ba `getprop`,
+một uptime, một request read, một permit write và một report read: khoảng tám ADB
+subprocess, chưa kể sleep 50 ms. Android đọc permit mỗi 10 ms, thường đọc hai lần
+mỗi vòng. Hai nhịp poll không đồng nghĩa ACK đến trong 10 hoặc 50 ms; launch process,
+Wi-Fi, ADB shell, filesystem và scheduler đều nằm trong đường đi.
+App còn đọc permit riêng cho kiểm foreground/heartbeat trước và sau guard.
+
+Phân bố nearest-rank của **24 duration cũ**, gồm bước fail: min 947,543 ms;
+p50 1049,436 ms; p95 1293,526 ms; p99/max 1510,321 ms.
+Đây không phải benchmark USB, cũng không đủ mẫu để ước lượng độ tin cậy đuôi dài.
+
+**PROVEN bug từ source:** telemetry gộp lỗi trước native thành FAILED_OR_UNKNOWN/IO_FAILURE;
+nhánh Port đóng write gate khi RuntimeException nhưng thiếu IOException.
+Test approval dùng target context và xóa preferences production trong `clean()`.
+Các lỗi phần mềm này có phép thử tái hiện độc lập, không cần tuner.
+
+**HYPOTHESIS, chưa chứng minh:** ACK 24 đến hoặc được đọc quá deadline 1500 ms.
+Chưa biết thời điểm helper thấy request, ghi permit hay app đọc ACK; report không loại trừ
+một nhánh `requireCurrent()` thất bại. Không có bằng chứng packet loss, CPU hang,
+USB timeout/STALL hoặc lỗi 7F92 gây ra bước 24. Không đổi timeout USB 2000 ms
+hoặc chọn E600-only dựa trên giả thuyết đó.
+
+### Telemetry mới và ranh giới tính bền vững
+
+`run_epoch` là mã ngẫu nhiên cho một runner; `epoch` của USB lease vẫn độc lập.
+Đếm riêng planned ordinal, guard requested/accepted, native started/completed,
+full-length completed, image bytes và payload bytes. Native completion gồm cả return
+âm/ngắn và exception đã xác nhận; full-length chỉ đếm return đúng requested length.
+Giữ legacy counters có nhãn rõ nghĩa để đọc report cũ, không dùng chúng làm số native.
+
+Lưu audit AtomicFile trước native intent và sau kết quả, gồm timestamp monotonic
+ở native start/end và stop provenance. Không xuất message/cause có thể chứa định danh;
+exception chain vẫn giữ trong bộ nhớ để phân tích lỗi và cleanup không ghi đè lỗi đầu.
+`NATIVE_INTENT_NOT_CALL_START` ghi bền trước call; crash tại khe giữa ghi intent và call
+không thể xác nhận đã gọi USB. Không có giao dịch nguyên tử giữa filesystem và USB.
+Chỉ gọi `UNKNOWN_IN_FLIGHT` khi bộ đếm cho biết call đã bắt đầu nhưng chưa xác nhận kết thúc.
+Guard timeout trước native là `PRE_NATIVE_ACK_TIMEOUT`, không giả thành USB failure.
+
+Sau audit intent, kiểm lại device/permission, authorization và attachment trước call;
+IOException/RuntimeException, kết quả âm/ngắn, mismatch hoặc revoke đều đóng write gate.
+Không retry, fallback, corrective release, claim interface hay mở streaming.
+Đủ 132 writes chỉ cho phép quan sát read-only bằng lease/permission/epoch hiện tại;
+không bắt buộc detach/re-enumeration nếu VID/PID giữ nguyên. Có endpoint 0x82 chỉ là
+`OPERATIONAL_CANDIDATE`, không phải READY hoặc chứng minh I²C/frontend/TS.
+
+
+### Checkpoint cuối kênh không USB — giữ cả hai lượt 132 PASS
+
+Sửa parser helper đọc toàn bộ JSON nhiều dòng qua **một file descriptor**, ghép thành một
+frame, giới hạn 256 KiB và từ chối lỗi/quá cỡ thay vì cắt. Điều này cần cho report thật
+Activity đang `toString(2)`, trong khi fixture minified cũ chưa phát hiện lỗi.
+Đọc file descriptor duy nhất giữ snapshot cũ hoặc mới khi AtomicFile rename,
+không trộn các thế hệ file. Mock gồm report terminal trên 64 KiB và reject trên 256 KiB.
+Ledger phân biệt mode production/benchmark, helper USB calls luôn 0;
+terminal ghi native started/completed/full-length/image bytes/stop/cleanup,
+không dùng legacy attempted làm native count.
+
+**Live-no-USB cuối:** 132/132 observations PASS, timeout 0, 20 deterministic cases PASS.
+Request→Android observe p50 **359 ms**, p95 **506 ms**, p99 **714 ms**, max **759 ms**.
+Hai lượt đủ 132 đều giữ trong ledger: 264 mẫu thành công, p95 694 ms, p99 781 ms,
+max 1476 ms. Không gộp 76 mẫu của lượt FAIL vào một kết quả “264 PASS”.
+Không thể quy toàn bộ chênh lệch giữa các lượt cho code, vì scheduler/mạng không được
+kiểm soát như thí nghiệm phòng lab. Các số mới không chứng minh nguyên nhân ACK 24 cũ.
+
+Timeline **lượt cuối**, device elapsed milliseconds; native **NOT RUN**,
+không phải timestamp attempt ngày 04-11:
+
+| Ordinal | Request published | Host observed | Host ACK | Android observed | Deadline | Native |
+|---|---|---|---|---|---|---|
+| 20 | 237377025 | 237377030 | 237377110 | 237377177 | 237378525 | NOT RUN |
+| 21 | 237377194 | 237377210 | 237377470 | 237377530 | 237378694 | NOT RUN |
+| 22 | 237377550 | 237377560 | 237377650 | 237377738 | 237379050 | NOT RUN |
+| 23 | 237377765 | 237377780 | 237377870 | 237377991 | 237379265 | NOT RUN |
+| 24 | 237378012 | 237378030 | 237378130 | 237378198 | 237379512 | NOT RUN |
+
+Helper production giữ overall tối đa 300 giây, tương ứng session TTL cũ; giới hạn tổng
+60 giây ở bản sửa trung gian không đủ cho 132 vòng. Benchmark tổng 240 giây;
+ACK 1500 ms/heartbeat 2000 ms/native timeout 2000 ms không đổi.
+Hardware mode được kiểm bằng mock, chưa chạy helper production hoặc cấp permit mới.
+Mất target phải fail-stop; chỉ một channel response timeout không được tự ghi thành mất
+ADB khi discovery/identity vẫn online. Host ledger ghi riêng loại lỗi và thời gian tổng.
+
+### Đo mới không USB: 132 lượt request → ACK → Android observe
+
+**RUNTIME-OBSERVED, ngày 05-11:** Android Java `app_process` độc lập, không Context,
+không app-private data và không dependency `UsbDeviceConnection`, chạy cùng
+`Tbs5530ApprovalSession.requireWrite/requireNative` với storage test riêng.
+Harness ở `tools/approval-benchmark`, không phải nguồn app production.
+Host dùng một persistent ADB shell, giữ binding serial/boot identity và ACK mới cho từng nonce/ordinal.
+Kênh benchmark báo 3 ADB subprocess cho phần helper, không phải tổng subprocess của
+wrapper push/harness/fake/preflight hoặc monitor độc lập.
+
+Kết quả đủ **132/132**, **0 timeout**, USB calls=0; 20 fake-clock cases cũng PASS trên Android.
+Nearest-rank request→observe: p50 **611 ms**, p95 **705 ms**, p99 **783 ms**, max **1476 ms**.
+Mẫu max chỉ còn 24 ms so với ACK deadline 1500 ms. Một lượt PASS không bảo đảm Wi-Fi,
+Windows sleep hoặc scheduler sau này; không tự tăng deadline hoặc xin upload ngay chỉ vì PASS này.
+Các duration cũ gồm adapter/native nên chỉ so đường đi và mức overhead, không công bố tỷ lệ
+USB speedup hoặc coi phân bố cũ/mới là thí nghiệm cùng điều kiện.
+
+| Đường đi | Cũ từ source / JSON | Mới đã đo không USB |
+|---|---|---|
+| Host process mỗi poll | Khoảng 8 ADB subprocess + 50 ms sleep | Một persistent channel, shell builtins; fresh ACK vẫn từng ordinal |
+| Android chờ | Poll permit 10 ms, file có thể đọc lại nhiều lần | Clock/storage core dùng cùng deadline 1500 ms; nonce, epoch và final native recheck |
+| Tách latency | Chỉ tổng request/adapter/native, không native-only | Request, host seen, host ACK, Android observed và deadline cùng device elapsed clock |
+| Tail / giới hạn | max 1510,321 ms tại bước fail 24, nguyên nhân sâu thiếu timestamps | max 1476 ms ở 132 mẫu no-USB; không có native transfer/audit production overhead |
+
+Timeline **benchmark mới**, đơn vị milliseconds từ device elapsedRealtime, không phải timeline
+attempt ngày 04-11. Host uptime có độ phân giải 10 ms và clamp cận dưới tới request;
+không coi là timestamp nanosecond chính xác. Native start/end là **NOT RUN** trong benchmark.
+
+| Ordinal | Request published | Host request observed | Host ACK published | Android ACK observed | ACK deadline | Native / stop |
+|---|---|---|---|---|---|---|
+| 20 | 235629986 | 235630020 | 235630450 | 235630621 | 235631486 | NOT RUN; no stop |
+| 21 | 235630652 | 235630710 | 235631080 | 235631241 | 235632152 | NOT RUN; no stop |
+| 22 | 235631269 | 235631320 | 235631680 | 235631855 | 235632769 | NOT RUN; no stop |
+| 23 | 235631882 | 235631910 | 235632300 | 235632473 | 235633382 | NOT RUN; no stop |
+| 24 | 235632512 | 235632550 | 235632900 | 235633079 | 235634012 | NOT RUN; no stop |
+
+Một lượt trước đó đủ 76 observations rồi dừng ở bound tổng 60 giây, không phải bằng chứng mất ADB;
+discovery/identity vẫn online sau lỗi. Giới hạn tổng benchmark đổi thành 240 giây vì
+132 × 1500 ms có thể cần 198 giây, tách khỏi ACK 1500 ms, heartbeat 2000 ms, TTL 300000 ms
+và native timeout 2000 ms. Lượt lỗi giữ lịch sử trong ledger; lượt 132 PASS không xóa nó.
+Sau PASS đã xuất mẫu vào ledger local ngoài Git và xóa đúng namespace test của lượt thành công.
+
+**Giới hạn cuối:** benchmark không chạy fsync native audit, UsbManager check, synchronous USB
+hoặc UI render production; do đó chưa chứng minh latency đủ cho bring-up thật.
+Cơ chế guard vẫn fail-closed nếu tail vượt deadline; khi đã có native write thì attempt UNCERTAIN,
+không corrective release/retry. Chuỗi log/identity heartbeat chỉ thu hẹp race, không loại bỏ race
+mạng mất ngay sau kiểm cuối.
+
+### Readiness bridge/I²C/frontend — chỉ đối chiếu source, không thực thi
+
+Ba checkout sạch, không fetch/sync/sửa: official TBS
+`2ce787de9f6e81b4294692a45de15596ae2e1322`, community C
+`c5fa27eecbe80633cbb365cc44656daea1c0e2e3`, Go
+`11228b05fb1626bf41c4e1879ace10cd0a8d575c`.
+
+Nguồn truy vết:
+[TBS tbs5530.c](https://github.com/tbsdtv/linux_media/blob/2ce787de9f6e81b4294692a45de15596ae2e1322/drivers/media/usb/dvb-usb/tbs5530.c),
+[C tbs5530.c](https://github.com/koreapyj/cxd28xx/blob/c5fa27eecbe80633cbb365cc44656daea1c0e2e3/tbs5530.c),
+[Go bridge tbs](https://github.com/Till0196/coax/blob/11228b05fb1626bf41c4e1879ace10cd0a8d575c/internal/coaxd/usb/bridge/tbs/tbs.go),
+[Go board](https://github.com/Till0196/coax/blob/11228b05fb1626bf41c4e1879ace10cd0a8d575c/internal/coaxd/usb/board/tbs5530/tbs5530.go)
+và bridge/tbs5530 cùng SHA. Đây là thứ tự source, không phải bằng chứng board đã ready.
+
+| Request / hướng | Side effect và điều kiện trước | Response source kỳ vọng | Chắc chắn / phép thử còn cần |
+|---|---|---|---|
+| Standard raw descriptors, không vendor | Chỉ đọc qua connection đang có permission/epoch hợp lệ; đóng lease nạp trước khi mở observer | Cây hoàn chỉnh; kiểm VID/PID, interface 0/alt 0, Bulk IN 82/81 | Android recovery lịch sử chỉ default. Sau upload mới cần quan sát lại; endpoint không chứng minh frontend |
+| A0 OUT 40, dual-reset | Dừng/chạy CPU và ghi RAM; đúng ảnh/hash, một approval đã duyệt | Full length mọi lần; 132 writes, delay 100 ms | Windows có chứng cứ; Android cũ chỉ 23 calls, không đủ ảnh. Không retry |
+| 90 OUT 40 → 91 IN C0, value/index 0 | 90 đặt con trỏ I²C với `[readLength, addr<<1, register]`; 91 lấy kết quả. Cả cặp có side effect trên bus, không phải health-check vô hại | OUT 3 byte, IN đúng readLength; source C không kiểm đầy đủ kết quả hai lệnh | Source rõ ở TBS `tbs5530_i2c_transfer` 60–104, C 51–94, Go `WriteRead` 46–54. Cần fixture pointer một byte, mutex và short/error; hardware cần approval riêng |
+| 80 OUT 40, value/index 0 | Ghi I²C `[payloadLength+1, addr<<1, payload...]`; có thể đổi thanh ghi frontend | Full length payload+2; Go `Bridge.Write` kiểm giới hạn 62 | TBS 87–96/C 78–87 dùng buffer 50 byte và không kiểm transfer đủ; không sao chép thiếu bounds vào Android |
+| 90/91 đọc EEPROM MAC | `tbs5530_read_mac_address` 116–142 lặp 256 địa chỉ với I²C address byte A0; thay con trỏ EEPROM dù không ghi nội dung | IN 1 byte/lần; MAC lấy từ offset 16 | Không cần MAC để chứng minh FX2 đã nạp. Không chạy chuỗi này trong Phase 2.9 |
+| 8A OUT 40 `[0A,00]` hoặc `[0A,01]` | Chọn nguồn TS terrestrial/satellite; thay routing dù callback có tham số onoff | OUT 2 byte; source callback không kiểm đầy đủ | TBS streaming_ctrl 167–186/C 149/Go `SelectStreamSource` 74–80. Không coi onoff=false là tắt nguồn đã được chứng minh |
+| B7 OUT 40 `[00,00]`, rồi 8A OUT `[08,01]` | GPIO satellite sau attach M88RS6060; delay 10 ms; có thể ảnh hưởng nguồn phần satellite | Source mong OUT 2 byte mỗi lệnh; Go kiểm full length | TBS `tbs5530_frontend_m88rs6060_attach` 202–248/C 495–503/Go `InitializeSatellite` 59–67. Không dùng B7 IN errors của Windows làm readiness protocol Android |
+
+Official `tbs5530_properties` dùng `no_reconnect=1`, generic control endpoint 81,
+stream endpoint 82; frontend CXD2878 attach qua I²C tại 64, tuner 60/24 MHz.
+C `tbs5530_probe` 690–735 nạp firmware, tạo I²C adapter, URB buffers rồi DVB/frontends.
+Go board `open` 109–158 nạp firmware, initialize CXD2878, satellite GPIO và M88RS6060.
+Go chủ động initialize cả hai frontend và có bình luận reload mỗi open; **không sao chép**
+chính sách đó thành reupload Android hoặc kết luận không có EEPROM trên mọi board.
+
+Không có một bridge-readiness vendor request vô hại được ba nguồn xác lập chung.
+Vì vậy không thêm probe 80/90/91/8A/B7 hoặc parser I²C production để làm xanh phase.
+Contract hữu ích hiện tại là giữ exact A0 plan và từ chối mọi request ngoài plan;
+fixtures về negative/short/exception/ordinal đã kiểm đúng tại bootstrap boundary.
+Fixture cho I²C tương lai cần thiết kế cùng bounds/error/locking trước approval riêng,
+không phải điều kiện trì hoãn việc sửa handshake trong Phase 2.9.
+
 ## 2026-11-04 — Phase 2.9: Android thực đã ghi một phần, dừng ở acknowledgment
 
 **RUNTIME-OBSERVED, 22:51 +07:** Sau phê duyệt riêng chuyển host và một lượt upload,

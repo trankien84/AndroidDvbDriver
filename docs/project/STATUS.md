@@ -1,5 +1,112 @@
 # Port TBS5530 sang Android — trạng thái hiện tại
 
+## Checkpoint Git Phase 2.9 — 2026-11-05 12:41 +07
+
+- Người dùng yêu cầu commit toàn bộ thay đổi hiện có và push lên origin của nhánh
+  `chore/modernize-android-build`. Preflight xác nhận HEAD và live origin cùng
+  `d76bbfb63dd21d55af6ce27fdff0543eb500db72`, stage trống, một worktree.
+- 28 file nguồn/tools còn đúng fingerprint của lượt kiểm cuối; tổng phạm vi 34 file
+  gồm nguồn, tests, tools và sáu hồ sơ. Không đưa firmware, APK, ledger hoặc raw logs vào Git.
+- Message: `fix: harden Phase 2.9 bootstrap authorization and telemetry`.
+  Commit/push chỉ được xác nhận sau thao tác Git; các ghi chú chưa commit bên dưới là lịch sử.
+- Không chạy lại build/tests hoặc thao tác Android/USB trong tác vụ Git này.
+  Hardware vẫn `AWAITING_EXPLICIT_NEW_HARDWARE_APPROVAL`; commit không cấp quyền thử mới.
+
+
+## Phase 2.9 — Phần mềm đã kiểm; chờ phê duyệt hardware mới, 2026-11-05
+
+**Checkpoint cuối helper:** sau sửa đọc đủ pretty JSON qua một file descriptor,
+parser giới hạn 256 KiB và phân loại timeout/ledger đúng mode, mock 132 vòng PASS.
+Live no-USB cuối **132/132 PASS, 0 timeout**: p50 **359 ms**, p95 **506 ms**,
+p99 **714 ms**, max **759 ms**. Lượt 132 PASS trước đó giữ nguyên phía dưới;
+264 mẫu từ hai lượt PASS có max 1476 ms, không tuyên bố đã loại mọi outlier.
+Production overall giữ tối đa 300 giây theo TTL cũ, benchmark tổng 240 giây;
+ACK 1500 ms, heartbeat 2000 ms và native timeout 2000 ms không đổi.
+Host ledger đã có prior audit; helper chưa được chạy production, không có token mới.
+
+
+**Kết quả cuối mới hơn checkpoint bên dưới:** 253 JVM PASS; 29 targeted instrumentation
+methods riêng biệt PASS trên OnePlus trong namespace cách ly. Build debug/release/lint
+PASS, lint 0 errors/10 warnings, minSdk 21/Java 8/release DEX isolation đạt static.
+Harness standalone không còn trong APK debug hoặc release. Không cài lại app production.
+
+Benchmark Android–host **132/132 PASS, 0 timeout, 0 USB calls**: p50 611 ms, p95 705 ms,
+p99 783 ms, max 1476 ms. ACK deadline vẫn 1500 ms, heartbeat 2000 ms;
+max chỉ còn 24 ms nên không bảo đảm hardware sẽ thành công.
+Kênh persistent giảm subprocess, không bỏ fresh nonce/ordinal authorization.
+Chi tiết timeline cũ/mới và giới hạn phép so sánh ở [RESEARCH.md](RESEARCH.md).
+
+Legacy consumed vẫn true, không xóa/reset/rearm. Đã lưu canonical host audit cho
+attempt cũ, không cấp grant/token mới. Cơ chế new approval dùng GUID riêng, ledger
+append/fsync chống reuse và preferences riêng per-attempt; chưa thực thi helper production.
+Đủ 132 API full-length chỉ cho phép observer lease mới; detach không bắt buộc,
+profile 0x82 vẫn chỉ OPERATIONAL_CANDIDATE, không READY.
+
+**Trạng thái: `AWAITING_EXPLICIT_NEW_HARDWARE_APPROVAL`.** Không upload mới,
+không release/reset CPU, vendor/I²C/frontend/TS hoặc recovery nguồn.
+Tuner được liệt kê trên OnePlus/API30; raw default thiếu82 vẫn là recovery lịch sử,
+không phải phép đọc raw mới hoặc firmware thành công ngày 05-11.
+HEAD vẫn `d76bbfb63dd21d55af6ce27fdff0543eb500db72`; mọi sửa đổi chưa commit/push.
+
+### Đề nghị duy nhất còn cần người dùng duyệt — chưa thực thi
+
+Nếu muốn thử tiếp, cần duyệt riêng **một transaction mới** và cập nhật debug APK tại chỗ
+bằng cơ chế giữ app data, kiểm consumed trước/sau; không uninstall/clear hoặc chạy UTP
+vào app production. Preflight lại đúng TCP OnePlus GM1900/API30, boot/attachment epoch,
+owner/pending/cleanup, permission, fingerprint raw mới và ảnh local.
+Nguồn phải được người dùng xác nhận lại: OnePlus USB Host qua OTG, không nguồn phụ/backfeed,
+không app khác giữ tuner. Không suy nguồn hiện tại từ xác nhận ngày 04-11.
+
+- Candidate duy nhất: `TBS_SOURCE_DUAL_RESET`, 8192 byte, SHA-256
+  `b97cf208bb586f706b26aa5450de6bb97375a3e3eabe833cddb0ae3a4f69d0dc`.
+- USB: requestType 0x40, request A0, index 0; 7F92=01, E600=01;
+  128 × 64 byte RAM 0000–1FFF; 7F92=00, E600=00; delay 100 ms.
+  Tổng 132 OUT writes/8196 payload bytes, USB timeout 2000 ms/call.
+- Host reservation dùng GUID mới được cung cấp sau approval, ledger canonical đã có
+  prior consumed audit; reserve trước permit dù UI chưa bấm. Không reuse GUID cũ.
+  Fresh ACK mỗi ordinal trong 1500 ms, heartbeat 2000 ms, session tối đa 5 phút.
+- Stop ngay khi ACK/deadline/heartbeat/identity/foreground/permission/device/plan sai,
+  native âm/ngắn/exception hoặc audit/cleanup lỗi. Chờ call đồng bộ trả về, không force-close,
+  không fallback/retry/corrective release. Sau native write lỗi giữ CONSUMED/UNCERTAIN.
+- Thu timeline request/host/Android/native, số call thực, length trả về, stop/cleanup reason,
+  hash/epoch và descriptor observer nếu đủ writes. Không thu payload/serial/IP/permit.
+- Nếu cần rút/cắm OTG hoặc recovery nguồn thì người dùng phải duyệt và thao tác riêng;
+  một approval upload không cho phép recovery hoặc attempt thứ hai.
+
+Chưa có approval cho đề nghị này; không tự chạy helper với các flags mới.
+
+## Phase 2.9 — Tiếp tục sửa handshake và bảo toàn attempt, 2026-11-05
+
+**Không tạo phase mới.** Baseline thực `d76bbfb63dd21d55af6ce27fdff0543eb500db72`,
+nhánh `chore/modernize-android-build`, working tree sạch đầu phiên, một worktree.
+Đang giữ các thay đổi phần mềm/tests/hồ sơ trong working tree, không commit/push.
+
+Đã sửa phân loại lỗi trước native và native telemetry; IOException tại Port đóng write gate.
+Mỗi runner có run epoch, đếm riêng guard/native/full-length/image bytes, audit intent/kết quả,
+giữ exception chain đã lọc và cleanup provenance. Diagnostic chỉ debug phân biệt
+FX2_DEFAULT, FIRMWARE_UPLOAD_INCOMPLETE và OPERATIONAL_CANDIDATE; không READY.
+Approval tests được tách storage/clock, không xóa attempt production.
+
+**Chứng cứ mới có phạm vi:** full JVM snapshot 249 methods PASS; build debug/release/lint
+exit 0, release DEX isolation/Java8/min21 đạt static. Injected library PortTest lượt đầu
+5 tests PASS trên OnePlus nhưng không chạm USB. App tests dùng applicationId suffix riêng:
+lượt đầu 1/27 FAIL do assertion namespace, tiếp tục sửa trong phase.
+Benchmark Android app_process fake suite 13 PASS; lượt live đầu dừng trước handshake
+vì wrapper/helper chưa đồng bộ parameter. Đây không phải benchmark hoặc firmware PASS.
+Kết quả rerun cuối được bổ sung riêng sau kiểm chứng.
+
+**Phần cứng:** tuner được liệt kê trên đúng OnePlus GM1900/API30/USB Host qua Wireless ADB.
+Production consumed=true đã kiểm chỉ đọc và không đổi sau instrumentation cách ly.
+Raw default thiếu82 là bằng chứng recovery ngày 04-11, chưa đọc raw mới ngày 05-11.
+Không firmware/vendor/I²C/CPU/reset/nguồn/capture mới hoặc tái dùng approval cũ.
+Nguyên nhân sâu ACK24 vẫn UNVERIFIED; đã chứng minh lỗi phân loại/counters/test-store từ source.
+Timeline và readiness side-effect matrix: [RESEARCH.md](RESEARCH.md).
+
+**Gate:** hoàn tất phép đo live không USB và rerun phần mềm trước đề nghị hardware mới.
+Mọi lượt phần cứng sau này cần phê duyệt mới và ledger/token/epoch không tái dùng;
+không clear hoặc rearm consumed. Không chuyển frontend, CXD2878, I²C hoặc TS.
+
+
 ## Checkpoint phát hành Phase 2.9 — 2026-11-04 23:08 +07
 
 - Người dùng yêu cầu commit toàn bộ thay đổi Phase 2.9 và push lên origin của nhánh hiện tại.

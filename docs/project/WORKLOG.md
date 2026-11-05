@@ -1220,3 +1220,163 @@ adb -s <VERIFIED_TCP_SERIAL> shell dumpsys usb
   Hardware UNCERTAIN và guard consumed giữ nguyên; bước tiếp chỉ phân tích offline handshake.
 - Staged check đầu phát hiện CRLF ở bảy file mới; chỉ chuẩn hóa LF, xác minh nội dung chữ không đổi,
   stage lại và staged whitespace check PASS. Không đổi Git config hoặc chạy lại hardware/tests.
+
+## 2026-11-05 — Phase 2.9: sửa guard/native telemetry và kiểm không USB
+
+- **Branch/HEAD trước:** `chore/modernize-android-build`,
+  `d76bbfb63dd21d55af6ce27fdff0543eb500db72`; sạch, stage trống, một worktree.
+  Không commit/push, checkout, fetch/sync hoặc reset/clean/rebase.
+- **Mục tiêu:** tiếp tục cùng Phase 2.9. Đọc lại instructions/skills, ADR-018/019/020,
+  hồ sơ mới nhất, uploader/guard/owner/session/transport/UI và JSON sanitized ngoài Git.
+  Giữ ranh giới hardware: approval cũ CONSUMED, không firmware/vendor/CPU/I²C mới.
+- **Môi trường:** Windows PowerShell; cwd repo hiện hữu. Xác minh wrapper/build/SDK/JDK,
+  không đổi version/dependency. Firmware local đọc lại đúng 8192 byte/hash khóa; không copy.
+  ADB chọn một TCP serial bằng discovery, xác minh OnePlus/GM1900/API30/USB Host.
+  `dumpsys usb` chỉ đọc thấy tuner, không open/claim/transfer. Monitor từng cửa sổ bounded
+  mỗi 10 giây; hết cửa sổ thì re-preflight, không tự reconnect hoặc đổi target.
+- **Phân tích:** duration cũ bao gồm handshake, không phải native-only. Timeline 20–24 ghi
+  UNVERIFIED cho timestamp thiếu, không dựng thời gian giả. Đã chứng minh test clean xóa
+  production store, đếm attempted trước guard, mất typed cause và nhánh IOException không
+  khóa write gate. ACK trễ vẫn là giả thuyết, không gọi USB timeout/STALL hoặc lỗi 7F92.
+- **Mã parent:** thêm debug stop kinds/telemetry/audit AtomicFile theo run epoch, giữ cause chain;
+  sửa Port mọi IOException/RuntimeException/short/negative đều đóng gate, kiểm quyền/device
+  sau ACK. Runner tách native counters khỏi legacy adapter counters, giữ cleanup provenance.
+  Diagnostic UI/report phân biệt FX2_DEFAULT/incomplete/operational candidate, không READY.
+  Giảm report rewrite khi chỉ duration thay đổi; không bỏ audit ở critical boundaries.
+- **Approval/helper:** giao agent triển khai core clock/storage injection, test namespace,
+  per-ordinal nonce/deadline và persistent channel/benchmark. Không giao quyền ADB/USB/deploy
+  production. Agent explore readiness lỗi `400 model not supported`, không có output;
+  parent đối chiếu ba nguồn trực tiếp, ghi matrix request/side effect trong RESEARCH.
+- **Lệnh targeted thực:** `:drivers:testDebugUnitTest --tests '*Tbs5530OneShotBootstrapTest'
+  --tests '*Tbs5530BootstrapTelemetryTest' :app:compileDebugJavaWithJavac
+  :app:compileDebugAndroidTestJavaWithJavac --console plain --no-daemon`, exit 0;
+  17 methods PASS tại snapshot đầu. Không cài APK bởi lệnh compile này.
+- **Core validation:** wrapper `:drivers:testDebugUnitTest :usbxfer:testDebugUnitTest
+  :dvbservice:testDebugUnitTest :drivers:assembleDebugAndroidTest`, exit 0, 1 phút 32 giây,
+  98 tasks. Sau bổ sung provenance test, full regression mới ghi dưới đây.
+- **Instrumentation injected lượt đầu:** kiểm aapt package/targetPackage cùng
+  `info.martinmarinov.drivers.test`, `adb install -r -t` chỉ test APK và `am instrument -w -r
+  -e class ...Tbs5530AndroidBootstrapPortTest ...drivers.test/...AndroidJUnitRunner`.
+  PASS 5 tests/0,074 giây; manager/raw giả, không USB hardware. Production prefs được đọc
+  trước/sau và không đổi, consumed=true. Không dùng connected UTP để tránh reinstall production.
+- **Regression snapshot:** wrapper `:drivers:testDebugUnitTest :usbxfer:testDebugUnitTest
+  :dvbservice:testDebugUnitTest :app:assembleDebug :app:assembleRelease :app:lintDebug
+  :app:assembleDebugAndroidTest :drivers:assembleDebugAndroidTest --console plain --no-daemon`,
+  exit 0/3 phút 25 giây, 387 tasks/63 executed/324 up-to-date. XML 249 JVM
+  (235 drivers +1 usbxfer +13 service), 0 failures/errors/skipped. Lint 0 errors/11 warnings;
+  warning mới SdCardPath của test harness được đưa vào việc sửa, không suppress baseline.
+- **Static snapshot:** 120 TBS classes major52, min21/target37. Debug có uploader/approval,
+  release không có các class mới/harness; không entry `.fw` trong cả hai APK.
+- **Instrumentation app cách ly:** init script ngoài Git đặt build dir riêng và applicationId
+  `.phase29offline`, test target `.phase29offline.test`, kiểm bằng aapt trước install.
+  Chỉ chạy ApprovalTest/ApprovalDeterministicTest, không launch diagnostic hoặc cấp USB permission.
+  Lượt đầu FAIL 1/27 tại assertion isolation ApprovalTest:21; 26 methods PASS.
+  Production prefs không đổi. Tiếp tục sửa assertion đúng namespace, không bỏ safety gate.
+- **Benchmark lần đầu:** Build script javac/D8 PASS, dependency scan 0 USB. Trên OnePlus,
+  `app_process FakeTests` PASS 13; wrapper sau đó lỗi parameter `DeadlineTimestamp` do snapshot
+  helper chưa đồng bộ. Không handshake hardware/permit thật, không USB call.
+  Namespace test có hard stop 60 giây, evidence ngoài app data; không coi lượt này benchmark PASS.
+- **Chứng cứ / quyết định:** bổ sung ADR-020, RESEARCH timeline/readiness, ENVIRONMENT và matrix.
+  Mọi con số ở đây là checkpoint đúng thời điểm; kết quả rerun cuối được bổ sung riêng,
+  không đổi FAIL hoặc PASS lịch sử để làm đẹp.
+
+### Phase 2.9 — Rerun cuối và dừng đúng gate hardware mới
+
+- **Sửa tiếp:** assertion isolation chấp nhận đúng app/test `.phase29offline` trước mọi
+  files/preferences access. Core thêm per-attempt new approval ID/store, giữ legacy true;
+  missing initial grant không poison UI polling, còn sau consume/write thì revoke terminal.
+  Host ledger canonical chống vô tình đổi file, CreateNew enrollment, duplicate GUID và
+  corrupt ledger đều fail-closed. App uninstall không được giả thành vẫn giữ preferences.
+- **Native transition:** bổ sung trường hợp full-length release thứ 132 trùng detach chỉ
+  cho phép delay/đóng lease/quan sát read-only với epoch mới. Short/negative/exception ở
+  release vẫn UNCERTAIN; không corrective writes. Targeted runner tests PASS, exit 0, 58 giây.
+- **JVM có một FAIL mới đã giữ evidence:** lượt sau bổ sung stop-chain test gặp
+  ConcurrencyTest `repeatedDetachAndCancelRacesDoNotLeakOrReplay`, timeout đợi thread vào
+  fake transfer 1 giây tại dòng 73. Không sửa/tăng timeout test cũ. Focused cùng class rerun
+  PASS 10 methods, 55 giây; chưa chứng minh scheduler là nguyên nhân. Full suite cuối PASS.
+- **Lệnh full cuối:** wrapper `:drivers:testDebugUnitTest :usbxfer:testDebugUnitTest
+  :dvbservice:testDebugUnitTest :app:assembleDebug :app:assembleRelease :app:lintDebug
+  --console plain --no-daemon`, exit 0, 2 phút, 326 tasks/47 executed/279 up-to-date.
+  XML **253 methods** = 239 drivers + 1 usbxfer + 13 service, 0 failure/error/skipped.
+- **Tái tạo output app:** DEX scan thấy class harness mồ côi sau chuyển source sang tools.
+  Chỉ chạy `:app:clean :app:assembleDebug :app:assembleRelease :app:lintDebug`, exit 0,
+  3 phút 31 giây/312 tasks; đây là generated build output, không Git clean/SDK/cache/app-data.
+  Scan lại: standalone harness vắng debug/release, approval/uploader chỉ debug;
+  119 TBS classes major 52, min 21/target 37, không `.fw`, lint 0 errors/10 warnings.
+- **Build test tái dùng:** thêm `tools/Build-TBS5530-OfflineTestApp.ps1`, chỉ build/kiểm
+  aapt exact package, không ADB/install. Script chạy PASS, exit 0, 1 phút 23 giây.
+  Init script tạm ngoài Git được xóa sau khi có script tái tạo này.
+- **Instrumentation mới không trộn lịch sử:** app isolated rerun PASS 42 executions trong đó
+  deterministic methods bị chạy cả base và subclass. Để tránh phóng đại, chạy lại chỉ subclass
+  ApprovalTest + BootstrapReportTest: **22 methods riêng biệt PASS**, 3,881 giây.
+  PortTest self-instrumenting library: **7 methods PASS**, 0,086 giây. Tổng targeted mới 29,
+  không gọi là full 56 historical suite. Mọi manager/raw là fake; production prefs so trước/sau
+  không đổi consumed=true. Không cài lại app production hoặc xin USB permission.
+- **Benchmark lượt 60 giây:** 20 fake cases PASS, persistent channel được 76 observations/77 ACK
+  rồi dừng, p50 720/p95 785/p99=max 809 ms. Sau lỗi discovery/identity vẫn online và monitor
+  không drop; không reconnect. Source cũ gán hết tổng deadline thành channel loss;
+  sửa provenance và tách tổng benchmark 240 giây khỏi ACK 1500/heartbeat 2000/native 2000 ms.
+- **Benchmark đủ 132 lần thứ nhất:** Build + Run scripts, cùng core Java guard trên OnePlus,
+  PASS 132/132, timeout 0, USB 0; p50 611/p95 705/p99 783/max 1476 ms, helper 3 ADB subprocess.
+  Không gọi là USB speedup hoặc bảo đảm hardware; margin tail 24 ms được ghi rõ.
+- **Helper review tiếp:** production overall 60 giây không đủ nên giữ lại tối đa 300 giây
+  tương ứng TTL cũ. Parser một dòng không đọc được Activity pretty JSON, đổi sang một file
+  descriptor/builtins đủ LF/CRLF, bound 256 KiB, fail thay truncate. Ledger production/benchmark
+  khác mode và terminal native counters riêng; không ghi raw challenge/install trong audit mới.
+- **Lệnh host mock cuối:** `tools/Test-TBS5530-ApprovalChannel.ps1`, exit 0, PASS parser,
+  wrapper/deadline/ACK/transport, CreateNew/fsync/no-overwrite, duplicate/restart/corrupt,
+  132 builtin JSON/atomic ACK loops, report >64 KiB, reject >256 KiB và pinned identity.
+  Không ADB hoặc production grant từ mock.
+- **Live no-USB mã cuối:** `tools/Build-TBS5530-ApprovalBenchmark.ps1`, rồi
+  `tools/Run-TBS5530-ApprovalBenchmark.ps1 -Serial <discovered TCP serial>
+  -LedgerPath <session local ngoài Git> -RuntimeJar <compiled jar>
+  -ApproveIsolatedAndroidBenchmark`. Javac/D8/USB dependency scan 0, Android fake 20 PASS;
+  **132/132 PASS**, timeout 0, native USB 0, p50 **359**/p95 **506**/p99 **714**/max **759 ms**.
+  Helper 3 ADB subprocess không bao wrapper/monitor. Hai lượt đủ 132 giữ 264 mẫu, p95 694/
+  p99 781/max 1476 ms; không trộn 76 mẫu của lượt FAIL hoặc tuyên bố đã loại mọi outlier.
+  Samples/timeline lưu ledger ngoài Git; namespace test lượt PASS được export rồi xóa.
+- **Durable prior audit:** chạy initializer với `-EnrollPriorConsumedAudit
+  -AcknowledgeUserProvidedPhase29Evidence`; canonical local ledger ghi prior UNCERTAIN,
+  consumed/23 native/1344 image/no CPU release. `hardware_approval=false`,
+  `new_approval_issued=false`, `application_state_modified=false`. Không ADB/permit/token.
+- **Cleanup:** sau giữ evidence, xóa đúng hai namespace benchmark lỗi do phiên tạo và hai
+  package app/test `.phase29offline` mới. Không gỡ `drivers.test` đã có trước.
+  So preferences production sau cleanup vẫn không đổi consumed=true. Không xóa firmware,
+  source, logs evidence hoặc SDK. Không process còn chạy benchmark; monitor chỉ đọc được dừng cuối.
+- **GitNexus:** refresh giữa phiên PASS, 168,4 giây; cuối FAILED FTS `file_fts` inconsistent/COPY.
+  Không drop/recreate/force/repair. Không dùng graph lỗi để xác nhận diff cuối; source/tests/diff
+  là bằng chứng. Editor classpath limitation giữ nguyên, không đổi cấu hình IDE.
+- **Memory:** đã thực hiện writeback bài học đã kiểm; Gateway success nhưng response không
+  chứng minh remote-vs-local fallback, không khẳng định lưu bền liên phiên.
+- **Kết thúc:** HEAD không đổi `d76bbfb63dd21d55af6ce27fdff0543eb500db72`, stage trống,
+  thay đổi chỉ code/tests/tools/sáu hồ sơ, không reference/toolchain/instructions.
+  `AWAITING_EXPLICIT_NEW_HARDWARE_APPROVAL`; đề nghị duy nhất trong STATUS gồm deploy giữ
+  data/preflight mới và một dual-reset transaction, không retry/fallback/recovery ngầm.
+  Không có hardware attempt mới, endpoint thật mới hoặc firmware/READY/frontend/TS PASS.
+- **Kiểm chính xác mã cuối:** sau bọc mọi nhánh releaseUpload cleanup thành typed
+  CLEANUP_FAILED và thêm assertions, chạy lại full JVM/debug/release/lint cùng command trên:
+  exit 0, 2 phút 24 giây, 326 tasks/65 executed/261 up-to-date; 253 JVM vẫn 0 failure/error/skipped,
+  lint 0 errors/10 warnings. Không đổi counters hoặc kết quả instrumentation để làm đẹp.
+- **Preflight cuối 12:26 +07:** OnePlus GM1900/API30/USB Host còn online đúng TCP target,
+  production consumed=true; report hiện có vẫn RAW_DESCRIPTOR_INSPECTION/READ_AND_CLOSED,
+  pending=false/cleanup=false và timestamp recovery cũ. Không có raw descriptors mới.
+  Không còn benchmark process; monitor đã kết thúc đúng cửa sổ, không phát hiện mất target.
+  `git diff --check` PASS, stage trống, HEAD giữ nguyên.
+
+## 2026-11-05 — Commit và push sửa Phase 2.9 theo yêu cầu
+
+- Người dùng yêu cầu commit toàn bộ thay đổi hiện có và push lên origin nhánh hiện tại.
+  Preflight: `chore/modernize-android-build`, HEAD và live origin cùng
+  `d76bbfb63dd21d55af6ce27fdff0543eb500db72`, stage trống, một worktree, phạm vi 34 file.
+- So SHA-256 của 28 file nguồn/tools với fingerprint kiểm cuối: không thay đổi.
+  `git diff --check` PASS; không firmware/APK/ledger/raw logs trong phạm vi commit.
+  Chỉ bổ sung checkpoint Git, không sửa source/tests hoặc reference checkouts.
+- Message: `fix: harden Phase 2.9 bootstrap authorization and telemetry`, kèm
+  Co-authored-by trailer. Kết quả commit/push xác minh từ Git sau thao tác.
+- Không chạy lại build/instrumentation, không thao tác Android/USB hoặc cấp approval.
+  Bằng chứng phần mềm gần nhất vẫn 253 JVM/29 targeted instrumentation và benchmark
+  132/132 không USB; không đổi chúng thành kết quả mới của tác vụ Git.
+  Hardware vẫn `AWAITING_EXPLICIT_NEW_HARDWARE_APPROVAL`.
+- Staged whitespace check phát hiện CRLF ở 16 file mới; chỉ chuẩn hóa LF và kiểm
+  nội dung chữ không đổi, không sửa Git config hoặc logic đã test. Stage lại và kiểm
+  whitespace trước commit; không coi đây là lần chạy tests mới.

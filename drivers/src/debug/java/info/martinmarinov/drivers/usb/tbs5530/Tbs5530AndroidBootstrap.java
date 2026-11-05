@@ -36,13 +36,20 @@ public final class Tbs5530AndroidBootstrap implements AutoCloseable {
                 Tbs5530FirmwareValidation.Format.RAW_LINEAR);
         Tbs5530Fx2ProtocolPlan plan = Tbs5530Fx2ProtocolPlan.describe(locked,
                 Tbs5530Fx2ProtocolPlan.Id.TBS_SOURCE_DUAL_RESET.name());
+        Tbs5530BootstrapTelemetry telemetry = new Tbs5530BootstrapTelemetry(snapshot -> audit(context, snapshot),
+                android.os.SystemClock::elapsedRealtimeNanos, "ANDROID_ELAPSED_REALTIME_NS", authorization.runEpoch());
         port = new Port(context, plan, new Tbs5530OneShotBootstrap.Guard() {
             public void requireCurrent() throws IOException { requireAuthorization(); }
             public void requireWrite(int ordinal) throws IOException {
                 requireAuthorization(); authorization.requireWrite(ordinal); requireAuthorization();
             }
+            public void requireNative(int ordinal) throws IOException {
+                requireAuthorization(); authorization.requireNative(ordinal); requireAuthorization();
+            }
         });
+        port.telemetry = telemetry;
         binding = new Tbs5530UsbBinding(session, port, runtime, runtime, error -> {
+            revocation.compareAndSet(null, error);
             revoked.set(true);
         }, 30000, 10000);
         runner = new Tbs5530OneShotBootstrap(session, binding, port, device, plan,
@@ -50,11 +57,40 @@ public final class Tbs5530AndroidBootstrap implements AutoCloseable {
                     try { Thread.sleep(millis); }
                     catch (InterruptedException error) { Thread.currentThread().interrupt(); throw new IOException("Delay interrupted"); }
                 }, binding::bootstrapRawDescriptors);
+        runner.telemetry(telemetry);
     }
 
+    private static void audit(Context context, Tbs5530BootstrapTelemetry.Snapshot s) throws IOException {
+        android.util.AtomicFile file = new android.util.AtomicFile(new java.io.File(context.getFilesDir(),
+                "phase29-native-audit-" + s.runEpoch + ".json"));
+        java.io.FileOutputStream output = null;
+        try {
+            org.json.JSONObject json = new org.json.JSONObject();
+            json.put("run_epoch", s.runEpoch); json.put("monotonic_timebase", s.timebase);
+            json.put("planned_ordinal", s.plannedOrdinal);
+            json.put("guard_requested", s.guardRequested); json.put("guard_accepted", s.guardAccepted);
+            json.put("native_call_started", s.nativeCallStarted); json.put("native_call_completed", s.nativeCallCompleted);
+            json.put("full_length_completed", s.fullLengthCompleted); json.put("image_bytes_full_length", s.imageBytesFullLength);
+            json.put("payload_bytes_full_length", s.payloadBytesFullLength);
+            json.put("events", new org.json.JSONArray(s.events));
+            output = file.startWrite();
+            output.write(json.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            file.finishWrite(output);
+        } catch (IOException | org.json.JSONException | RuntimeException error) {
+            if (output != null) file.failWrite(output);
+            throw new IOException("Native audit unavailable", error);
+        }
+    }
+
+    private final java.util.concurrent.atomic.AtomicReference<Throwable> revocation = new java.util.concurrent.atomic.AtomicReference<>();
     private void requireAuthorization() throws IOException {
-        if (revoked.get() || android.os.SystemClock.elapsedRealtime() - preparedAt > 300000) {
-            throw new IOException("Authorization revoked or expired");
+        if (revoked.get()) {
+            Throwable reason = revocation.get();
+            if (reason instanceof Tbs5530BootstrapStop) throw (Tbs5530BootstrapStop) reason;
+            throw new Tbs5530BootstrapStop(Tbs5530BootstrapStop.Kind.AUTHORIZATION_REVOKED, "Authorization revoked", reason);
+        }
+        if (android.os.SystemClock.elapsedRealtime() - preparedAt > 300000) {
+            throw new Tbs5530BootstrapStop(Tbs5530BootstrapStop.Kind.PERMIT_EXPIRED, "Prepared session expired");
         }
         authorization.requireCurrent();
     }
@@ -74,7 +110,9 @@ public final class Tbs5530AndroidBootstrap implements AutoCloseable {
     private void watch() {
         watchdog = runtime.schedule(() -> {
             try { requireAuthorization(); }
-            catch (IOException | RuntimeException error) { revoked.set(true); binding.cancel(); }
+            catch (IOException | RuntimeException error) {
+                revocation.compareAndSet(null, error); revoked.set(true); binding.cancel();
+            }
             if (!revoked.get() && runner.snapshot().pending) watch();
         }, 250);
     }
@@ -104,24 +142,34 @@ public final class Tbs5530AndroidBootstrap implements AutoCloseable {
             finish();
         } catch (IOException | RuntimeException error) { fail(error); }
     }
-    private void fail(Throwable error) { runner.stop(error); finish(); }
+    private void fail(Throwable error) {
+        Throwable reason = revocation.get();
+        if (reason != null && reason != error) runner.revoked(reason);
+        runner.stop(error); finish();
+    }
     private void finish() {
         port.finishWrites();
         if (watchdog != null) watchdog.cancel();
         try { binding.close(); session.drainCleanup(); }
-        catch (IOException | RuntimeException error) { runner.stop(error); }
-        if (session.getCleanupFailure() != null) runner.stop(session.getCleanupFailure());
+        catch (IOException | RuntimeException error) { runner.stop(new Tbs5530BootstrapStop(
+                Tbs5530BootstrapStop.Kind.CLEANUP_FAILED, "Binding cleanup failed", error)); }
+        if (session.getCleanupFailure() != null) runner.stop(new Tbs5530BootstrapStop(
+                Tbs5530BootstrapStop.Kind.CLEANUP_FAILED, "Deferred cleanup failed", session.getCleanupFailure()));
         runner.finished();
     }
     public Tbs5530OneShotBootstrap.Snapshot snapshot() { return runner.snapshot(); }
     public long attachmentEvents() { return port.events.get(); }
     public List<String> apiResults() { return port.results(); }
     public boolean cleanupPending() { return binding.isPending() || session.isCleanupPending() || port.open.get(); }
-    @Override public void close() {
+    @Override public void close() { revoke(Tbs5530BootstrapStop.Kind.USER_CANCELLED); }
+    public void revoke(Tbs5530BootstrapStop.Kind kind) {
         if (started.get() && !runner.snapshot().pending || !closing.compareAndSet(false, true)) return;
+        Tbs5530BootstrapStop reason = new Tbs5530BootstrapStop(kind, "Debug owner revoked");
+        revocation.compareAndSet(null, reason);
         revoked.set(true);
+        port.finishWrites();
         binding.cancel();
-        runtime.execute(() -> fail(new IOException("UI owner closed")));
+        runtime.execute(() -> fail(reason));
     }
 
     static final class Port implements Tbs5530UsbBinding.Facade {
@@ -134,6 +182,7 @@ public final class Tbs5530AndroidBootstrap implements AutoCloseable {
         private final List<String> results = new ArrayList<>();
         private volatile boolean listening;
         private volatile int ordinal;
+        private Tbs5530BootstrapTelemetry telemetry = new Tbs5530BootstrapTelemetry();
         Port(Context context, Tbs5530Fx2ProtocolPlan plan, Tbs5530OneShotBootstrap.Guard guard) {
             this(context, new Tbs5530AndroidUsbFacade.AndroidManager(context.getApplicationContext()), plan, guard);
         }
@@ -143,10 +192,13 @@ public final class Tbs5530AndroidBootstrap implements AutoCloseable {
             this.plan = plan; this.guard = guard;
         }
         void requireUploadEpoch() throws IOException {
-            if (!listening || !writesClosed.get() && ordinal < 132 && events.get() != 0) throw new IOException("Observer/attachment changed");
+            if (!listening || !writesClosed.get() && ordinal < 132 && events.get() != 0) {
+                throw new Tbs5530BootstrapStop(Tbs5530BootstrapStop.Kind.USB_DETACHED, "Observer/attachment changed");
+            }
         }
         void finishWrites() { writesClosed.set(true); }
         synchronized List<String> results() { return new ArrayList<>(results); }
+        Tbs5530BootstrapTelemetry.Snapshot boundaries() { return telemetry.snapshot(); }
         public List<Tbs5530UsbBinding.Device> devices() throws IOException { return metadata.devices(); }
         public boolean hasPermission(Tbs5530UsbBinding.Device device) throws IOException { return metadata.hasPermission(device); }
         public Tbs5530UsbBinding.Registration requestPermission(Tbs5530UsbBinding.Device d, String c,
@@ -176,13 +228,21 @@ public final class Tbs5530AndroidBootstrap implements AutoCloseable {
                 if (count != 1 || !devices.contains(expected) || !manager.hasPermission(expected)) throw new IOException("Attachment mismatch");
                 raw = manager.open(expected);
                 if (raw == null) throw new IOException("USB open failed");
-                return connection(raw, Thread.currentThread());
+                return connection(raw, Thread.currentThread(), expected);
             } catch (IOException | RuntimeException error) {
                 if (raw != null) raw.close();
                 open.set(false); throw error;
             }
         }
-        private Tbs5530LifecycleCoordinator.Connection connection(Tbs5530AndroidUsbFacade.RawConnection raw, Thread owner) {
+        private void requireDevice(Tbs5530UsbBinding.Device expected) throws IOException {
+            List<Tbs5530UsbBinding.Device> devices = manager.devices();
+            int count = 0;
+            for (Tbs5530UsbBinding.Device device : devices) if (device.vendorId == 0x734c && device.productId == 0x5530) count++;
+            if (count != 1 || !devices.contains(expected) || !manager.hasPermission(expected)) throw new Tbs5530BootstrapStop(
+                    Tbs5530BootstrapStop.Kind.USB_DETACHED, "Live device or permission changed");
+        }
+        private Tbs5530LifecycleCoordinator.Connection connection(Tbs5530AndroidUsbFacade.RawConnection raw, Thread owner,
+                                                                 Tbs5530UsbBinding.Device expected) {
             return new Tbs5530LifecycleCoordinator.Connection() {
                 private boolean closed;
                 public void requireControlWorker() throws IOException {
@@ -191,29 +251,56 @@ public final class Tbs5530AndroidBootstrap implements AutoCloseable {
                 public byte[] rawDescriptors() throws IOException { requireControlWorker(); return raw.rawDescriptors(); }
                 public int controlTransfer(int type, int request, int value, int index, byte[] bytes,
                                            int offset, int length, int timeout) throws IOException {
-                    requireControlWorker(); guard.requireCurrent(); requireUploadEpoch();
-                    if (writesClosed.get() || ordinal >= 132) throw new IOException("No further writes authorized");
-                    Tbs5530FirmwarePlan.Step step = plan.getSteps().get(ordinal);
-                    if (type != 0x40 || request != 0xa0 || index != 0 || value != step.getValue() || offset != 0
-                            || length != step.getPayload().length || timeout != 2000 || !Arrays.equals(bytes, step.getPayload())) {
-                        throw new IOException("Write differs from locked plan");
-                    }
-                    guard.requireWrite(ordinal + 1);
-                    requireUploadEpoch();
-                    int current = ++ordinal;
+                    requireControlWorker();
+                    int current = ordinal + 1;
+                    boolean nativeStarted = false, nativeEnded = false;
                     try {
-                        long eventEpoch = events.get();
-                        int n = raw.controlTransfer(type, request, value, index, bytes, offset, length, timeout);
-                        synchronized (Port.this) { results.add("ordinal=" + current + " returned=" + n + " requested=" + length); }
-                        if (n != length || events.get() != eventEpoch) {
-                            writesClosed.set(true);
-                            if (events.get() != eventEpoch) throw new IOException("Attachment changed in flight");
+                        guard.requireCurrent(); requireUploadEpoch();
+                        if (writesClosed.get() || ordinal >= 132) throw new Tbs5530BootstrapStop(
+                                Tbs5530BootstrapStop.Kind.AUTHORIZATION_REVOKED, "No further writes authorized");
+                        Tbs5530FirmwarePlan.Step step = plan.getSteps().get(ordinal);
+                        if (type != 0x40 || request != 0xa0 || index != 0 || value != step.getValue() || offset != 0
+                                || length != step.getPayload().length || timeout != 2000 || !Arrays.equals(bytes, step.getPayload())) {
+                            throw new Tbs5530BootstrapStop(Tbs5530BootstrapStop.Kind.HASH_PLAN_MISMATCH, "Write differs from locked plan");
                         }
+                        telemetry.guardRequested(current);
+                        guard.requireWrite(current);
+                        telemetry.guardAccepted(current);
+                        telemetry.nativeIntent(current);
+                        requireDevice(expected);
+                        guard.requireNative(current); requireUploadEpoch();
+                        if (writesClosed.get()) throw new Tbs5530BootstrapStop(
+                                Tbs5530BootstrapStop.Kind.AUTHORIZATION_REVOKED, "Write gate closed during acknowledgment");
+                        long eventEpoch = events.get();
+                        ordinal = current;
+                        telemetry.nativeStarted(current); nativeStarted = true;
+                        int n = raw.controlTransfer(type, request, value, index, bytes, offset, length, timeout);
+                        nativeEnded = true;
+                        synchronized (Port.this) { results.add("ordinal=" + current + " returned=" + n + " requested=" + length); }
+                        Tbs5530BootstrapStop resultFailure = n != length ? new Tbs5530BootstrapStop(n < 0
+                                ? Tbs5530BootstrapStop.Kind.NATIVE_NEGATIVE : Tbs5530BootstrapStop.Kind.NATIVE_SHORT,
+                                "Native result was not full length") : events.get() != eventEpoch
+                                ? new Tbs5530BootstrapStop(Tbs5530BootstrapStop.Kind.USB_DETACHED, "Attachment changed in flight") : null;
+                        try { telemetry.nativeReturned(current, value, length, n); }
+                        catch (IOException audit) {
+                            if (resultFailure == null) throw audit;
+                            resultFailure.addSuppressed(audit);
+                        }
+                        if (resultFailure != null) throw resultFailure;
                         return n;
-                    } catch (RuntimeException error) {
+                    } catch (IOException | RuntimeException error) {
                         writesClosed.set(true);
-                        synchronized (Port.this) { results.add("ordinal=" + current + " returned=EXCEPTION"); }
-                        throw error;
+                        if (nativeStarted && !nativeEnded) {
+                            try { telemetry.nativeThrew(current, error); }
+                            catch (IOException audit) { error.addSuppressed(audit); }
+                            synchronized (Port.this) { results.add("ordinal=" + current + " returned=EXCEPTION"); }
+                        }
+                        if (error instanceof Tbs5530BootstrapStop) throw error;
+                        if (!nativeStarted) throw new Tbs5530BootstrapStop(
+                                Tbs5530BootstrapStop.Kind.AUTHORIZATION_REVOKED, "Write blocked before native call", error);
+                        if (error instanceof IOException) throw new Tbs5530BootstrapStop(
+                                Tbs5530BootstrapStop.Kind.JAVA_IO_EXCEPTION, "Native call threw IOException", error);
+                        throw new Tbs5530BootstrapStop(Tbs5530BootstrapStop.Kind.NATIVE_EXCEPTION, "Native call threw RuntimeException", error);
                     }
                 }
                 public void claim(Tbs5530LifecycleCoordinator.Claim receipt) throws IOException { throw new IOException("EP0 must not claim"); }

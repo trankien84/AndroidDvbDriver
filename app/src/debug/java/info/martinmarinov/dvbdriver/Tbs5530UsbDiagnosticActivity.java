@@ -23,6 +23,7 @@ public final class Tbs5530UsbDiagnosticActivity extends Activity {
     private TextView report;
     private Button request, refresh, permissionOnly, raw;
     private boolean reportWriteFailed;
+    private String lastBootstrapExport;
     private Spinner selection;
     private Button selectFirmware, upload;
     private android.widget.EditText source, entry;
@@ -126,9 +127,19 @@ public final class Tbs5530UsbDiagnosticActivity extends Activity {
         exportReport();
     }
 
+    static String bootstrapRevision(org.json.JSONObject json) {
+        if (!"DEBUG_ONE_SHOT_FX2".equals(json.optString("operation"))) return null;
+        StringBuilder key = new StringBuilder();
+        for (String field : new String[]{"run_epoch", "state", "planned_ordinal", "guard_requested", "guard_accepted",
+                "native_call_started", "native_call_completed", "full_length_completed", "image_bytes_full_length",
+                "pending", "cleanup_pending", "failure", "cleanup_failure"}) key.append('|').append(json.opt(field));
+        return key.toString();
+    }
     private void exportReport() {
         try {
             org.json.JSONObject json = controller.structuredReport();
+            String bootstrapRevision = bootstrapRevision(json);
+            if (!reportWriteFailed && bootstrapRevision != null && bootstrapRevision.equals(lastBootstrapExport)) return;
             json.put("git_sha", BuildConfig.SOURCE_GIT_SHA);
             json.put("source_state", "BUILD_WORKTREE_NOT_ATTESTED_BY_SHA");
             json.put("model",android.os.Build.MODEL);json.put("manufacturer",android.os.Build.MANUFACTURER);
@@ -145,6 +156,7 @@ public final class Tbs5530UsbDiagnosticActivity extends Activity {
                 throw error;
             }
             reportWriteFailed = false;
+            lastBootstrapExport = bootstrapRevision;
         } catch (java.io.IOException | org.json.JSONException | RuntimeException error) {
             if (!reportWriteFailed) android.util.Log.w("Tbs5530Diagnostic", "Private report export failed: " + error.getClass().getSimpleName());
             reportWriteFailed = true;

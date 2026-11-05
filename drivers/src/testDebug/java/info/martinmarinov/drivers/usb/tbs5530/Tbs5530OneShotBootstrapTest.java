@@ -22,7 +22,7 @@ public class Tbs5530OneShotBootstrapTest {
         Tbs5530UsbBinding.Events events;
         boolean permission = true, present = true, approved = true, duplicate, consumed, closeFails, operational;
         boolean wrongIdentity, malformed;
-        int writes, opens, closes, reads, failAt = -1;
+        int writes, opens, closes, reads, failAt = -1, denyBeforeAt = -1;
         String failure = "short";
         Runnable during = () -> { };
         Rig() throws Exception {
@@ -58,19 +58,30 @@ public class Tbs5530OneShotBootstrapTest {
         }
         public int controlTransfer(int type, int request, int value, int index, byte[] data,
                                    int offset, int length, int timeout) throws IOException {
+            Tbs5530BootstrapTelemetry telemetry = runner.telemetry();
+            telemetry.guardRequested(writes + 1);
+            if (writes == denyBeforeAt) throw new Tbs5530BootstrapStop(
+                    Tbs5530BootstrapStop.Kind.PRE_NATIVE_ACK_TIMEOUT, "Synthetic delayed acknowledgment");
             int ordinal = writes++;
             Tbs5530FirmwarePlan.Step expected = plan.getSteps().get(ordinal);
             assertTrue(consumed); assertEquals(0, closes);
             assertEquals(0x40, type); assertEquals(0xa0, request); assertEquals(0, index); assertEquals(0, offset);
             assertEquals(expected.getValue(), value); assertEquals(2000, timeout); assertArrayEquals(expected.getPayload(), data);
+            telemetry.guardAccepted(ordinal + 1);
+            telemetry.nativeIntent(ordinal + 1); telemetry.nativeStarted(ordinal + 1);
             calls.add("write"); during.run();
+            int result = length;
             if (ordinal == failAt) {
-                if (failure.equals("negative")) return -1;
-                if (failure.equals("timeout")) throw new SocketTimeoutException();
-                if (failure.equals("exception")) throw new IllegalStateException();
-                return length - 1;
+                if (failure.equals("timeout") || failure.equals("exception")) {
+                    Exception error = failure.equals("timeout") ? new SocketTimeoutException() : new IllegalStateException();
+                    telemetry.nativeThrew(ordinal + 1, error);
+                    if (error instanceof IOException) throw (IOException) error;
+                    throw (RuntimeException) error;
+                }
+                result = failure.equals("negative") ? -1 : length - 1;
             }
-            return length;
+            telemetry.nativeReturned(ordinal + 1, value, length, result);
+            return result;
         }
         void load() throws IOException { runner.acquire(); runner.execute(); }
         void failLoad() throws IOException {
@@ -133,6 +144,27 @@ public class Tbs5530OneShotBootstrapTest {
             assertEquals(Tbs5530OneShotBootstrap.State.UNCERTAIN, r.runner.snapshot().state);
         }
     }
+    @Test public void detachOnFullLengthFinalReleaseCanOnlyProceedToFreshReadOnlyObservation() throws Exception {
+        Rig r = new Rig();
+        r.during = () -> { if (r.writes == 132) r.events.detached(r.device); };
+        r.load(); assertEquals(132, r.writes);
+        assertEquals(132, r.runner.snapshot().boundaries.fullLengthCompleted);
+        assertEquals(Tbs5530OneShotBootstrap.State.TRANSITIONING, r.runner.snapshot().state);
+        r.runner.releaseUpload(); r.operational = true;
+        long old = r.runner.snapshot().epoch;
+        r.runner.acquireObservation(); r.runner.observe(); r.runner.releaseUpload();
+        assertTrue(r.runner.snapshot().epoch > old);
+        assertEquals(Tbs5530OneShotBootstrap.State.OPERATIONAL_CANDIDATE, r.runner.snapshot().state);
+        assertEquals(132, r.writes); assertEquals(2, r.opens); assertEquals(2, r.closes);
+        assertNotEquals(Tbs5530Session.State.READY, r.session.getState());
+    }
+    @Test public void shortFinalReleaseWithDetachCannotBecomeTransitionSuccess() throws Exception {
+        Rig r = new Rig(); r.failAt = 131; r.failure = "short";
+        r.during = () -> { if (r.writes == 132) r.events.detached(r.device); };
+        r.failLoad(); assertEquals(131, r.runner.snapshot().boundaries.fullLengthCompleted);
+        assertEquals(Tbs5530OneShotBootstrap.State.UNCERTAIN, r.runner.snapshot().state);
+        assertEquals(132, r.writes); assertEquals(1, r.opens);
+    }
     @Test public void detachAfterReleaseCannotAuthorizeAnotherUpload() throws Exception {
         Rig r = new Rig(); r.load(); r.runner.releaseUpload(); r.present = false;
         try { r.runner.acquireObservation(); fail(); } catch (IOException expected) { r.runner.stop(expected); }
@@ -165,6 +197,8 @@ public class Tbs5530OneShotBootstrapTest {
         Rig r = new Rig(); r.load(); r.closeFails = true;
         try { r.runner.releaseUpload(); fail(); } catch (IOException expected) { r.runner.stop(expected); }
         assertEquals(Tbs5530OneShotBootstrap.State.UNCERTAIN, r.runner.snapshot().state);
+        assertEquals("CLEANUP_FAILED", r.runner.snapshot().failure);
+        assertEquals("CLEANUP_FAILED", r.runner.snapshot().cleanupFailure);
         assertEquals(132, r.writes);
     }
     @Test public void comparatorAlternativeCannotBecomeHardwarePlan() throws Exception {
@@ -172,6 +206,49 @@ public class Tbs5530OneShotBootstrapTest {
         try { new Tbs5530OneShotBootstrap(r.session, r.binding, r, r.device,
                 Tbs5530Fx2ProtocolPlan.describe(r.plan, "DOCUMENTED_FX2_E600_ONLY"), () -> { }, () -> { },
                 ms -> { }, r.binding::bootstrapRawDescriptors); fail(); } catch (IllegalArgumentException expected) { }
+    }
+    @Test public void preNativeAckFailureAtEveryOrdinalNeverInventsNativeCall() throws Exception {
+        for (int ordinal = 1; ordinal <= 132; ordinal++) {
+            Rig r = new Rig(); r.denyBeforeAt = ordinal - 1; r.failLoad();
+            Tbs5530OneShotBootstrap.Snapshot s = r.runner.snapshot();
+            assertEquals(ordinal, s.attempted); assertEquals(ordinal - 1, s.completed);
+            assertEquals(ordinal, s.boundaries.guardRequested);
+            assertEquals(ordinal - 1, s.boundaries.guardAccepted);
+            assertEquals(ordinal - 1, s.boundaries.nativeCallStarted);
+            assertEquals(ordinal - 1, s.boundaries.nativeCallCompleted);
+            assertEquals("PRE_NATIVE_ACK_TIMEOUT", s.failure);
+            assertFalse(s.transfers.toString().contains("FAILED_OR_UNKNOWN"));
+            assertEquals(ordinal == 1 ? Tbs5530OneShotBootstrap.State.FAULTED
+                    : Tbs5530OneShotBootstrap.State.UNCERTAIN, s.state);
+            assertTrue(r.consumed); assertEquals(1, r.closes);
+        }
+    }
+    @Test public void realNativeBoundariesRemainVisibleWhenOwnershipIsLostAfterReturn() throws Exception {
+        Rig r = new Rig(); r.during = () -> r.binding.cancel(); r.failLoad();
+        Tbs5530OneShotBootstrap.Snapshot s = r.runner.snapshot();
+        assertEquals(1, s.boundaries.nativeCallStarted); assertEquals(1, s.boundaries.nativeCallCompleted);
+        assertEquals(1, s.boundaries.fullLengthCompleted); assertEquals(0, s.completed);
+        assertEquals(1, s.boundaries.payloadBytesFullLength);
+        assertEquals(Tbs5530OneShotBootstrap.State.UNCERTAIN, s.state);
+    }
+    @Test public void liveRevocationReasonSurvivesGenericSessionCancellation() throws Exception {
+        Rig r = new Rig(); r.during = () -> r.binding.cancel(); r.failLoad();
+        r.runner.revoked(new Tbs5530BootstrapStop(Tbs5530BootstrapStop.Kind.FOREGROUND_LOST, "Synthetic foreground"));
+        assertEquals("FOREGROUND_LOST", r.runner.snapshot().failure);
+        assertEquals(1, r.runner.snapshot().boundaries.nativeCallCompleted);
+        assertNotEquals("UNKNOWN_IN_FLIGHT", r.runner.snapshot().failure);
+    }
+    @Test public void typedCauseSurvivesWrapperAndCleanupCannotOverwriteFirstStop() throws Exception {
+        Rig r = new Rig(); r.denyBeforeAt = 23; r.failLoad();
+        Throwable original = r.runner.stopCause();
+        assertNotNull(original); assertEquals(Tbs5530BootstrapStop.Kind.PRE_NATIVE_ACK_TIMEOUT,
+                Tbs5530BootstrapStop.kindOf(original));
+        r.runner.stop(new Tbs5530BootstrapStop(Tbs5530BootstrapStop.Kind.CLEANUP_FAILED,
+                "Synthetic cleanup", new IOException("Do not export private detail")));
+        assertSame(original, r.runner.stopCause());
+        assertEquals("PRE_NATIVE_ACK_TIMEOUT", r.runner.snapshot().failure);
+        assertEquals("CLEANUP_FAILED", r.runner.snapshot().cleanupFailure);
+        assertFalse(r.runner.snapshot().transfers.toString().contains("private detail"));
     }
     @Test public void boundedFileRejectsMissingTruncatedExtraPaddingHashAndMetadata() throws Exception {
         for (int size : new int[]{0,8191,8192,8193}) {
