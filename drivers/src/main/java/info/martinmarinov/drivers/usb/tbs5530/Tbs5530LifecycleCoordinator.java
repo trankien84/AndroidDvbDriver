@@ -84,6 +84,9 @@ public final class Tbs5530LifecycleCoordinator implements AutoCloseable {
         default byte[] rawDescriptors() throws IOException {
             throw new IOException("Raw descriptor observation is unavailable");
         }
+        default int bulkTransfer(byte[] buffer, int length, int timeoutMillis) throws IOException {
+            throw new IOException("Bulk transfer is unavailable");
+        }
         default void requireControlWorker() throws IOException { }
         default int controlTransfer(int requestType, int request, int value, int index,
                                     byte[] buffer, int offset, int length, int timeoutMillis) throws IOException {
@@ -259,6 +262,16 @@ public final class Tbs5530LifecycleCoordinator implements AutoCloseable {
         Tbs5530Descriptors.Endpoint metadata = lease.connection.streamEndpoint();
         synchronized (session) { session.requireOwned(request.token, lease); }
         return metadata;
+    }
+
+    public Tbs5530BulkTransport bulkIo(Request request) throws IOException {
+        synchronized (session) {
+            if (!matches(request) || owned == null) throw new IOException("No current bulk owner");
+            session.requireOwned(request.token, owned);
+            Lease lease = owned;
+            return new Tbs5530BulkTransport(session, request.token, lease, lease.connection::requireControlWorker,
+                    lease.connection::bulkTransfer);
+        }
     }
 
     public boolean permissionTimedOut(Request request) throws IOException {

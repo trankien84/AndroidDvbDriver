@@ -176,12 +176,18 @@ public class Tbs5530UsbBindingTest {
             f.usb.grant(); f.worker.drain(); assertEquals(1, f.usb.opens);
         }
     }
-    @Test public void lateDetachWithLiveReusedDeviceDoesNotCloseCurrentConnection() throws Exception {
+    @Test public void deliveredDetachInvalidatesEvenWhenEnumerationReusesEveryDeviceField() throws Exception {
         try (Fixture f = new Fixture()) {
             f.request(); f.usb.grant(); f.worker.drain();
-            f.usb.events.detached(A); f.clock.expire(0); f.worker.drain();
-            assertEquals(Collections.singletonList("claim"), f.usb.connections.get(0).calls);
+            Tbs5530ControlIo stale = f.binding.controlIo();
+            f.usb.events.detached(A);
+            assertEquals(Tbs5530Session.State.DISCONNECTED, f.session.getState());
+            assertThrows(IOException.class, () -> stale.controlTransfer(0x40, 0x8a, 0, 0, new byte[]{10,0}, 0, 2, 2000));
+            f.worker.drain();
+            assertEquals(Arrays.asList("claim", "release", "close"), f.usb.connections.get(0).calls);
+            f.binding.start(A); f.worker.drain();
             assertEquals(Tbs5530Session.State.CONNECTED, f.session.getState());
+            assertThrows(IOException.class, () -> stale.controlTransfer(0x40, 0x8a, 0, 0, new byte[]{10,0}, 0, 2, 2000));
         }
     }
     @Test public void newAttachAtSelectedPathInvalidatesInsteadOfAssumingSameSession() throws Exception {

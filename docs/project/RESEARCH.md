@@ -1,5 +1,112 @@
 # Research log (append-only)
 
+## 2026-11-06 17:57 +07 — Ảnh Công báo xác nhận trực tiếp K36 = 594 MHz, kênh rộng 8 MHz
+
+Người dùng cung cấp bốn ảnh chụp các trang Thông tư 27/2026/TT-BKHCN, Công báo số 333 ngày 16/06/2026. Đây là nội dung ảnh do người dùng gửi, không phải tải DOCX đã thành công; lần tải browser bị timeout bên dưới vẫn giữ nguyên lịch sử. Không sửa hoặc chép ảnh vào Git.
+
+| Nội dung đã đọc trên ảnh | Kết luận cho ứng viên K36 |
+| --- | --- |
+| Điều 3 khoản 1, dòng kênh 36: giới hạn 590–598 MHz, trung tâm 594 MHz | Tần số trung tâm `594000000 Hz` được xác nhận từ bảng; độ rộng kênh là `598 − 590 = 8 MHz`, tương ứng cấu hình bandwidth `8000000 Hz` |
+| Điều 2 khoản 7: Gia Lai thuộc khu vực Nam Trung Bộ và Tây Nguyên | Phù hợp nhóm khu vực của ứng viên trạm Vũng Chua; không xác nhận giấy phép hoặc trạng thái phát của một trạm cụ thể |
+| Điều 3 khoản 2 điểm d: kênh 36 và 37 quy hoạch cho khu vực Nam Trung Bộ và Tây Nguyên | K36 phù hợp quy hoạch khu vực; không dùng quy hoạch để tự mở rộng sang K37 hoặc scan tần số khác |
+| Điều 4 khoản 1: hiệu lực 16/07/2026 | Khớp metadata Công báo đã đọc trên trang chính thức |
+
+Các ảnh không nêu PLP ID của multiplex SDTV hoặc chế độ auto/no-filter của CXD2878. Tần số và độ rộng kênh đã đủ bằng chứng tài liệu; blocker còn lại vẫn là PLP/cơ chế chọn PLP đã kiểm, không phải thiếu tần số hoặc chưa gắn anten. Không đổi manual PLP thành 0/255, không gửi tune/status/stream/Bulk mới từ việc nhận ảnh. K36 vẫn là ứng viên ưu tiên, không phải xác nhận on-air tại thời điểm thử.
+
+## 2026-11-06 — Bằng chứng live Phase 3.0: ID 0x197, init đạt; K36 chưa tune vì PLP chưa xác minh
+
+### Firmware và observation riêng
+
+Sau terminal 0 native đã ghi dưới đây, người dùng duyệt độc lập một transaction khác, cập nhật APK giữ data và helper tiến trình riêng. APK SHA `5965aced4de6c56efad951586f892dc07b4cc5d17915e64b9526d2ed711a7a36` được cài đè; so hash toàn bộ consumed stores cũ trước/sau giống hệt. Host chờ challenge mới trước khi cấp GUID, thay vì để thời gian thao tác chọn file làm hết reserve; không đổi loader, hash, plan, ACK, heartbeat, USB timeout, TTL hoặc reserve.
+
+Transaction thứ hai trong Phase 3.0 có planned/guard requested/accepted/native started/completed/full-length đều 132; image 8192 byte, payload 8196 byte, release 131/132 đều trả 1/1. Duration runner 108499 ms gồm toàn bộ điều phối/audit, không phải USB-only. Attachment event 1 khiến auto-observation dừng trước permission/lease mới: terminal `UNCERTAIN/JAVA_IO_EXCEPTION/UPLOAD_COMPLETE_OPERATIONAL_UNVERIFIED`, after NOT_OBSERVED, cleanup NONE/pending false. Giữ nguyên terminal và ledger, không reupload/corrective release.
+
+Người dùng duyệt riêng A và C. A: tự bấm OK permission sau re-enumeration rồi đọc raw đúng một lần; complete 50 byte/hash `22e2f1df9f66c58dbb6c554e400b6b8abcb78ee4f277e03679bc0fac7a25add5`, config 1/interface 0/alt 0, IN/BULK 0x82 và 0x81/512 byte, bInterval tương ứng 1 và 0; 26 ms, open/read/close 1/1/1, claim/release/vendor 0/0/0, cleanup/pending false. Đây là observation mới riêng, không sửa upload terminal trước đó thành PASS.
+
+### Bridge và frontend thực
+
+C: owner mới dùng strict raw profile, đối chiếu metadata và claim(false), không A0. Plan `fc687ddce2d46f557f6c77b8ac065a56bbe5aaa565e97596c90f0eeccc3ea0d9`, slave 0x66/bank 0/high FB/low FD, đúng 3 OUT/2 IN full-length. ID đã giải mã `0x197`, không phải dữ liệu 00/FF/echo; state DEMOD_IDENTIFIED, frontend chưa initialized tại checkpoint probe. Audit có 10 INTENT/RETURN events; INTENT đầu đến RETURN cuối 76 ms, gồm storage/checks/transport, không phải native USB latency. Không lưu hoặc suy toàn bộ byte FB ngoài bit mask từ ID đã giải mã.
+
+D được duyệt riêng CHỈ INIT, plan `6179e394a8f650e5fec33be334f1c05f226d6067675f4bcc2d38aa6f8f6682da`, targets 0x66/0x64/0x60. Đúng 51 register writes và 14 write/read, tức 65 OUT/14 IN full-length, 158 audit events. Tuner E-family, boot/parallel TS checks và re-identification sau reset đều qua các guard của plan. State FRONTEND_INITIALIZED rồi READY_FOR_TUNE; UI dừng AWAITING_RF_IN_CONNECTION. INTENT đầu 342395683 ms → RETURN cuối 342397101 ms, tổng 1418 ms gồm audit, delay nguồn và điều phối. Không lấy trần 158084 ms làm thời gian đo.
+
+Tổng C+D là 68 OUT/16 IN, không scope tune/lock/TS. Audit được kiểm theo từng GUID riêng; consumed của C và D không dùng Phase 2.9 stores. Màn hình đã đóng sau khi thiếu PLP được xác nhận; launcher là Activity resumed, không giữ owner chờ thông số hoặc helper còn chạy. Số release/close operational thực chưa có native-boundary counter riêng, không gán fake count thành đo hardware; descriptor-only cleanup có telemetry riêng đã nêu.
+
+### Nguồn RF K36 và cách xử lý PLP
+
+Người dùng đã xác nhận coax thụ động, không DC ngoài, đúng RF IN, đường anten từng thu tốt. Không giữ kết luận ANTENNA_NOT_CONNECTED sau xác nhận này. Ứng viên được cung cấp: SDTV trạm Vũng Chua, UHF K36, trung tâm 594000000 Hz, bandwidth 8000000 Hz; **PLP chưa xác minh**.
+
+- [SDTV công bố trạm Bình Định](https://sdtv.vn/cong-ty-sdtv-chinh-thuc-phat-song-truyen-hinh-ky-thuat-so-mat-dat-tai-binh-dinh/): nội dung ngày 11/04/2019 nói trạm núi Vũng Chua, công suất 1,1 kW và phát trên K36. Đã đọc text bằng browser để tránh ảnh inline base64 che phần văn bản trong web fetch. Không suy bài năm 2019 là trạng thái on-air ngày thử.
+- [Bản đồ phủ sóng SDTV](https://sdtv.vn/ban-do-phu-song/) liệt kê Bình Định trong cột K36. Trang không cung cấp PLP hoặc số đo RF hiện hành. Tần số 594 MHz/băng thông 8 MHz giữ là bộ ứng viên được người dùng đưa ra, phù hợp phép ánh xạ kênh UHF 8 MHz; không coi đó là measurement từ TBS5530.
+- [Công báo Thông tư 27/2026/TT-BKHCN](https://congbao.chinhphu.vn/van-ban/thong-tu-so-27-2026-tt-bkhcn-469693/65635.htm) xác nhận phạm vi quy hoạch 470–694 MHz, ban hành 31/05/2026, hiệu lực 16/07/2026. Trang metadata không chứng minh PLP hoặc trạm đang phát. Tải bản DOCX bằng browser bị timeout; chưa đọc được bảng phụ lục, không khẳng định đã xác nhận toàn bộ phụ lục.
+
+Đối chiếu trực tiếp official SHA `2ce787de9f6e81b4294692a45de15596ae2e1322`, `cxd2878.c:cxd2878_set_dvbt2:2468–2475`: chọn bank 0x23, ghi 0xAF bằng `stream_id & 0xFF`, ghi 0xAD = 1, chú thích manual PLP. Community C cùng SHA đã khóa, `cxd2878.c:3311–3318` giữ đúng cơ chế đó. Go SHA đã khóa, `internal/coaxd/demod/sony/terrestrial.go:144–162` cũng nhận một `plpID byte`, ghi AF/AD tương ứng và không có automatic-PLP path được hiện thực.
+
+**Không có bằng chứng auto/no-filter cho path CXD2878 đang port.** Không đổi AD thành 0 dựa trên chip Sony khác, không diễn giải bit DB/PLP_ALWAYS_MATCH là auto selection khi chưa có semantics đủ, không nhập cơ chế ATSC3 bank 0x93 của cộng đồng vào DVB-T2 bank 0x23. Nếu truyền sentinel `NO_STREAM_ID_FILTER` vào code official hiện tại, phép `& 0xFF` sẽ thành chọn thủ công PLP 255, không phải bỏ lọc. Android giữ từ chối AUTO_PLP; không tự mặc định PLP 0.
+
+Kết luận: **TUNE_NOT_RUN_ENVIRONMENT_BLOCKER do PLP/chế độ chọn PLP chưa xác minh**. RF IN đã xác nhận; tune, lock polling, stream select và Bulk đều 0. Không ghi NO_SIGNAL, NO_LOCK hoặc driver failure cho phần chưa chạy. Cần PLP K36 từ nhà phát sóng hoặc thiết bị đo, hoặc source/tài liệu Sony đúng chip chứng minh auto-PLP trước khi thay plan và xin approval tune riêng. Không quét tần số hoặc PLP hàng loạt.
+
+### Số đo mới và bảo toàn
+
+| Phân đoạn | N | p50/p95/p99/max | Phạm vi |
+| --- | --- | --- | --- |
+| ACK Android mới | 132 | 783/1012/1064/1098 ms | Chỉ event android_observed của đúng upload mới, không gộp terminal summary hoặc attempt trước |
+| Native API firmware | 132 | 0,293229/0,446302/1,076823/1,524583 ms | Tổng 42,521095 ms; boundary native start/end, không I²C init |
+| Probe C | 5 control calls | Tổng audit interval 76 ms | Gồm audit/checks; không native-only |
+| Init D | 79 control calls | Tổng audit interval 1418 ms | Gồm 84 ms delay nguồn, audit và điều phối |
+
+Ledger firmware cuối có 545 records/182748 byte, SHA `3e82a0c1c181abeee809bf0fce13a77b4dfaed520808764e38ad4660fb2daf36`. Prefix 92018 byte giữ SHA a2ec…6d0f và prefix 93760 byte giữ SHA f5fa…28a, khớp trước khi append, không sửa lịch sử. C/D không ghi vào ledger firmware. Native writes mới trong Phase 3.0 chỉ một upload đầy đủ 132 A0; reservation trước đó native 0. C+D có 52 request 0x80 OUT, 16 request 0x90 OUT và 16 request 0x91 IN; tổng mọi vendor OUT/IN là 200/16. 0x8A, tune, LNB, EEPROM và Bulk đều 0.
+
+**NO OPTIMIZATION WARRANTED:** không so chênh lệch latency giữa hai phiên thành speedup; không có thay đổi tối ưu protocol, delay hoặc audit. Giữ ACK 1500/heartbeat 2000/USB 2000/TTL 300000/start reserve 240000 ms. Các bản ghi phần mềm/chờ approval bên dưới là lịch sử trước những kết quả live mới này.
+
+## 2026-11-06 — Phase 3.0: operational handoff, probe whitelist và port chọn lọc DVB-T2
+
+### Nguồn và ranh giới bằng chứng
+
+Baseline fork `722c4916a83074e8cc5b5c6aeeaee9d2f1190785`; ba checkout tham khảo chỉ đọc vẫn official `2ce787de9f6e81b4294692a45de15596ae2e1322`, C `c5fa27eecbe80633cbb365cc44656daea1c0e2e3`, Go `11228b05fb1626bf41c4e1879ace10cd0a8d575c`. Không fetch/sync/reset hoặc sửa references. Tài liệu Android được tra lại bằng Android CLI `docs search`/`docs fetch` với `kb://android/develop/connectivity/usb/host`, cùng [UsbDeviceConnection](https://developer.android.com/reference/android/hardware/usb/UsbDeviceConnection); claim(false), worker ngoài UI, bulk/control timeout hữu hạn và cleanup đúng owner được giữ. Bulk trước Android P có giới hạn 16384 byte mỗi call nên prototype không vượt giới hạn này; API control/bulk có offset đã có trước minSdk 21. Giá trị trả âm không đủ xác định errno hoặc khẳng định timeout.
+
+[Trang sản phẩm chính hãng](https://www.tbsdtv.com/products/tbs5530-multi-standard-universal-tv-tuner-usb-card.html) xác nhận tuner USB2 đa chuẩn, không chứng minh driver Android hỗ trợ các chuẩn đó. DVB-T2 phải vào RF IN, không LNB IN; nhãn/cáp thật và ảnh hãng vẫn phải đối chiếu ở checkpoint RF trước tune. Chưa yêu cầu người dùng cắm coax, chưa đo RF hoặc cấp nguồn qua coax/LNB.
+
+### So sánh protocol và frontend
+
+| Câu hỏi | Source-confirmed | Quyết định port / giới hạn |
+| --- | --- | --- |
+| Bridge EP0 | Official `drivers/media/usb/dvb-usb/tbs5530.c:tbs5530_i2c_transfer` dùng write 0x80, read-pointer 0x90 rồi IN 0x91, mutex bao cặp; C `tbs5530.c:71,74,85` cùng dạng | Tái sử dụng Bridge/ControlTransport. Full-length không chứng minh slave ACK hoặc identity; không copy cách source bỏ qua lỗi trả về |
+| Stream | Official properties TS 0x82, generic bulk 0x81; terrestrial streaming_ctrl 0x8A [0x0A,0]; C `tbs5530.c:149,162` và Go `internal/coaxd/usb/bridge/tbs/tbs.go`, `tbs5530/tbs5530.go` đối chiếu cùng shape | 0x81 không mặc định là TS; 0x8A là write riêng, chỉ sau lock và approval TS |
+| Demod ID | Official `cxd2878.c:cxd2878_attach:4010–4014,4066–4070`: SLV-X = 0x64+2 = 0x66, bank 00, high FB và low FD; `((FB&3)<<8)|FD`. C `cxd2878.c:5830–5831`, Go `internal/coaxd/demod/sony/chip.go:ReadChipID` cùng semantics | Probe đúng 1 bank write + 2 register reads; 3 USB OUT/2 IN. Không scan toàn I²C, không EEPROM/MAC hoặc nhánh vệ tinh |
+| Tuner variant | Official `cxd2878.c:ascot3_init:812–958`, target 0x60/reg7F, E-family khi `(value&F0)==E0`, có nhánh VCO/calibration 2871A | Chỉ init/tune 0x197 + ASCOT3I E-family. ID 0x19c/0x39a được nhận diện nhưng Freia init/tune chưa port; không đoán variant |
+| Init và tune | Official `cxd2878_init:3171–3254`, repeater `436–444`, DVB-T2 `2185–2514`, tuner tune `656–804`, `tuneEnd:1957–1963`, status `3312–3323` | Port các bảng/thao tác cần thiết cho board xtal 24 MHz; có delay, read-derived RMW/VCO formula trong transcript, không giả mọi byte đã biết trước |
+| Khác biệt C | `cxd2878.c:4765–4900` thay stabilization delay và bỏ 9C/10 cho ATSC3; `cxd2878_set_dvbt2:3300–3368` vẫn manual PLP | Không nhập thay đổi ATSC3 vào DVB-T2 chỉ vì source cộng đồng mới hơn |
+| Khác biệt Go | `cxd2878/cxd2878.go:Initialize,retuneBand`; `tuner_ascot3.go:ascot3Init,ascot3Tune` bỏ E-family calibration, retune cùng chuẩn chỉ đổi bandwidth | Giữ nhánh official và ghi PLP explicit mỗi tune. Auto PLP chưa có cơ chế được kiểm; không ngầm PLP=0 |
+
+| Plan fixture đã kiểm | USB OUT / IN | Delay nguồn | Trần timeout phần mềm |
+| --- | --- | --- | --- |
+| Chip-ID probe | 3 / 2 | 0 ms | 10000 ms |
+| Init 0x197/ASCOT3I | 65 / 14 | 84 ms | 158084 ms |
+| Tune đầu 666 MHz, bandwidth 8 MHz, PLP explicit | 85 / 15 | 120 ms | 200120 ms |
+| Tune đầu bandwidth 1,7 MHz | 84 / 15 | 120 ms | 198120 ms |
+
+Các số này là đếm và bound của chương trình bất biến/fake fixture, **không phải phép đo hoặc tần số được chọn cho địa phương**. Frequency/BW/PLP thật chưa được cung cấp. SNR/CNR/BER/strength trả NOT_AVAILABLE; không dựng số đo.
+
+### Lifecycle, approval và parser đã triển khai
+
+Strict raw profile nằm ở đường operational debug, chặt hơn classifier candidate cũ: đủ device/config/interface/endpoints, đúng identity 734c:5530, không duplicate/malformed, đối chiếu Android metadata trước claim. Profile cũ không sống qua generation mới; A0 bị cấm trên owner operational. Detach event không còn chờ enumeration mất path mới invalidate; path/id có thể đã được dùng lại. Tests kiểm owner cũ bị từ chối và close/release chờ native/fake call trả, không force-close.
+
+ControlProbe dùng cùng session/bridge, không API ghi thanh ghi tùy ý. Mọi USB payload được so với plan đã consume; read-dependent bytes chỉ tính từ read thuộc plan đó. App debug có màn hình operational riêng trong cùng reservation loại trừ firmware/raw owner, chỉ mở khi bấm, không auto-probe từ intent/attach. Namespace approval Phase 3.0 tách Phase 2.9; challenge không phải consent, hash/operation/generation/heartbeat/expiry/foreground phải khớp. Init/tune/TS có scope riêng; RF IN checkbox không thay thế approval I²C.
+
+BulkTransport chỉ nhận owner đã claim, frontend initialized/locked và stream active, buffer tối đa 16 KiB/call, timeout hữu hạn. TS smoke trần byte/read/time, 0x8A đúng một lần, RAM-only; negative/no-data dừng không blind retry hoặc gán lỗi frontend. Parser kiểm ít nhất 3 packet 188 byte và carry qua chunk, continuity theo PID, adaptation-only/discontinuity/TEI/null/duplicate; 38 parser tests đã PASS riêng và được đưa vào full JVM sau đó. Không ghi raw TS vào Git/cloud.
+
+### Hardware observation mới và lỗi trước native
+
+Người dùng duyệt descriptor-only, xác nhận đã cắm OnePlus/OTG và tự chọn OK permission. APK đang cài hash `12a97e1745c031ec5c80565c6816d00f2e53b50d92aef3a47957b4011f57526e` đúng bản Phase 2.9 đã kiểm, không update trước lượt raw. Kết quả mới: raw COMPLETE 189 byte/hash `e2887bad8b5a0e8dcaaa69bd636a01a2d11e53fe4b532b5b14828a2d3df952de`, default MATCH, config 1/interface 0/alt 0 có 0 endpoint; open/read/close 1/1/1, claim/release/transfer 0/0/0, 24 ms, pending/cleanup false. Không suy operational từ quan sát 50 byte đêm trước.
+
+Upload được duyệt riêng sau đó dùng GUID mới, firmware local hash khóa, helper/ledger cũ. Terminal mới FAULTED/PERMIT_EXPIRED trước native: attempted/guard/native/completed/full-length/image/payload đều 0; raw preflight cùng default 189 byte, after NOT_OBSERVED, duration runner 49 ms, cleanup NONE/pending false. Challenge created_elapsed_ms 338832194; STOP khoảng 338905933 ms, tức khoảng 73,7 giây chuẩn bị/UI, còn dưới reserve 240000 ms. Ledger từ 275 lên 278 records, có reservation/consumed/terminal mới; không sửa hoặc reuse GUID vì native=0. Đây là quỹ bắt đầu, không phải USB chậm, firmware STALL hoặc lỗi anten.
+
+Sửa UI kiểm reserve trước khi cho bấm; deterministic test kiểm đúng biên 60000/60001 ms, không consume app hoặc thay expiry. Giữ TTL/ACK/heartbeat/USB/reserve; user đã duyệt độc lập một transaction khác sau giải thích, chưa tự suy transaction đó thành thành công. Các kết quả tiếp theo phải ghi bằng evidence mới, không thay terminal dừng trước native.
+
+### Tối ưu và giới hạn
+
+**NO OPTIMIZATION WARRANTED:** chưa có số đo I²C/TS thật để kết luận nút thắt. Không cache bank qua plan/epoch, không bỏ audit/guard, không tăng timeout hoặc rút delay phần cứng. Ngưỡng quỹ UI là sửa eligibility/fail-stop, không phải speedup. Phân biệt thời gian thao tác UI/ADB với latency USB.
+
 ## 2026-11-06 — Phase 2.9 đạt firmware bring-up: 132 full-length và raw OPERATIONAL_CANDIDATE
 
 **RUNTIME-OBSERVED:** Sau hai reservations chỉ ở host đã tiêu thụ và các sửa UID/private/no-clamp, người dùng duyệt riêng transaction thứ ba, physical current=true/UI-ready=true. Fresh target/boot/model/API/firmware/guard đạt; raw trước upload mới 189 byte/FX2_DEFAULT/MATCH, open/read/close 1/1/1, transfer 0, duration 18 ms. APK đã cài khớp build 40fc…411e, pin 91% lúc preflight. Người dùng tự bấm UI; parent không bấm upload thay. Helper chạy đúng một lần với GUID mới sau approval, không reuse/fallback/retry/recovery.

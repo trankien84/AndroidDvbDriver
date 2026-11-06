@@ -1,5 +1,62 @@
 # TBS5530 test matrix
 
+## 2026-11-06 17:57 +07 — Kiểm chứng tài liệu tần số từ ảnh Công báo
+
+| Gate tài liệu | Kết quả | Bằng chứng / giới hạn |
+| --- | --- | --- |
+| K36 frequency/channel width | PASS đối chiếu ảnh, không phải hardware test | Điều 3 khoản 1: 590–598 MHz, trung tâm 594 MHz; rộng 8 MHz. Giữ frequency 594000000 Hz/bandwidth 8000000 Hz |
+| Quy hoạch khu vực | PASS đối chiếu ảnh | Điều 3 khoản 2 điểm d: K36/K37 cho Nam Trung Bộ và Tây Nguyên; không chứng minh riêng SDTV đang on-air |
+| PLP / tune / lock / TS | PLP UNVERIFIED; hardware NOT RUN | Bốn ảnh không nêu PLP; không gửi thêm USB control hoặc Bulk, không gán NO_SIGNAL/NO_LOCK |
+
+Không chạy lại build/tests vì bổ sung này chỉ ghi tài liệu. Các kết quả phần mềm và hardware bên dưới giữ nguyên phạm vi đã chạy.
+
+## 2026-11-06 — Phase 3.0 live: firmware + operational + chip-ID + init; chưa tune/lock/TS
+
+| Gate live cuối | Kết quả | Bằng chứng / giới hạn |
+| --- | --- | --- |
+| Transaction firmware mới độc lập sau pre-native stop | PASS upload completion | 132 guard/native started/completed/full-length, image 8192/payload 8196 byte, release 131/132 đều 1/1; duration runner 108499 ms |
+| Auto-observation sau upload | UNCERTAIN, giữ nguyên terminal | Attachment event 1, JAVA_IO_EXCEPTION, after NOT_OBSERVED, UPLOAD_COMPLETE_OPERATIONAL_UNVERIFIED; pending false/cleanup NONE, không retry |
+| A: permission + raw mới riêng | PASS OPERATIONAL_CANDIDATE | User tự grant, raw complete 50 byte/hash 22e2…add5, config 1/interface 0/alt 0/0x82+0x81 IN bulk 512; 26 ms, open/read/close 1/1/1, claim/release/vendor 0 |
+| C: strict operational owner | PASS acquisition | Một owner mới, fresh raw + metadata và claim(false), không A0; native-boundary open/claim counters chưa được đo riêng |
+| C: allowlisted chip-ID | PASS DEMOD_IDENTIFIED | Plan fc68…a0d9, target 0x66/bank 00/FB/FD, 3 OUT/2 IN full-length, ID 0x197; audit 10 events, interval 76 ms gồm audit/checks |
+| D: frontend initialization riêng | PASS FRONTEND_INITIALIZED/READY_FOR_TUNE | Plan 6179…82da, 65 OUT/14 IN full-length, tuner E-family/boot/parallel TS checks đạt; audit 158 events, interval 1418 ms gồm source delay/audit/điều phối |
+| RF IN/coax sau init | USER_CONFIRMED | Coax thụ động an toàn, không DC ngoài, đúng RF IN không LNB IN, anten từng thu tốt; không phải số đo RF hiện tại |
+| K36 candidate | SOURCE-CHECKED, chưa đo on-air | SDTV công bố Vũng Chua/K36 và bản đồ liệt kê Bình Định/K36; ứng viên 594 MHz/8 MHz. PLP chưa xác minh; Công báo 2026 là quy hoạch, không phải measurement |
+| Auto PLP / no-filter | UNSUPPORTED/UNVERIFIED | Ba nguồn đã kiểm chỉ có manual bank 23/AF/AD; không dùng sentinel -1 thành PLP 255 hoặc mặc định PLP 0 |
+| Tune / lock polling | NOT RUN — ENVIRONMENT BLOCKER | Chưa có PLP hợp lệ hoặc cơ chế auto được xác minh; 0 tune/status. Không ghi NO_SIGNAL/NO_LOCK hay tuner failure |
+| TS select / Bulk / parser live | NOT RUN | 0 request 0x8A, 0 Bulk; parser software PASS không thay thế TS live |
+| ACK firmware mới, N=132 | PASS dưới 1500 ms | p50/p95/p99/max 783/1012/1064/1098 ms, chỉ event android_observed của đúng run |
+| Native API firmware, N=132 | RUNTIME-OBSERVED | p50/p95/p99/max 0,293229/0,446302/1,076823/1,524583 ms, tổng 42,521095 ms; không gọi là bridge/init latency |
+| Guard/ledger firmware | PASS prefix integrity | 545 records/182748 byte; prefix 92018 và 93760 byte khớp SHA cũ; terminal của attempt trước và upload unverified không sửa. C/D dùng namespace riêng |
+| Static cuối | PASS | 145 TBS main classes major 52, minSdk 21/target 37, debug operational Activity vắng release, firmware/TS/capture entries 0, zipalign cả debug/release đạt |
+| Cleanup cuối | UI/helper đã dừng; count native chưa đo riêng | Activity resumed trở về launcher, mọi helper bounded đã kết thúc; không force-close khi native chạy. Không gán release/close count từ fake thành hardware measurement |
+
+**Tổng giao dịch mới có vendor:** một firmware upload hoàn tất 132 A0 (reservation trước đó 0 native), C có 3 OUT/2 IN, D có 65 OUT/14 IN. Tổng OUT/IN là 200/16; 0 tune, 0 status polling, 0 stream-select, 0 Bulk và 0 satellite/LNB/EEPROM. Gate cao nhất là frontend initialized, không phải DVB-T2 locked hoặc TS_SMOKE_PASS.
+
+## 2026-11-06 — Phase 3.0: gates phần mềm và cold-plug mới
+
+| Gate | Kết quả mới | Phạm vi / giới hạn |
+| --- | --- | --- |
+| Git/toolchain baseline | PASS kiểm thực | HEAD 722c4916, worktree sạch khi bắt đầu; audit không đổi gói sau approval Bypass tiến trình riêng |
+| Focused handoff/profile/bulk/parser/smoke | PASS 89 methods / 1,518 giây | `javac --release 8` + JUnitCore, fake-only; chưa có frontend mới tại lượt này |
+| Frontend source/golden/fault fixtures | PASS 26 methods | Gradle focused FrontendTest; source-matched plans, ID/junk/variant, tune/BW/PLP, cancellation và lỗi giữa sequence; không phần cứng |
+| Exact-plan probe/RF/TS focused | PASS 15 methods | ControlProbeTest 4 + OperationalProfileTest 5 + TsSmokeTest 6, sau khi nối gate debug; không live I²C |
+| Full JVM cuối | PASS 343 methods | Drivers 329 + usbxfer 1 + dvbservice 13, 0 failure/error/skipped; app unit NO-SOURCE, không đếm thành test PASS |
+| Debug/release APK và lint cuối | PASS | Sau sửa nhãn debug, wrapper build PASS; lint 0 errors/10 warnings cũ. Không suppress lint toàn dự án hoặc tạo baseline |
+| Lint trung gian | FAIL → sửa → PASS | String resource RF mới thiếu bản dịch nb; đánh dấu nhãn vận hành debug tiếng Việt `translatable=false`, build/lint lại. Không ghi đè lịch sử FAIL |
+| App fake instrumentation cuối | PASS 32 methods / 4,878 giây | 24 approval deterministic (có test quỹ bắt đầu 60000/60001 ms) +8 Phase 3.0 approval/UI; package riêng, không preferences thật |
+| Library fake instrumentation cuối | PASS 32 methods / 1,444 giây | 28 AndroidUsbFacade +4 OperationalHandoff; Context/receiver/worker thật nhưng Manager/RawConnection giả, USB thật 0 |
+| Test namespace | PASS AAPT/package/targetPackage | App `.phase30offline`, app test `.phase30offline.test`, library test `drivers.phase30offline.test` tự target; không cài test vào production package |
+| Production APK update | PASS giữ data | User approval riêng, APK SHA `5965aced4de6c56efad951586f892dc07b4cc5d17915e64b9526d2ed711a7a36`; toàn bộ Phase 2.9 consumed XML hash so trước/sau giống hệt |
+| Cold-plug descriptor-only thật | PASS FX2_DEFAULT | User xác nhận OTG và tự grant permission; raw 189 byte/hash e288…52de, COMPLETE/MATCH, 24 ms, open/read/close 1/1/1, claim/release/transfer 0/0/0; pending/cleanup false |
+| Approval bootstrap đầu Phase 3.0 | FAULTED/PRE_NATIVE_STOP | GUID mới consumed ở host; reserve thiếu vì khoảng 73,7 giây từ prepare tới start. 0 A0/native/image bytes; raw preflight 189 byte; after NOT_OBSERVED, runner 49 ms, cleanup NONE/pending false |
+| Bảo toàn attempt đầu / ledger | PASS kiểm history | Terminal riêng giữ nguyên, ledger từ 275 lên 278 records; không reuse GUID hoặc sửa cờ legacy. Approval upload tiếp theo là độc lập, kết quả phải ghi riêng |
+| Live bridge/I²C ID/init/tune/lock/TS | NOT RUN tại checkpoint phần mềm này | Không suy từ fake PASS hoặc firmware; phải qua approval/gate tương ứng |
+| RF IN/coax | ANTENNA_CONNECTION_UNCONFIRMED | Chỉ hỏi kết nối vào RF IN, không LNB IN, khi tới gate lock. Không đo hoặc gán NO_SIGNAL |
+| API21/16KiB runtime/native smoke mới | NOT RUN | minSdk/bytecode/static APK kiểm riêng; toolchain/JNI không đổi, không dùng OnePlus/API30 làm bằng chứng API21 hoặc 16KiB |
+
+Các lượt instrumentation lặp lại không cộng vào tổng methods. Gradle focused đầu phiên từng FAIL vì agent frontend đang ghi file và class Sequences chưa tồn tại; chỉ dùng lượt compile/full gate sau hoàn tất. Kết quả firmware đang chạy sau approval độc lập được ghi ở checkpoint tiếp, không lấy trạng thái LOADING làm PASS.
+
 ## 2026-11-06 — Gate phần cứng cuối: OPERATIONAL_CANDIDATE
 
 | Gate cuối | Kết quả mới | Evidence / giới hạn |

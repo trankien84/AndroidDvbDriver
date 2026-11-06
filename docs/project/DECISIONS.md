@@ -1,5 +1,39 @@
 # Architecture decision record (ADR)
 
+## ADR-024 — Phase 3.0: owner operational mới, phê duyệt từng chương trình và gate RF IN trước tune
+
+**Date:** 2026-11-06
+
+**Status:** Implemented and verified có phạm vi: JVM 343/instrumentation cách ly 64 methods và debug/release/lint PASS; upload mới 132 full-length, observation operational riêng, chip-ID 0x197 và frontend init thực đạt. Tune/lock/TS NOT RUN do PLP chưa xác minh, không phải thiếu RF IN. Baseline `722c4916a83074e8cc5b5c6aeeaee9d2f1190785`, không commit hoặc thay toolchain.
+
+### Bổ sung từ ảnh Công báo — 2026-11-06 17:57 +07
+
+Điều 3 khoản 1 trong ảnh xác nhận K36 có trung tâm 594 MHz, giới hạn 590–598 MHz, rộng 8 MHz; chọn bộ ứng viên `594000000 Hz` / `8000000 Hz` có cơ sở tài liệu. Điều 3 khoản 2 điểm d phù hợp quy hoạch khu vực Nam Trung Bộ và Tây Nguyên. Không có PLP trong bốn ảnh; giữ gate manual PLP đã xác minh hoặc cơ chế auto đúng chip được kiểm trước khi tune. Không lấy nguồn quy hoạch thay bằng chứng on-air, không mở rộng scope hardware hoặc scan K37.
+
+### Bổ sung sau live gates và đối chiếu K36
+
+Probe riêng C đạt 3 OUT/2 IN, ID 0x197; init riêng D đạt 65 OUT/14 IN, tuner E-family check đạt. State đạt FRONTEND_INITIALIZED/READY_FOR_TUNE, sau đó người dùng xác nhận coax thụ động an toàn cắm đúng RF IN và đường anten từng thu tốt. Không giữ trạng thái “chưa cắm anten” sau xác nhận này.
+
+Ứng viên K36 SDTV/Vũng Chua, 594 MHz/bandwidth 8 MHz, chưa có PLP. Official `cxd2878_set_dvbt2:2468–2475` và C cùng path chỉ ghi bank 23/AF = stream_id & 0xFF, AD = 1 cho manual PLP; Go `sony/terrestrial.go:144–162` cũng chỉ hiện thực manual. Không biến NO_STREAM_ID_FILTER thành PLP 255, không mặc định PLP 0, không dùng auto của chip khác hoặc ATSC3 để mở gate DVB-T2. Giữ từ chối AUTO_PLP, không phát tune/status/stream/Bulk. Đóng owner và chờ thông số được xác minh hoặc tài liệu Sony đúng chip; không giữ phiên sáng vô hạn. Các phần context/checkpoint trước live bên dưới được giữ để truy vết.
+
+**Context:** Sau khi người dùng rút tuner ở cuối Phase 2.9, firmware RAM, descriptor và permission cũ không còn là bằng chứng hiện hành. Lượt descriptor-only được duyệt mới trong phiên này đọc 189 byte, hash e288…52de, `FX2_DEFAULT`, không endpoint 0x82 ở alt 0; open/read/close 1/1/1, claim/release/transfer 0/0/0, 24 ms. Một approval upload mới sau đó bị tiêu thụ ở host nhưng dừng trước native vì quỹ khởi động còn dưới 240000 ms; không sửa terminal hoặc tái sử dụng GUID đó.
+
+**Decision — operational ownership:** Tái sử dụng `Tbs5530UsbBinding`/`Tbs5530LifecycleCoordinator`/`Tbs5530Session` và worker hiện hữu. Đường debug opt-in kiểm raw mới rồi đối chiếu cây Android trước claim(false), đúng một TBS5530 và hai endpoint IN/BULK 0x82/0x81 tại config 1/interface 0/alt 0. Không hardcode chiều dài 50 byte làm điều kiện duy nhất, không coi bInterval là polling gate cho bulk, không suy USB speed. Operational owner cấm A0 và không gọi bootstrap; default/unknown phải đóng unclaimed. Nhận detach thì invalidate ngay cả khi enumeration đã có path/id giống hệt; cleanup vật lý vẫn đợi giao dịch đồng bộ trả về. Đây là lựa chọn fail-closed, có thể dừng thận trọng khi event đến muộn thay vì giữ owner có nguy cơ stale.
+
+**Decision — bridge/frontend:** Frontend chỉ tạo chương trình bất biến có transcript/SHA, địa chỉ/bank/register, số OUT/IN, delay và công thức byte phụ thuộc read. Probe đầu chỉ SLV-X 0x66, bank 0, high ID 0xFB và low ID 0xFD: 3 OUT/2 IN, trần 10000 ms theo timeout 2000 ms/call, không scan hoặc EEPROM. Gate debug kiểm lại từng USB payload và consume approval bền vững trước OUT; full-length nhưng ID không hợp lệ vẫn dừng. Chỉ sau ID hợp lệ mới đánh dấu bridge ready, sau init mới đánh dấu frontend initialized. Phê duyệt control dùng namespace Phase 3.0 riêng và heartbeat 2000 ms, không chạm permit/consumed/ledger firmware Phase 2.9.
+
+**Decision — phạm vi port:** DVB-T2/CXD6802 0x197 với ASCOT3I E-family, board xtal 24 MHz; frequency phải nhập rõ theo Hz, bandwidth thuộc bảng đã port, manual PLP 0..255. Freia 0x19c/0x39a, tuner variant chưa port, auto PLP và metrics chưa có nguồn thực thi đầy đủ đều trả UNSUPPORTED/NOT_AVAILABLE, không giả thành success. Không bật DVB-S/LNB/tone hoặc nguồn anten.
+
+**Decision — RF và MPEG-TS:** Chuẩn bị frontend không đòi anten. Sau init, dừng `AWAITING_RF_IN_CONNECTION`; tune/status thật cần người dùng xác nhận coax DVB-T2 đúng RF IN, không LNB IN, cùng frequency/bandwidth/PLP và approval write riêng. TS cần runtime lock và scope riêng cho 0x8A [0x0A,0] + Bulk IN 0x82 có trần byte/read/time; UI prototype chọn 64 KiB/16 reads/5 giây, timeout read 500 ms. Parser tìm ít nhất ba packet 188 byte, kiểm sync/TEI/adaptation/continuity và carry; không lưu raw TS. Không có dữ liệu không được tự chẩn đoán là frontend hoặc RF failure.
+
+**Decision — quỹ upload:** Giữ ACK 1500/heartbeat 2000/USB 2000/TTL 300000/start reserve 240000 ms. Nút xác nhận nay kiểm quỹ còn lại trước khi cho bắt đầu; không nới TTL hoặc âm thầm tạo challenge/GUID mới. Tính từ lúc chọn firmware, cửa sổ bắt đầu tối đa khoảng 60 giây và còn phải trừ thời gian preflight. Host reservation đã consumed vẫn là lịch sử dù native bằng 0; một transaction khác cần approval mới độc lập.
+
+**Verification:** 89 focused JUnit PASS trước tích hợp; full JVM/build debug/release/lint đã có lượt PASS trên mã trung gian; 32 fake USB instrumentation và 24 approval deterministic PASS trên OnePlus/API30, package cách ly. Các gate cuối và hardware mới được ghi riêng trong [TEST-MATRIX.md](TEST-MATRIX.md), không lấy các lượt trung gian này thay lần kiểm cuối.
+
+**Alternatives:** Reupload theo cached VID/PID, dùng endpoint 0x81 như TS, claim force=true, gọi READY từ descriptor, scan địa chỉ I²C, auto PLP=0, tune khi chưa RF, hoặc tăng timeout để che thời gian chờ UI: không chọn.
+
+**Limits / reopen trigger:** Chưa có chip-ID/init/lock/TS thực; synchronous USB không có bảo đảm cancel vật lý. Khi có identity variant khác hoặc nguồn board mới, cần đối chiếu nguồn và tests trước khi mở rộng plan; không repair bằng ghi thanh ghi thử. Giấy phép nguồn GPL được giữ; firmware/TS/capture không đưa vào Git/APK.
+
 ## ADR-023 — Phase 2.9: phân loại bulk-IN theo thuộc tính có nghĩa, giữ raw observation riêng
 
 **Date:** 2026-11-06

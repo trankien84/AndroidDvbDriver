@@ -91,6 +91,12 @@ public final class Tbs5530UsbDiagnosticActivity extends Activity {
                     .setNegativeButton("Hủy", null)
                     .setPositiveButton("Nạp đúng một lần", (dialog, which) -> controller.bootstrapSelected()).show();
         });
+        button(layout, "Phase 3.0 — operational/I²C (không tự ghi)", () -> {
+            if (controller.isActive()) return;
+            controller.close();
+            startActivity(new android.content.Intent(this, Tbs5530OperationalDiagnosticActivity.class));
+            finish();
+        });
         button(layout, "Đóng", () -> { controller.close(); finish(); });
         button(layout, "Sao chép báo cáo đã ẩn định danh", () -> {
             ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);

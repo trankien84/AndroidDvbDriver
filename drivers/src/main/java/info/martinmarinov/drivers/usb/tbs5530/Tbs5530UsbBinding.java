@@ -213,6 +213,12 @@ public final class Tbs5530UsbBinding implements AutoCloseable {
                 ensureCurrent(attempt);
                 return count;
             }
+            public int bulkTransfer(byte[] buffer, int length, int timeout) throws IOException {
+                ensureCurrent(attempt);
+                int count = connection.bulkTransfer(buffer, length, timeout);
+                ensureCurrent(attempt);
+                return count;
+            }
             public Tbs5530Descriptors.Endpoint streamEndpoint() throws IOException { return connection.streamEndpoint(); }
             public void cancel() throws IOException { connection.cancel(); }
             public void release() throws IOException { connection.release(); }
@@ -284,10 +290,9 @@ public final class Tbs5530UsbBinding implements AutoCloseable {
         Attempt attempt;
         synchronized (this) { attempt = current; }
         if (attempt == null || !attempt.device.equals(device)) return;
-        scheduler.schedule(() -> {
-            try { if (active(attempt) && !present(device)) invalidate(attempt, true); }
-            catch (IOException | RuntimeException error) { invalidate(attempt, true); errors.report(error); }
-        }, 0);
+        // Enumeration can already contain a new attachment with the very same path/id.
+        // A delivered detach therefore invalidates now; physical cleanup still drains on the worker.
+        invalidate(attempt, true);
     }
 
     private interface Job { void run() throws IOException; }
@@ -332,6 +337,15 @@ public final class Tbs5530UsbBinding implements AutoCloseable {
                         "No claimed connection for this attachment");
             }
             return coordinator.controlIo(current.request);
+        }
+    }
+
+    public Tbs5530BulkTransport bulkIo() throws IOException {
+        synchronized (this) {
+            if (!active(current) || current.request == null || current.acquiring || current.bootstrap) {
+                throw new IOException("No current operational bulk owner");
+            }
+            return coordinator.bulkIo(current.request);
         }
     }
 

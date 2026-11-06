@@ -97,6 +97,13 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
         return true;
     }
     private static synchronized boolean reservationAvailable() { return diagnosticReservation == null; }
+    static synchronized boolean reserveOperational(Object owner) {
+        if (diagnosticReservation != null) return false;
+        diagnosticReservation = owner; return true;
+    }
+    static synchronized void releaseOperational(Object owner) {
+        if (diagnosticReservation == owner) diagnosticReservation = null;
+    }
     private boolean reserve() {
         synchronized (Tbs5530DiagnosticController.class) {
             if (diagnosticReservation != null) return false;
@@ -126,7 +133,7 @@ final class Tbs5530DiagnosticController implements AutoCloseable {
     boolean canBootstrap() {
         if (!foreground || preparationInvalidated.get() || firmware == null || approval == null || approval.consumed() || !canPrepareFirmware()
                 || !firmwareDevice.equals(snapshot.devices.get(selected))) return false;
-        try { approval.requireCurrent(); return true; } catch (IOException error) { return false; }
+        return approval.hasStartBudget();
     }
     void prepareFirmware(android.content.Context context, android.net.Uri uri, String source, String entry,
                          boolean sourceAndPowerConfirmed) {

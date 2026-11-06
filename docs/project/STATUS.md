@@ -1,5 +1,41 @@
 # Port TBS5530 sang Android — trạng thái hiện tại
 
+## Checkpoint Git Phase 3.0 — 2026-11-06 18:22 +07
+
+- Người dùng yêu cầu commit toàn bộ changes Phase 3.0 và push lên origin của nhánh hiện tại. Preflight xác nhận `chore/modernize-android-build`, HEAD và live origin cùng `722c4916a83074e8cc5b5c6aeeaee9d2f1190785`, stage trống, một worktree và đúng 35 file nguồn/test/resource/hồ sơ đã kiểm.
+- Phạm vi không chứa firmware, APK, ảnh Công báo, raw USB/TS/capture, audit, approval GUID hoặc ledger thật. Tệp whitelist init nằm ngoài Git và không được chép vào repository. Các câu “chưa stage/commit/push” bên dưới là checkpoint lịch sử trước yêu cầu này.
+- Message chuẩn bị: `feat: add guarded TBS5530 frontend bring-up`. Chỉ xác nhận commit/push sau kết quả Git; không force push, tự merge/rebase hoặc đổi nhánh. Không chạy lại build/tests hoặc phần cứng trong tác vụ Git. Bằng chứng gần nhất vẫn frontend initialized, chưa tune/lock/TS do PLP chưa xác minh.
+
+## Bổ sung 17:57 +07 — K36/594 MHz/8 MHz đã xác nhận từ bảng Công báo
+
+Bốn ảnh người dùng gửi cho thấy Điều 3 khoản 1: K36 có giới hạn 590–598 MHz, trung tâm 594 MHz; độ rộng kênh là 8 MHz. Điều 3 khoản 2 điểm d quy hoạch K36/K37 cho Nam Trung Bộ và Tây Nguyên. Vì vậy giữ ứng viên `594000000 Hz` / `8000000 Hz` có bằng chứng tài liệu, không chỉ suy từ số kênh. Các ảnh không cung cấp PLP hoặc chứng minh trạm đang phát; gate cao nhất vẫn frontend initialized, chưa tune/lock/TS. Không có hardware transaction mới sau khi nhận ảnh. Chi tiết tại [RESEARCH.md](RESEARCH.md).
+
+## Phase 3.0 — Frontend đã init trên phần cứng; chưa tune vì PLP chưa xác minh — 2026-11-06
+
+**Gate cao nhất có bằng chứng mới:** `FRONTEND_INITIALIZED` / `READY_FOR_TUNE`. Lần cắm mới đúng FX2_DEFAULT; sau một reservation dừng trước native, transaction độc lập tiếp theo đã hoàn tất 132/132 A0, image 8192 byte, payload 8196 byte, hai release đều 1/1. Auto-observation vẫn UNCERTAIN/UPLOAD_COMPLETE_OPERATIONAL_UNVERIFIED do attachment và quyền mới; terminal cũ giữ nguyên. Observation riêng được duyệt sau đó đọc operational raw 50 byte, hash 22e2…add5, 0 claim/vendor. Không nạp lại operational.
+
+**Bridge/frontend thật:** Owner operational mới kiểm raw và Android metadata rồi claim(false). Probe slave `0x66`, bank `00`, registers `FB/FD` cho ID `0x197` với 3 OUT/2 IN. Init riêng theo whitelist SHA 6179…82da đạt 65 OUT/14 IN full-length, kiểm tuner E-family đạt; 158 audit events, INTENT đầu → RETURN cuối là 1418 ms, gồm audit và điều phối. Tổng control bridge/init là 68 OUT/16 IN; chưa có tune, đọc lock, stream-select `0x8A` hoặc Bulk IN. Không suy RF lock từ init.
+
+**RF và ứng viên tune:** Người dùng đã xác nhận coax thụ động an toàn cắm đúng RF IN, không LNB IN, đường anten từng thu tốt. Ứng viên ưu tiên là SDTV trạm Vũng Chua/K36, tần số 594000000 Hz, băng thông 8000000 Hz. Nguồn SDTV công bố năm 2019 và bản đồ hiện có xác nhận K36, không chứng minh trạm đang phát tại lúc thử. PLP ID, tức mã luồng cần chọn trong multiplex, chưa xác minh. Source official/C/Go đã đọc chỉ có chọn PLP thủ công, chưa có auto/no-filter được kiểm cho path này; `NO_STREAM_ID_FILTER` không được biến thành PLP 255 hoặc PLP 0. **TUNE_NOT_RUN_ENVIRONMENT_BLOCKER: thiếu PLP hoặc cơ chế chọn PLP được xác minh**, không phải thiếu anten, NO_SIGNAL hoặc lỗi tuner.
+
+**Phần mềm:** Đã nối debug UI/approval/control gate vào lifecycle hiện hữu, port chọn lọc CXD2878/ASCOT3I init/tune/status, TS smoke có giới hạn và parser 188 byte. Full JVM 343 methods PASS; instrumentation cách ly 64 methods PASS; debug/release/lint PASS với 0 errors/10 warnings; Java 8 major 52, minSdk 21, target 37. DEX debug isolation, không bundle firmware và zipalign đều đạt. APK đã cập nhật giữ data, SHA 5965…7a36. Freia, auto PLP và metrics chưa port/kiểm đủ nên từ chối hoặc NOT_AVAILABLE. Không làm app TV/EPG/A/V/production registry hoặc DVB-S.
+
+**Bảo toàn và bước kế tiếp:** HEAD vẫn `722c4916a83074e8cc5b5c6aeeaee9d2f1190785`, nhánh `chore/modernize-android-build`; chưa stage/commit/push. Ledger firmware có 545 records/182748 byte; hash prefix 92018 và 93760 byte khớp lịch sử trước hai attempts mới. C/D dùng consumed/audit riêng; không reuse approval hoặc corrective writes. Đã đóng owner để không giữ phiên chờ thông số; lần thực nghiệm tiếp phải kiểm attachment/permission/owner lại, không dùng init/epoch cũ như quyền sống. Bước kế tiếp trong cùng Phase 3.0: xác minh PLP của multiplex K36 từ nhà phát sóng hoặc thiết bị đo, hoặc tìm tài liệu Sony đúng chip cho auto-PLP và kiểm offline trước khi xin một tune transaction riêng. Chi tiết ở [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md), ADR-024.
+
+## Phase 3.0 — Đang triển khai phần mềm, chưa có approval phần cứng mới — 2026-11-06
+
+Baseline thực là `722c4916a83074e8cc5b5c6aeeaee9d2f1190785`, nhánh `chore/modernize-android-build`, worktree sạch lúc bắt đầu. Người dùng cho biết đã rút TBS5530 sau Phase 2.9; mọi descriptor, permission và owner cũ chỉ là lịch sử. Anten/coax chưa được xác nhận cắm: `ANTENNA_CONNECTION_UNCONFIRMED`. Không yêu cầu cắm anten trước gate thử khóa sóng.
+
+| Khoảng trống từ Phase 2.9 tới Phase 3.0 | Đã chứng minh trước phiên này | Việc đang thực hiện an toàn |
+| --- | --- | --- |
+| FX2 RAM | Một upload 132 A0 full-length và raw operational riêng | Tái sử dụng loader/approval/ledger, không nạp lại từ cache |
+| Operational handoff | Candidate 50 byte sau upload, chưa phải READY | Profile raw chặt hơn, đối chiếu metadata Android, attachment mới và claim đúng owner |
+| Bridge/I²C | Encoding 0x80 và 0x90/0x91 có tests; chưa có chip-ID thực | Whitelist probe, register sequence có nguồn và fault injection |
+| Frontend DVB-T2 | Cấu hình board từ source, chưa init/tune/lock | Port chọn lọc CXD2878/Ascot3, parameters, trạng thái và approval tách scope |
+| MPEG-TS | Endpoint 0x82 từ source, chưa thu | Bulk có giới hạn, parser 188 byte và gate lock/RF IN/approval |
+
+Firmware, I²C, frontend lock và TS mới đều `NOT RUN`. Không thay đổi các terminal/consumed records Phase 2.9; không tự stage/commit/push hoặc mở phase khác. Kết quả kiểm mới sẽ được bổ sung sau khi runner hoàn tất, không lấy PASS lịch sử làm PASS của mã đang sửa.
+
 ## Checkpoint Git Phase 2.9 — 2026-11-06 01:17 +07
 
 - Người dùng yêu cầu commit toàn bộ changes hiện có và push lên origin của nhánh `chore/modernize-android-build`. Preflight xác nhận HEAD và live origin cùng `92a25b4962ff487c169e67649f454e277bcc60e6`, stage trống, một worktree.

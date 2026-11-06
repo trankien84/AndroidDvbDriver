@@ -99,6 +99,18 @@ public class Tbs5530ApprovalDeterministicTest {
         try { action.run(); fail("Expected " + kind); }
         catch (Tbs5530BootstrapStop error) { assertEquals(kind, error.kind); }
     }
+    @Test public void startEligibilityUsesRemainingReserveWithoutConsumingOrExtendingSession() throws Exception {
+        Fixture f = new Fixture(true);
+        assertTrue(f.approval.hasStartBudget());
+        f.clock.time += 60000; f.permit.put("heartbeat_elapsed_ms", f.clock.time); f.storage.permit(f.permit);
+        assertTrue(f.approval.hasStartBudget());
+        f.clock.time++; f.permit.put("heartbeat_elapsed_ms", f.clock.time); f.storage.permit(f.permit);
+        assertFalse(f.approval.hasStartBudget()); assertTrue(f.storage.attempts.isEmpty());
+        assertEquals(310000, f.permit.getLong("expires_elapsed_ms"));
+        f.approval.requireCurrent();
+        Fixture missing = new Fixture(); missing.storage.files.remove("phase29-session-approval.json");
+        assertFalse(missing.approval.hasStartBudget()); assertFalse(missing.approval.consumed());
+    }
     @Test public void missingPermitDoesNotBecomeApproval() throws Exception {
         Fixture f = new Fixture(); f.storage.files.remove("phase29-session-approval.json");
         denied(Kind.AUTHORIZATION_REVOKED, f.approval::requireCurrent); assertFalse(f.approval.consumed());

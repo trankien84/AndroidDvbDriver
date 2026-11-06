@@ -74,6 +74,10 @@ public final class Tbs5530AndroidUsbFacade implements Tbs5530UsbBinding.Facade {
                                     byte[] buffer, int offset, int length, int timeoutMillis) throws IOException {
             throw new IOException("Control transfer is unavailable");
         }
+        default int bulkTransfer(int interfaceIndex, int endpointAddress, byte[] buffer, int length,
+                                 int timeoutMillis) throws IOException {
+            throw new IOException("Bulk transfer is unavailable");
+        }
         boolean claim(int index, boolean force) throws IOException;
         boolean release(int index) throws IOException;
         void close() throws IOException;
@@ -82,6 +86,8 @@ public final class Tbs5530AndroidUsbFacade implements Tbs5530UsbBinding.Facade {
     private final Context application;
     private final Manager manager;
     private final int alternateSetting;
+    interface Validation { void validate(RawConnection raw) throws IOException; }
+    private final Validation validation;
 
     public Tbs5530AndroidUsbFacade(Context context) {
         this(context, new AndroidManager(application(context)), 0);
@@ -92,6 +98,11 @@ public final class Tbs5530AndroidUsbFacade implements Tbs5530UsbBinding.Facade {
     }
 
     public Tbs5530AndroidUsbFacade(Context context, Manager manager, int alternateSetting) {
+        this(context, manager, alternateSetting, raw -> { });
+    }
+
+    Tbs5530AndroidUsbFacade(Context context, Manager manager, int alternateSetting, Validation validation) {
+        this.validation = Objects.requireNonNull(validation, "validation");
         this.application = application(context);
         this.manager = Objects.requireNonNull(manager, "manager");
         if (alternateSetting < 0 || alternateSetting > 255) throw new IllegalArgumentException("Invalid alternate setting");
@@ -255,6 +266,8 @@ public final class Tbs5530AndroidUsbFacade implements Tbs5530UsbBinding.Facade {
         if (raw == null) throw new IOException("USB open returned no connection");
         try {
             requireCurrent(device);
+            validation.validate(raw);
+            requireCurrent(device);
             int selected = -1;
             for (int index = 0, count = raw.interfaceCount(); index < count; index++) {
                 if (raw.interfaceId(index) == 0 && raw.alternateSetting(index) == alternateSetting) {
@@ -335,7 +348,20 @@ public final class Tbs5530AndroidUsbFacade implements Tbs5530UsbBinding.Facade {
             requireCurrent(device);
         }
 
-        @Override public void cancel() { /* No streaming work is implemented. */ }
+        @Override public int bulkTransfer(byte[] buffer, int length, int timeoutMillis) throws IOException {
+            requireWorker();
+            synchronized (this) {
+                requireClaimed();
+                requireCurrent(device);
+                if (buffer == null || length < 1 || length > buffer.length || length > 16384
+                        || timeoutMillis < 1 || timeoutMillis > 2000) throw new IllegalArgumentException("Invalid bounded bulk read");
+                int result = raw.bulkTransfer(index, stream.address, buffer, length, timeoutMillis);
+                requireCurrent(device);
+                return result;
+            }
+        }
+
+        @Override public void cancel() { /* Synchronous reads drain before resource cleanup. */ }
 
         @Override public synchronized void release() throws IOException {
             if (!claimed || releaseAttempted || closed) return;
@@ -415,6 +441,21 @@ public final class Tbs5530AndroidUsbFacade implements Tbs5530UsbBinding.Facade {
                                                      byte[] buffer, int offset, int length, int timeoutMillis) {
                     return connection.controlTransfer(requestType, request, value, index,
                             buffer, offset, length, timeoutMillis);
+                }
+                @Override public int bulkTransfer(int interfaceIndex, int address, byte[] buffer, int length,
+                                                   int timeoutMillis) throws IOException {
+                    UsbInterface intf = descriptor(interfaceIndex);
+                    UsbEndpoint selectedEndpoint = null;
+                    for (int ep = 0; ep < intf.getEndpointCount(); ep++) {
+                        UsbEndpoint candidate = intf.getEndpoint(ep);
+                        if (candidate.getAddress() == address) {
+                            if (selectedEndpoint != null) throw new IOException("Duplicate bulk endpoint");
+                            selectedEndpoint = candidate;
+                        }
+                    }
+                    if (address != 0x82 || selectedEndpoint == null || selectedEndpoint.getDirection() != 128
+                            || selectedEndpoint.getType() != 2) throw new IOException("Bulk IN 0x82 unavailable");
+                    return connection.bulkTransfer(selectedEndpoint, buffer, length, timeoutMillis);
                 }
                 @Override public boolean claim(int index, boolean force) {
                     return connection.claimInterface(descriptor(index), force);

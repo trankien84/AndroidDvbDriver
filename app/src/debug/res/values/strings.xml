@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tbs5530_rf_in_confirmation" translatable="false">Đã xác nhận coax DVB-T2 vào RF IN (không LNB IN), nguồn trên dây đã kiểm an toàn.</string>
+</resources>

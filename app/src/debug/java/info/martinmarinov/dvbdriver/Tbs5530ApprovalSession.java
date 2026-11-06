@@ -230,6 +230,18 @@ public class Tbs5530ApprovalSession {
             throw stop(Kind.PRE_NATIVE_ACK_TIMEOUT, "Acknowledgment expired at USB dispatch", null);
         acceptedNonce = null;
     }
+    boolean hasStartBudget() {
+        try {
+            requireCurrent();
+            JSONObject permit = new JSONObject(storage.read("phase29-session-approval.json"));
+            long now = clock.now();
+            validate(permit, now);
+            return Math.min(created + Tbs5530ApprovalProtocol.SESSION_MS,
+                    permit.getLong("expires_elapsed_ms")) - now >= Tbs5530ApprovalProtocol.START_BUDGET_MS;
+        } catch (IOException | JSONException | RuntimeException unavailable) {
+            return false;
+        }
+    }
     void requireStartBudget() throws IOException {
         try {
             JSONObject permit = currentPermit();

@@ -10,5 +10,8 @@
         <activity
             android:name="info.martinmarinov.dvbdriver.Tbs5530UsbDiagnosticActivity"
             android:exported="true" />
+        <activity
+            android:name="info.martinmarinov.dvbdriver.Tbs5530OperationalDiagnosticActivity"
+            android:exported="true" />
     </application>
 </manifest>
