@@ -31,6 +31,35 @@ public class Tbs5530BulkTransportTest {
             session.ready(token); session.frontendInitialized(token); session.frontendLock(token, true); session.streamingStarted(token);
         }
     }
+    @Test public void endpointPreparationIsOwnerBoundBeforeStreamAndNeverRunsFromRead() throws Exception {
+        Fixture f = new Fixture(); int[] prepared = {0};
+        Tbs5530BulkTransport transport = new Tbs5530BulkTransport(f.session, f.token, f.owner, () -> { },
+                (bytes, length, timeout) -> 0, () -> prepared[0]++);
+        assertThrows(IOException.class, transport::prepareEndpoint82); assertEquals(0, prepared[0]);
+        f.session.ready(f.token); f.session.frontendInitialized(f.token); f.session.frontendLock(f.token, true);
+        transport.prepareEndpoint82(); assertEquals(1, prepared[0]);
+        f.session.streamingStarted(f.token);
+        assertThrows(IOException.class, transport::prepareEndpoint82); assertEquals(1, prepared[0]);
+        assertEquals(0, transport.read(new byte[188], 188, 500)); assertEquals(1, prepared[0]);
+        f.session.close(); assertThrows(IOException.class, transport::prepareEndpoint82);
+    }
+    @Test public void detachDuringEndpointPreparationDefersCloseUntilNativeReturns() throws Exception {
+        Fixture f = new Fixture(); f.session.ready(f.token); f.session.frontendInitialized(f.token); f.session.frontendLock(f.token, true);
+        Tbs5530BulkTransport transport = new Tbs5530BulkTransport(f.session, f.token, f.owner, () -> { },
+                (bytes, length, timeout) -> 0, () -> {
+                    f.session.requestCancellation(f.token, true); assertEquals(0, f.owner.closed);
+                });
+        assertThrows(IOException.class, transport::prepareEndpoint82);
+        assertEquals(1, f.owner.closed); assertEquals(1, f.owner.released);
+    }
+    @Test public void negativeReadCanCarryErrnoWithoutInventingRetryOrLeakingStaleOwner() throws Exception {
+        Fixture f = new Fixture(); f.lock();
+        Tbs5530BulkTransport transport = new Tbs5530BulkTransport(f.session, f.token, f.owner, () -> { },
+                (bytes, length, timeout) -> -1, () -> fail("No implicit clear-halt"), () -> 32);
+        assertEquals(-1, transport.read(new byte[4096], 4096, 500)); assertEquals(32, transport.lastReadErrno());
+        assertEquals(Tbs5530Session.State.READY, f.session.getState());
+        f.session.close(); assertThrows(IOException.class, transport::lastReadErrno);
+    }
     @Test public void noReadWithoutActualFrontendEvidence() throws Exception {
         Fixture f = new Fixture(); byte[] bytes = new byte[8];
         assertThrows(IOException.class, () -> f.transport.read(bytes, 8, 100)); assertEquals(0, f.calls);

@@ -27,7 +27,10 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
     private final Clock clock;
     private final Tbs5530Frontend.Plan plan;
     private final Tbs5530TsSmoke.Limits tsLimits;
-    private final long generation;
+    private static final long START_MARGIN_MS = 5000;
+    private final long generation, maximumMillis;
+    private final String ownerIdentity;
+    private final boolean experimentalAuto, endpointPreparation;
     private final String operation, planHash;
     private final String challenge = UUID.randomUUID().toString();
     private final long created;
@@ -36,34 +39,56 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
     private String approvalId;
     private final StringBuilder audit = new StringBuilder();
 
-    Tbs5530OperationalApproval(Context context, Tbs5530Frontend.Plan plan) throws IOException {
-        this(androidStorage(context), SystemClock::elapsedRealtime, plan);
+    Tbs5530OperationalApproval(Context context, Tbs5530Frontend.Plan plan, String owner) throws IOException {
+        this(androidStorage(context), SystemClock::elapsedRealtime, plan, null, plan.generation, bootBoundIdentity(context, owner));
     }
     Tbs5530OperationalApproval(Storage storage, Clock clock, Tbs5530Frontend.Plan plan) throws IOException {
         this(storage, clock, plan, null, plan.generation);
     }
-    Tbs5530OperationalApproval(Context context, long generation, Tbs5530TsSmoke.Limits limits) throws IOException {
-        this(androidStorage(context), SystemClock::elapsedRealtime, null, limits, generation);
+    Tbs5530OperationalApproval(Context context, long generation, Tbs5530TsSmoke.Limits limits, String owner) throws IOException {
+        this(androidStorage(context), SystemClock::elapsedRealtime, null, limits, generation, bootBoundIdentity(context, owner));
+    }
+    private static String bootBoundIdentity(Context context, String owner) throws IOException {
+        int boot = android.provider.Settings.Global.getInt(context.getContentResolver(), "boot_count", -1);
+        if (boot < 0 || owner == null || !owner.matches("[a-f0-9]{64}")) throw new IOException("Boot/USB owner identity unavailable");
+        return hash("TBS5530-PHASE31-OWNER/v1|boot=" + boot + "|lease=" + owner);
     }
     Tbs5530OperationalApproval(Storage storage, Clock clock, Tbs5530Frontend.Plan plan,
                               Tbs5530TsSmoke.Limits limits, long generation) throws IOException {
+        this(storage, clock, plan, limits, generation, "SYNTHETIC_TEST_FIXTURE");
+    }
+    Tbs5530OperationalApproval(Storage storage, Clock clock, Tbs5530Frontend.Plan plan,
+                              Tbs5530TsSmoke.Limits limits, long generation, String ownerIdentity) throws IOException {
+        if (ownerIdentity == null || ownerIdentity.isEmpty()) throw new IOException("Owner identity required");
         this.storage = storage; this.clock = clock; this.plan = plan; tsLimits = limits;
+        this.ownerIdentity = ownerIdentity;
+        maximumMillis = plan == null ? limits.maximumMillis() : plan.maximumMillis;
+        endpointPreparation = plan == null && limits.prepareEndpoint;
+        experimentalAuto = plan != null && plan.tuneParameters != null
+                && plan.tuneParameters.selection.mode == info.martinmarinov.drivers.usb.tbs5530.Tbs5530DvbT2TuneParameters.Mode.AUTO;
         this.generation = generation; created = clock.now();
         operation = plan == null ? "TS_SMOKE" : plan.operation.name();
-        String transcript = plan == null ? "TBS5530-TS-SMOKE/v1|generation=" + generation
+        String transcript = plan == null ? "TBS5530-TS-SMOKE/v4|generation=" + generation
                 + "|OUT=40/8A/0/0/0a00|timeoutMs=2000|BulkIN=82|bytes=" + limits.maxBytes
                 + "|reads=" + limits.maxReads + "|durationMs=" + limits.durationMillis
-                + "|readTimeoutMs=" + limits.readTimeoutMillis + "|RF_IN_CONFIRMED|LOCK_REQUIRED|retry=0"
+                + "|readTimeoutMs=" + limits.readTimeoutMillis + "|chunkBytes=" + limits.readChunkBytes
+                + "|readApi=USBDEVFS_BULK_ERRNO"
+                + (endpointPreparation ? "|prepare=USBDEVFS_CLEAR_HALT:82|prepareMaxMs=5000"
+                + "|prepareSource=tbsdtv/linux_media@2ce787de9f6e81b4294692a45de15596ae2e1322:usb-urb.c:usb_urb_init:220" : "")
+                + "|RF_IN_CONFIRMED|LOCK_REQUIRED|retry=0"
                 : plan.getApprovalTranscript();
         planHash = plan == null ? hash(transcript) : plan.getSha256();
         try {
             JSONObject json = new JSONObject();
-            json.put("protocol", 1); json.put("challenge", challenge); json.put("plan_sha256", planHash);
+            json.put("protocol", 2); json.put("challenge", challenge); json.put("plan_sha256", planHash);
+            json.put("owner_identity", ownerIdentity); json.put("experimental_auto_plp", experimentalAuto);
+            json.put("endpoint_preparation", endpointPreparation);
+            json.put("start_margin_ms", START_MARGIN_MS);
             json.put("operation", operation); json.put("generation", generation);
             json.put("created_elapsed_ms", created); json.put("max_session_ms", 300000); json.put("heartbeat_ms", 2000);
-            json.put("usb_out_count", plan == null ? 1 : plan.usbOutCount); json.put("usb_in_count", plan == null ? 0 : plan.usbInCount);
-            json.put("maximum_ms", plan == null ? limits.durationMillis + 2000L : plan.maximumMillis); json.put("transcript", transcript);
-            storage.write("phase30-challenge.json", json.toString());
+            json.put("usb_out_count", plan == null ? (endpointPreparation ? 2 : 1) : plan.usbOutCount); json.put("usb_in_count", plan == null ? 0 : plan.usbInCount);
+            json.put("maximum_ms", maximumMillis); json.put("transcript", transcript);
+            storage.write("phase31-challenge.json", json.toString());
         } catch (JSONException error) { throw new IOException("Cannot publish control challenge", error); }
     }
     private static String hash(String text) throws IOException {
@@ -74,6 +99,7 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
             return value.toString();
         } catch (java.security.NoSuchAlgorithmException error) { throw new IOException(error); }
     }
+    String planSha256() { return planHash; }
     void foreground(boolean value) { if (!value) revoked = true; foreground = value; }
     void rfIn(boolean value) { rf = value; }
     boolean eligible() { try { requireCurrent(); return !consumed; } catch (IOException error) { return false; } }
@@ -81,14 +107,19 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
         if (!foreground || revoked) throw new IOException("Control foreground/consent revoked");
         try {
             JSONObject permit = new JSONObject(storage.read()); long now = clock.now();
-            if (now < created || now - created >= 300000 || permit.getInt("protocol") != 1
+            if (now < created || now - created >= 300000 || permit.getInt("protocol") != 2
+                    || !ownerIdentity.equals(permit.getString("owner_identity"))
+                    || permit.getLong("approved_maximum_ms") != maximumMillis
+                    || experimentalAuto && !permit.getBoolean("explicit_experimental_auto_plp")
+                    || endpointPreparation && !permit.getBoolean("explicit_endpoint_preparation")
                     || !challenge.equals(permit.getString("challenge")) || !planHash.equals(permit.getString("plan_sha256"))
                                         || !operation.equals(permit.getString("operation")) || permit.getLong("generation") != generation
                     || !permit.getBoolean("explicit_control_approval") || !permit.getBoolean("physical_current")) {
                 throw new IOException("Control approval scope/attachment/clock mismatch");
             }
             long expires = permit.getLong("expires_elapsed_ms"), heartbeat = permit.getLong("heartbeat_elapsed_ms");
-            if (expires <= now || expires > created + 300000 || heartbeat < created || heartbeat > now || now - heartbeat >= 2000) {
+            if (expires <= now || expires > created + 300000 || heartbeat < created || heartbeat > now || now - heartbeat >= 2000
+                    || !consumed && Math.min(expires, created + 300000) - now < maximumMillis + START_MARGIN_MS) {
                 throw new IOException("Control approval expired or host heartbeat stale");
             }
             String id = permit.getString("approval_id");
@@ -118,7 +149,7 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
         try { approvalId = new JSONObject(storage.read()).getString("approval_id"); }
         catch (JSONException error) { throw new IOException(error); }
         storage.consume(approvalId); consumed = true;
-        storage.write("phase30-audit-" + approvalId + ".jsonl", "{\"event\":\"CONSUMED\",\"plan_sha256\":\"" + planHash + "\"}\n");
+        storage.write("phase31-audit-" + approvalId + ".jsonl", "{\"event\":\"CONSUMED\",\"plan_sha256\":\"" + planHash + "\"}\n");
     }
     public synchronized void audit(String boundary, int ordinal, int type, int request, int length, int result) throws IOException {
         if (!consumed) throw new IOException("Audit requires consumed approval");
@@ -127,17 +158,23 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
             event.put("type", type); event.put("request", request); event.put("length", length); event.put("result", result);
             event.put("elapsed_ms", clock.now());
             audit.append(event).append('\n');
-            storage.write("phase30-boundaries-" + approvalId + ".jsonl", audit.toString());
+            storage.write("phase31-boundaries-" + approvalId + ".jsonl", audit.toString());
         } catch (JSONException error) { throw new IOException(error); }
+    }
+    public boolean experimentalAutoPlpApproved() {
+        try { requireCurrent(); return experimentalAuto; } catch (IOException error) { return false; }
+    }
+    public boolean endpointPreparationApproved() {
+        try { requireCurrent(); return endpointPreparation; } catch (IOException error) { return false; }
     }
     public boolean rfInConfirmed() { return rf && foreground && !revoked; }
 
     private static Storage androidStorage(Context context) {
         Context app = context.getApplicationContext(); File directory = app.getFilesDir();
-        android.content.SharedPreferences preferences = app.getSharedPreferences("phase30-control-attempts", Context.MODE_PRIVATE);
+        android.content.SharedPreferences preferences = app.getSharedPreferences("phase31-control-attempts", Context.MODE_PRIVATE);
         return new Storage() {
             public String read() throws IOException {
-                File file = new File(directory, "phase30-permit.json");
+                File file = new File(directory, "phase31-permit.json");
                 try (java.io.FileInputStream input = new android.util.AtomicFile(file).openRead()) {
                     byte[] bytes = new byte[8193]; int size = 0, n;
                     while (size < bytes.length && (n = input.read(bytes, size, bytes.length-size)) > 0) size += n;

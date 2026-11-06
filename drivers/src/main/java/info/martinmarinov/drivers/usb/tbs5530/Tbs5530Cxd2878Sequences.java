@@ -12,7 +12,7 @@ import static info.martinmarinov.drivers.usb.tbs5530.Tbs5530Frontend.Builder;
  * Go tuner_ascot3.go:137-213 omits the E-family ID and its VCO/calibration branch;
  * this port retains official ascot3_init:812-958 instead. Go same-system retune skips
  * PLP writes; the official 23/AF/AD writes below deliberately run on EVERY tune.
- * Auto PLP, Freia, other ASCOT3 variants, LED GPIO, RSSI/CNR/BER, other standards,
+ * Auto PLP is cross-chip experimental only. Freia, other ASCOT3 variants, LED GPIO, RSSI/CNR/BER, other standards,
  * TS capture, EEPROM, satellite, LNB and RF-board switching are not implemented here.
  */
 final class Tbs5530Cxd2878Sequences {
@@ -100,8 +100,16 @@ final class Tbs5530Cxd2878Sequences {
     static void tune(Builder b, Tbs5530DvbT2TuneParameters p, boolean active) {
         b.source("cxd2878.c:cxd2878_set_dvbt2:2466-2514 (manual PLP on each tune)");
         b.bank(T, 0x23);
-        b.write(T, 0xaf, p.plpId);
-        b.write(T, 0xad, 1);
+        if (p.selection.mode == Tbs5530DvbT2TuneParameters.Mode.AUTO) {
+            b.provenance("CROSS-CHIP-ANALOGY:torvalds/linux@adc218676eef25575469234709c2d87185ca223a:"
+                    + "drivers/media/dvb-frontends/cxd2841er.c:cxd2841er_dvbt2_set_plp_config:2148-2167;"
+                    + "CXD6802=UNVERIFIED;sideEffect=automatic_data_PLP_selection_candidate;AF=UNCHANGED");
+            b.write(T, 0xad, 0);
+        } else {
+            b.write(T, 0xaf, p.selection.id);
+            b.write(T, 0xad, 1);
+        }
+        b.source("cxd2878.c:cxd2878_set_dvbt2:2477-2514 (Base profile, unchanged tune)");
         b.bank(T, 0x2e);
         b.write(T, 0x10, 0);
         b.bank(T, 0x2b);

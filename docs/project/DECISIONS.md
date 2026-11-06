@@ -1,5 +1,73 @@
 # Architecture decision record (ADR)
 
+## ADR-027 — Phase 3.1: lấy errno USB có giới hạn, không đoán RF hoặc sửa register sau lỗi
+
+**Date:** 2026-11-07
+
+**Status:** Implemented, OFFLINE-TESTED và RUNTIME-OBSERVED trên worktree từ `9621a8028d2cd3e5d98652cde69ba80d27cd7ee2`; source fingerprint `988919f6fe1c8cc070c4488c86caf50dd77cf652397221f96eab6502fb674270`. Phần mềm PASS các gate đã nêu; hardware vẫn `PHASE_3_1_BLOCKED_WITH_EVIDENCE` tại TS, không phải TS PASS hoặc phase hoàn tất.
+
+**Context:** AUTO đã đạt lock trên nhiều owner mới. TS Java trả -1 với cả chunk 16384/4096; một CLEAR_HALT được duyệt riêng hoàn tất nhưng không khắc phục. Java result không cho biết timeout, stall hay lỗi khác; tiếp tục thay register tuner hoặc quét PLP từ mã -1 là không có cơ sở.
+
+**Decision:** Dùng synchronous `USBDEVFS_BULK` chỉ cho IN 0x82 trên chính fd/claimed connection, lưu errno ngay sau syscall trước JNI cleanup. Không mở fd/owner song song, không đổi thuật toán driver khác; request vẫn bounded 1..16384 byte, timeout 1..2000 ms và plan thực 4096 byte/500 ms. Kết quả giữ count và errno riêng; lỗi -1 không bị biến thành byte dữ liệu, không retry hoặc sửa buffer người gọi. Wrapper phải truyền errno qua facade/binding/handoff/coordinator cùng kiểm worker/generation/permission và deferred cleanup.
+
+**Approval / compatibility:** TS transcript chuyển v4, luôn có `readApi=USBDEVFS_BULK_ERRNO`, vì đổi backend phải có hash/permit mới. Đường không clear có tối đa 1 OUT và budget 7000 ms; đường clear có tối đa 2 OUT và budget 12000 ms, đòi `explicit_endpoint_preparation` riêng. Cả hai giữ data window 5 giây, tối đa 64 KiB/16 reads, TTL/heartbeat/start reserve cũ; không tăng timeout để chữa PLP. Firmware Phase29/operational Phase30 stores không thay đổi; không tái dùng consumed approvals.
+
+**Verification:** Full JVM 361 methods PASS; 67 app + 43 library instrumentation fake-only PASS, gồm native fd âm/errno22/no buffer mutation và fake errno32/stale owner/forwarding. Debug/release/lint PASS, bốn ABI có JNI symbols, ELF64 static 16 KiB, Java major52 và minSdk21/target37 giữ nguyên. API21/16KiB runtime mới NOT RUN; không báo benchmark tăng tốc.
+
+**Runtime result:** Người dùng duyệt riêng đúng một workflow v4 và một clear mới, xác nhận RF/OTG hiện tại. Owner mới đạt ID/init/AUTO/lock; clear hoàn tất, một stream-select, Bulk đầu 4096/500 trả -1 với `errno75=EOVERFLOW`, 0 byte/packet. Đây là lỗi kích thước gói/buffer do USB stack báo, chưa định vị thiết bị/firmware/host/link. Không gọi NO_SIGNAL, sai PLP, EPIPE hoặc timeout. Sau đó cancel/drain/close và đóng Activity, không có corrective writes.
+
+**Alternatives / limits:** Không tự reset device, SET_INTERFACE, power-cycle, reupload operational, đổi driver/ownership, tăng buffer vô hạn, scan PLP hoặc sao chép GPIO/LNB/satellite. Async URB queue là khác biệt với Linux nhưng chưa được chứng minh chữa EOVERFLOW; chưa triển khai hoặc xin phép chạy nó từ suy đoán. Đề nghị một phép đối chứng chính tuner trên Windows driver hãng trước khi chọn cách sửa tiếp, vẫn trong Phase 3.1.
+
+**Rollback / reopen trigger:** Có thể quay backend đọc về Android `bulkTransfer` ở source rồi build/test và cấp plan/approval mới; không âm thầm dùng hash v2/v3 hoặc reuse permit. Không có register undo hoặc firmware rollback tự động. Mở lại quyết định khi có TS đối chứng, packet trace được duyệt hoặc nguồn đúng chip/bridge xác định nguyên nhân; giữ các kết quả lỗi đã đo.
+
+### Bổ sung kết quả ADR-026 và ADR-025 — 2026-11-07
+
+ADR-026 đã triển khai và kiểm: gate v3 đạt 360 JVM/109 instrumentation, người dùng duyệt riêng CLEAR_HALT ở workflow thứ tư, ioctl hoàn tất nhưng Bulk Java4096 vẫn -1/0 byte. Workflow v4 có approval clear mới cũng hoàn tất rồi Bulk báo EOVERFLOW. Hai phép thử này **không xác nhận HALT là root cause** và không cho phép clear tự động sau lỗi. Transcript v4 hiện hành thay v2/v3 cho mọi lượt mới; các đoạn status/compatibility phía dưới là lịch sử tại thời điểm lập ADR, không phải quyền hoặc hash dùng lại.
+
+ADR-025 đã có bằng chứng runtime mới: năm AUTO workflows trên owner mới đạt lock với ID0x197/K36/8MHz, không cần biết PLP số trước. Chỉ nâng kết luận cho đúng đường AUTO đã thử; selected/common PLP chưa đo, monitor vẫn bị chặn và QCVN fixtures không được coi là cấu hình phát sóng. Các kết quả NOT RUN ban đầu được giữ nguyên dưới đây thay vì sửa lịch sử thành PASS.
+
+## ADR-026 — Phase 3.1: chuẩn bị USB pipe 0x82 theo source, opt-in và quyền riêng
+
+**Date:** 2026-11-06
+
+**Status:** Đang triển khai/kiểm offline sau hai TS failures; chưa có quyền hoặc CLEAR_HALT thật. Đây vẫn là cùng Phase 3.1, không phải mở phase con hoặc tuyên bố TS đã sửa.
+
+**Context:** Ba workflow trên owner mới đã khóa DVB-T2 K36 bằng AUTO. Hai TS scopes riêng với chunk 16384 và 4096 đều có stream-select full-length nhưng Bulk đầu trả -1, 0 byte; không có errno xác minh. Official TBS `usb-urb.c:usb_urb_init:220` tại SHA `2ce787de9f6e81b4294692a45de15596ae2e1322` gọi usb_clear_halt trước URBs cho endpoint stream; Android port chưa có bước này. Không dùng lock để suy USB pipe hoặc TS đã hoạt động.
+
+**Decision:** Thêm opt-in chuẩn bị duy nhất endpoint 0x82, không endpoint tùy ý, qua USBDEVFS_CLEAR_HALT trên chính connection đang claim. Linux USB core thực hiện CLEAR_FEATURE(ENDPOINT_HALT) và host endpoint/toggle reset; không thay bằng chỉ vendor request, SET_INTERFACE hoặc reset device. Native helper chỉ nhận fd nội bộ, hardcode endpoint 0x82 và lưu errno ngay khi ioctl trả lỗi. Fd âm bị từ chối trước ioctl, có native smoke test không USB. Không mở connection hoặc đổi owner/driver/firmware.
+
+**Approval / bounds:** Mặc định tắt và yêu cầu cờ permit `explicit_endpoint_preparation` độc lập với AUTO. Transcript TS v3 khai báo source/operation, 2 OUT tối đa, 0 register IN, 12000 ms program gồm dự trù Linux ioctl 5000 ms + stream-select 2000 ms + data window 5000 ms. Native ioctl dùng timeout nội tại kernel, không phải tăng Bulk timeout hoặc TTL; không bảo đảm physical cancellation giữa syscall. Chỉ chuẩn bị trước streaming khi frontend đã init/lock, cùng generation/worker/claimed owner; consume bền vững và audit trước syscall. Lỗi/cancel/stale/budget dừng, không tự clear lại hoặc stream-select sau lỗi.
+
+**Compatibility:** Đường TS v2 không chuẩn bị endpoint vẫn có hash/giới hạn cũ. Không thay thuật toán driver khác hoặc runtime registry. Giữ API 21/Java 8, build native bốn ABI và static 16 KiB; test native với fd -1 không phải phép thử ioctl trên tuner. Android owner strict wrapper vẫn kiểm permission/attachment trước/sau và deferred cleanup như EP0/Bulk.
+
+**Alternatives / limits:** Chunk 4096 có nguồn nhưng đã không khắc phục Bulk thật; không báo speedup. EPIPE/HALT chỉ là giả thuyết tới khi có quan sát bổ sung; không đưa fake errno thành runtime. Không thực hiện satellite B7/GPIO8, clear-halt tự động sau mọi read lỗi, USB reset, reupload, firmware/EEPROM hoặc power-cycle. Nếu user không duyệt scope mới, giữ kết quả lock thật/TS lỗi USB và dừng tại boundary, không coi chuẩn bị code là quyền chạy.
+
+**Rollback:** Bỏ chọn opt-in để giữ TS v2; không cần đổi SDK hoặc firmware. Nếu đã clear endpoint thật thì không có lệnh undo giả tạo; không tự power-cycle. Chỉ kết quả mới trên approval/owner hiện hành được dùng để đánh giá hiệu quả, không sửa hai terminal TS lỗi trước đó.
+
+## ADR-025 — Phase 3.1: PLP tường minh, AUTO thử nghiệm tách quyền và không đoán L1 monitor
+
+**Date:** 2026-11-06
+
+**Status:** Implemented and OFFLINE-TESTED trên worktree từ `9621a8028d2cd3e5d98652cde69ba80d27cd7ee2`: 355 methods JVM, 104 methods instrumentation cách ly, debug/release/lint và static PASS có phạm vi. AUTO/monitor/lock/TS trên tuner thật NOT RUN, chưa có approval mới; chưa commit.
+
+**Context:** K36 / 594 MHz / 8 MHz là ứng viên có nguồn quy hoạch/SDTV nhưng PLP live chưa biết. Official CXD2878 chỉ hiện thực manual AF/id rồi AD=1. QCVN 63:2020 yêu cầu máy thu hỗ trợ Multi/Common và phép đo tự tìm kênh, không cung cấp PLP của trạm hoặc register Sony. Linux CXD2841ER/CXD2820R/CXD2880 cùng SHA `adc218676eef25575469234709c2d87185ca223a` có auto bank 0x23 / AD=0, vẫn là chip khác.
+
+**Decision — PLP:** Dùng Selection bất biến MANUAL(id), AUTO không có ID, MONITOR_RESOLVED có nhãn UNVERIFIED_MONITOR. Constructor int giữ manual 0..255 và từ chối sentinel -1; register code không dùng legacy plpId của AUTO. `planTune` mặc định từ chối AUTO/monitor; debug có phương thức đề nghị AUTO riêng chỉ cho ID 0x197 và K36 / 8 MHz. Mọi tune transcript v2 chứa mode/evidence/active/common chưa đo. AUTO không ghi AF, ghi AD=0; phần tune còn lại giữ nguyên official, không ATSC3/Freia/scan hoặc chọn PLP 0. Manual sau auto vẫn ghi ID mới và AD=1 mỗi lần.
+
+**Decision — monitor và quy chuẩn:** Không tạo monitor hardware nếu chưa có nguồn đúng chip/bank/bit và điều kiện hợp lệ. MONITOR_RESOLVED chỉ là biểu diễn chuẩn bị, không phải khả năng đã hỗ trợ. Fixtures QCVN phải ghi SYNTHETIC_TEST_FIXTURE, gồm Single PLP ID 42, Multi có Common PLP 0 và data PLP 1/2, Multi không Common và cấu hình thay đổi; không tự cấp hardware approval hoặc tuyên bố hợp quy. Các bảng A.2/A.3/A.4 thuộc mục A.2 của bản 2020, không lấy bảng test làm dữ liệu on-air.
+
+**Decision — quyền và thời gian:** Operational protocol 2 dùng namespace Phase31 riêng, không đọc/sửa consumed/ledger Phase29 hoặc Phase30. Gắn hash nhận dạng lần khởi động và USB owner với challenge/generation/hash; `approved_maximum_ms` phải khớp bound, cần ít nhất maximum + 5000 ms trước consume và cờ `explicit_experimental_auto_plp` riêng. Giữ TTL 300000 ms, heartbeat 2000 ms và control timeout 2000 ms, không tăng để bù thao tác UI. Thiếu boot-count ở runtime chưa hỗ trợ thì debug control fail-closed, không nâng minSdk 21. Helper host phải được kiểm khớp trước live, không suy permit firmware thành control.
+
+**Decision — trạng thái và vòng đời:** Lưu từng sample gồm generation/clock/syncState/tsLock/unlockDetected; chỉ syncState=6, có tsLock và không unlock mới đủ cấp quyền stream; syncState=7 giữ chưa xác nhận. Không suy RF mất sóng hoặc sai PLP từ no-lock; metrics giữ NOT_AVAILABLE. Khi Activity pause, revoke ngay, drain worker/native đồng bộ rồi bỏ owner/plan/RF; quay lại phải đi pipeline mới, không tự hồi sinh initialized. Báo cáo UI chỉ cập nhật khi nội dung đổi để không làm gián đoạn nhập.
+
+**Decision — TS:** Giữ đúng stream-select/Bulk limits cũ, tính lại deadline sau audit ngay trước Bulk, không công nhận PASS nếu native trả ngoài duration dù packet hợp lệ; không force-close để cắt call. Phân biệt LIMIT_REACHED, INVALID_TS và NO_DATA_OR_USB_FAILURE. Không lưu raw TS hoặc đưa dữ liệu phát sóng lên dịch vụ ngoài.
+
+**Verification:** Golden diff AUTO chỉ bỏ AF/thay AD, manual retune chống stale, biên ID/null/BW, status256 byte, epoch/clock/single-use,99 biên short của auto tune, audit/consent/cancellation, fake full path và UI InputConnection/pause/resume đều đã kiểm. Chi tiết lệnh và FAIL→PASS ở [TEST-MATRIX.md](TEST-MATRIX.md), nguồn/bảng quyết định ở [RESEARCH.md](RESEARCH.md). Không có paired benchmark hoặc latency hardware mới.
+
+**Alternatives:** Chọn PLP 0/1/2 từ phụ lục, encode AUTO thành 0xFF, sao chép monitor bank 0x0B/0x0C hoặc bank 0x22 suy đoán, tự scan 256 PLP, nới TTL hay tái dùng frontend/approval Phase30 đều bị loại. Đường manual từ INFO thiết bị đo đúng K36 vẫn giữ nếu auto không thể thử an toàn.
+
+**Rollback / reopen trigger:** Không có thay đổi flash/firmware hoặc ledger cũ. Có thể bỏ nhánh debug AUTO và quay lại manual ở source rồi build/test; thay đổi registry/SDK không cần thiết. Chỉ source Sony đúng ID 0x197 hoặc status và TS thực có approval mới được nâng mức bằng chứng AUTO. Power-cycle có thể khôi phục register RAM nhưng là thao tác vật lý riêng, không tự thực hiện hoặc xem là recovery đã kiểm.
+
 ## ADR-024 — Phase 3.0: owner operational mới, phê duyệt từng chương trình và gate RF IN trước tune
 
 **Date:** 2026-11-06

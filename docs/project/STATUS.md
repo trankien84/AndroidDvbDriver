@@ -1,5 +1,47 @@
 # Port TBS5530 sang Android — trạng thái hiện tại
 
+## Phase 3.1 — AUTO đã khóa K36; TS bị chặn bởi lỗi USB EOVERFLOW — 2026-11-07
+
+**Kết quả hiện tại:** `DVBT2_LOCK_CONFIRMED`, nhưng **chưa có `TS_SMOKE_PASS`**; toàn phase ở trạng thái `PHASE_3_1_BLOCKED_WITH_EVIDENCE` tại đường nhận USB. Năm workflow được duyệt, mỗi workflow mở owner mới và chạy lại probe/init/AUTO/status, đều đọc ID `0x197` rồi đạt `syncState=6`, `tsLock=true`, `unlockDetected=false` ngay mẫu đầu trên K36 / `594000000 Hz` / `8000000 Hz`. AUTO không ghi PLP ID vào AF, dùng AD=0; đây là bằng chứng runtime cho đường AUTO đã thử, không phải đo được selected PLP ID hoặc chứng minh hỗ trợ mọi Multi/Common PLP.
+
+Bốn TS scopes riêng đã gửi stream-select full-length rồi dừng ở Bulk đầu, đều 0 byte/packet: Java 16384 byte, Java 4096 byte, Java 4096 byte sau CLEAR_HALT và native 4096 byte sau CLEAR_HALT. Lượt cuối trên APK v4 đo được `errno=75 (EOVERFLOW)`, không còn chỉ có mã Java -1. Linux định nghĩa lỗi này là endpoint trả dữ liệu vượt max packet hoặc phần buffer còn lại; chưa phân biệt được thiết bị/firmware, host controller hoặc đường liên kết USB. Không gọi đây là timeout, thiếu sóng hoặc sai PLP. Giảm chunk và chuẩn bị endpoint **chưa khắc phục lỗi thực**. Chi tiết phân biệt nguyên nhân ở [RESEARCH.md](RESEARCH.md).
+
+**Bản mã cuối đã kiểm:** HEAD `9621a8028d2cd3e5d98652cde69ba80d27cd7ee2`, nhánh `chore/modernize-android-build`, thay đổi chưa stage/commit/push; source fingerprint `988919f6fe1c8cc070c4488c86caf50dd77cf652397221f96eab6502fb674270`. JVM 361 methods PASS; instrumentation cách ly 67 app + 43 library PASS; debug/release/lint/native bốn ABI và kiểm tĩnh APK PASS có phạm vi. APK debug v4 SHA-256 `9be0e4687de96a2ad2a690b5ca457ec875b916d2aa8128a53a6a18566950ef93` đã chạy lượt errno thật. Không nâng toolchain; API 21/16 KiB runtime mới NOT RUN. GitNexus index chưa xác minh, không dùng graph để chứng nhận kết quả.
+
+**Quyền và dữ liệu:** Một firmware upload mới duy nhất từ FX2_DEFAULT đạt 132/132 A0 full-length; terminal cũ vẫn UNCERTAIN, observation operational về sau được ghi riêng. Năm workflow frontend có permit/hash mới; tổng checked control 776 OUT/160 IN, cộng firmware là 908 OUT/160 IN, không tính descriptor reads hoặc host-only failures. Bốn stream-select, hai CLEAR_HALT được duyệt riêng và bốn Bulk calls, không retry. Không lưu raw TS, không cấp LNB/antenna DC, không reset/power-cycle hoặc đổi USB ownership. Các owner/UI/helper bounded đã kết thúc; consumed stores và firmware ledger được giữ nguyên, không giữ phiên để chờ.
+
+**Một hành động thực tế để tháo gỡ:** Kiểm thử độc lập chính TBS5530 bằng driver/ứng dụng Windows của hãng trên cùng anten K36 594 MHz/8 MHz, ghi nhận có nhận TS hay không. Đây là bước chẩn đoán được đề nghị, **chưa được thực hiện hoặc cấp quyền chuyển thiết bị**; không mở phase con, không tự đổi driver/ownership. Kết quả này giúp phân biệt lỗi riêng host/port Android với đường thiết bị/firmware. Những checkpoint dưới đây là lịch sử; xem [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md), [ENVIRONMENT.md](ENVIRONMENT.md) và ADR-027 trong [DECISIONS.md](DECISIONS.md).
+
+## Phase 3.1 — Lock thật đã đạt; TS đầu lỗi USB, đang sửa và kiểm tiếp — 2026-11-06
+
+AUTO K36 / 594 MHz / 8 MHz đã đạt lock trên hai owner mới được duyệt: ID 0x197, init ASCOT3I, status syncState=6/tsLock=true/unlockDetected=false. Không cần biết trước PLP số để đạt lock; selected PLP và Multi/Common đầy đủ vẫn chưa xác minh.
+
+Sau khi user khôi phục TCP và duyệt workflow mới, TS scope riêng đã gửi một 0x8A full-length và đọc một lần Bulk IN 0x82; result=-1, 0 byte, NO_DATA_OR_USB_FAILURE. Chưa có packet thật hoặc TS_SMOKE_PASS; không suy NO_SIGNAL hay sai PLP từ lỗi USB này. Owner/UI đã đóng sau smoke, helper bounded kết thúc; không tự retry hoặc thêm corrective writes.
+
+Đang kiểm sửa software trong cùng Phase 3.1: chunk 4096 byte theo buffer official thay 16384, transcript TS v2, telemetry kết quả/timeout/read wall time và sửa stale plan hash trong report TS. 4096 là ứng viên có nguồn, chưa chứng minh là root cause hoặc đã sửa transport thật. Lượt hardware khác phải có approval/hash mới sau regression; không upload lại operational. Các checkpoint dưới đây giữ nguyên lịch sử, không phải trạng thái cuối. Chi tiết mới tại [RESEARCH.md](RESEARCH.md).
+
+## Phase 3.1 — Đã khóa DVB-T2 K36 bằng AUTO; ADB mất trước TS — 2026-11-06
+
+**Bằng chứng mới:** `DVBT2_LOCK_CONFIRMED` trên TBS5530 thật, OnePlus GM1900/API 30, APK debug SHA `8941bf684d14a07180150cdbe217b4522d0b61e6d4353168b12b53052cc2e69a`. Người dùng đã duyệt riêng firmware, thử nghiệm AUTO và xác nhận coax thụ động đúng RF IN. Probe mới đọc ID `0x197`, init đạt, một AUTO tune K36 `594000000 Hz` / `8000000 Hz` hoàn tất. Status dừng ngay mẫu đầu: `syncState=6`, `tsLock=true`, `unlockDetected=false`. PLP được chọn chưa đo; lock không chứng minh Common/Multi PLP đầy đủ hoặc TS hợp lệ.
+
+Firmware mới từ FX2_DEFAULT có 132/132 A0 full-length, image 8192 byte; terminal auto-observation giữ `UNCERTAIN/JAVA_IO_EXCEPTION/NOT_OBSERVED`. Observation độc lập sau permission mới đọc operational 50 byte trong 14 ms, không vendor. Không upload lại operational. Control đã kiểm full-length: probe 3 OUT/2 IN, init 65/14, AUTO tune 84/15, status 2/1; tổng 154 OUT/32 IN, không phải số đo native-boundary latency.
+
+**Blocker hiện tại:** TCP ADB chuyển OFFLINE ngay trước chuẩn bị TS; không còn target online. Chưa có TS approval consumed, chưa `0x8A`, chưa Bulk hoặc TS thật; **không gọi `TS_SMOKE_PASS`**. Không tự reconnect, dùng alias, retune hoặc suy NO_SIGNAL. Các helper bounded đã kết thúc; cần người dùng đóng Activity operational trên điện thoại để không giữ owner trong lúc khôi phục ADB. Sau pause phải mở owner mới và có approval mới cho các chương trình đã consumed, không tái dùng init/lock trong bộ nhớ.
+
+Host permit lần đầu dừng trước native vì tên tạm `.json.new` xung đột Android AtomicFile; giữ host consumed, không có PROBE thật từ lần đó. Đã sửa helper thành `.tmp`, tái hiện bằng instrumentation và kiểm channel cách ly; user duyệt PROBE mới rồi đường probe/init/tune/status thật mới đạt lock. Chi tiết và giới hạn đang được bổ sung trong cùng Phase 3.1, không mở phase con. Git HEAD vẫn `9621a8028d2cd3e5d98652cde69ba80d27cd7ee2`, chưa stage/commit/push.
+
+## Phase 3.1 — Phần mềm PLP đã kiểm; chờ approval phần cứng mới — 2026-11-06
+
+**Trạng thái:** `SOFTWARE_READY_AWAITING_EXPLICIT_HARDWARE_APPROVAL`, không phải hoàn tất lock/TS. HEAD thực `9621a8028d2cd3e5d98652cde69ba80d27cd7ee2`, nhánh `chore/modernize-android-build`, origin đúng fork; changes chưa stage/commit/push. Không có commit mới sau baseline lúc bắt đầu; không reset/rebase/checkout/fetch hoặc sửa reference trees.
+
+Đã triển khai Selection MANUAL/AUTO/MONITOR_RESOLVED, tune transcript v2 và AUTO thử nghiệm tách quyền: không ghi AF, bank 0x23 / AD=0, chỉ đề nghị ID 0x197 / K36 / 594 MHz / 8 MHz. Runtime mặc định vẫn từ chối AUTO; đường debug cần consent thử nghiệm riêng theo exact plan/owner. Monitor L1 đúng CXD6802 chưa có nguồn nên không tạo hardware probes hoặc tự chọn Common PLP. Ba chip Linux đối chiếu cung cấp CROSS-CHIP-ANALOGY, **chưa chứng minh AUTO trên tuner này**. QCVN 63:2020 thay bản 2012, được dùng cho yêu cầu máy thu/fixtures, không suy PLP SDTV là 0/1/2 hoặc chứng nhận hợp quy.
+
+**Kiểm mới:** JVM 355 methods PASS; instrumentation fake-only cách ly `.phase31offline` PASS 61 app + 43 library trên GM1900/API 30; debug/release/lint PASS (0 errors/10 warnings cũ), 148 TBS main classes major 52, minSdk 21/target 37, zipalign và kiểm không firmware/TS/capture/test harness trong APK production PASS. Đã sửa hai lỗi deadline TS có test FAIL→PASS, chặn bảo thủ syncState=7 cấp stream, bổ sung sample clock/epoch và lifecycle pause/drain/reconnect/RF reset. Không có benchmark tăng tốc. Fingerprint nguồn đã kiểm: `078edc85048dfc147d268a8b802924dbe296856abe62890ad86abbba2e38d637`.
+
+**Phần cứng mới:** 0 firmware upload, 0 vendor/I²C, 0 tune/poll/stream/Bulk. Kết quả ID 0x197/init Phase 3.0 chỉ là lịch sử; owner/permission/RF/approval cũ không tái dùng. PLP on-air và RF hiện tại chưa đo. Chưa có `DVBT2_LOCK_CONFIRMED` hoặc `TS_SMOKE_PASS` thật. Nếu thiết bị còn default phải xin firmware approval riêng, nếu operational không nạp lại. Trước live phải kiểm provisioning/heartbeat host khớp protocol 2; đường host live này NOT RUN, không lấy helper firmware Phase 2.9 thay thế.
+
+**Bước kế tiếp duy nhất:** checkpoint xin phép workflow bounded được mô tả tại [RESEARCH.md](RESEARCH.md), hoặc chỉ preflight theo lựa chọn người dùng; không gửi USB ghi từ việc chuẩn bị code. Không giữ owner/app/helper phần cứng khi chờ trả lời. Nguồn/QCVN/bảng quyết định: [RESEARCH.md](RESEARCH.md); lựa chọn và rollback: ADR-025 trong [DECISIONS.md](DECISIONS.md); kết quả: [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md), [ENVIRONMENT.md](ENVIRONMENT.md).
+
 ## Checkpoint Git Phase 3.0 — 2026-11-06 18:22 +07
 
 - Người dùng yêu cầu commit toàn bộ changes Phase 3.0 và push lên origin của nhánh hiện tại. Preflight xác nhận `chore/modernize-android-build`, HEAD và live origin cùng `722c4916a83074e8cc5b5c6aeeaee9d2f1190785`, stage trống, một worktree và đúng 35 file nguồn/test/resource/hồ sơ đã kiểm.

@@ -35,8 +35,9 @@ public class Tbs5530OperationalHandoffTest {
     }
     private static final class Raw implements Tbs5530AndroidUsbFacade.RawConnection {
         byte[] bytes = descriptor();
-        int rawReads, claims, releases, closes, controls;
-        int metadataPacket = 512;
+        int rawReads, claims, releases, closes, controls, bulkReads, preparations;
+        int metadataPacket = 512, pointer, address;
+        boolean syntheticDemod;
         Runnable afterRaw;
         public byte[] rawDescriptors() { rawReads++; if (afterRaw != null) afterRaw.run(); return bytes.clone(); }
         public int interfaceCount() { return 1; }
@@ -50,8 +51,23 @@ public class Tbs5530OperationalHandoffTest {
         public boolean claim(int index, boolean force) { assertFalse(force); claims++; return true; }
         public boolean release(int index) { releases++; return true; }
         public int controlTransfer(int type, int request, int value, int index, byte[] bytes, int offset, int length, int timeout) {
-            controls++; return length;
+            controls++;
+            if (syntheticDemod) {
+                assertNotEquals(0xa0, request);
+                if (request == 0x90) { pointer = bytes[2] & 255; address = bytes[1] & 255; }
+                else if (request == 0x91) bytes[0] = (byte)(address == 0xcc
+                        ? pointer == 0xfb ? 1 : pointer == 0xfd ? 0x97 : 0
+                        : address == 0xc0 ? pointer == 0x7f ? 0xe0 : 0 : pointer == 0x10 ? 0x26 : 0);
+            }
+            return length;
         }
+        public int bulkTransfer(int interfaceIndex, int endpointIndex, byte[] bytes, int length, int timeout) {
+            assertTrue(syntheticDemod); assertEquals(0x82, endpointIndex); assertTrue(length <= 16384); bulkReads++;
+            for (int at = 0; at < 564; at += 188) { bytes[at] = 0x47; bytes[at + 2] = 0x20; bytes[at + 3] = (byte)(0x10 | at / 188); }
+            return 564;
+        }
+        public int lastBulkErrno() { return bulkReads > 0 ? 0 : -1; }
+        public void prepareBulkIn82() { assertTrue(syntheticDemod); preparations++; }
         public void close() { closes++; }
     }
     private static final class Fixture implements AutoCloseable {
@@ -74,6 +90,57 @@ public class Tbs5530OperationalHandoffTest {
         public void close() throws Exception {
             handoff.close(); runtime.close(); assertTrue(runtime.awaitTermination(5, TimeUnit.SECONDS));
         }
+    }
+    @Test public void sameFakeManagerOwnerCoordinatorAndGateReachManualAndAutoTsWithoutPhysicalUsb() throws Exception {
+        for (boolean auto : new boolean[]{false, true}) {
+            try (Fixture f = new Fixture()) {
+                f.manager.raw.syntheticDemod = true; f.start();
+                java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
+                java.util.concurrent.atomic.AtomicReference<Throwable> error = new java.util.concurrent.atomic.AtomicReference<>();
+                f.runtime.execute(() -> {
+                    try {
+                        long[] clock = {0}; java.util.Set<String> consumed = new java.util.HashSet<>();
+                        Tbs5530ControlProbe probe = new Tbs5530ControlProbe(f.handoff, new Tbs5530ControlProbe.Authorization() {
+                            public void requireCurrent() throws IOException { if (!f.consent.get()) throw new IOException("Revoked fake"); }
+                            public void consume(Tbs5530Frontend.Plan plan) throws IOException { if (!consumed.add(plan.getSha256())) throw new IOException("Consumed fake"); }
+                            public void audit(String b, int o, int t, int r, int l, int result) { }
+                            public boolean rfInConfirmed() { return true; }
+                            public boolean experimentalAutoPlpApproved() { return auto; }
+                        }, new Tbs5530Frontend.Clock() {
+                            public long elapsedRealtimeMillis() { return clock[0]; }
+                            public void delayMillis(long duration) { clock[0] += duration; }
+                        });
+                        probe.execute(probe.planProbe()); probe.execute(probe.planInitialize()); probe.readyForTune();
+                        Tbs5530DvbT2TuneParameters p = new Tbs5530DvbT2TuneParameters(594_000_000L, 8_000_000, auto
+                                ? Tbs5530DvbT2TuneParameters.Selection.automatic() : Tbs5530DvbT2TuneParameters.Selection.manual(42));
+                        probe.execute(auto ? probe.planExperimentalAutoTune(p) : probe.planTune(p));
+                        assertTrue(probe.execute(probe.planPollStatus(3)).status.locked);
+                        Tbs5530TsSmoke.Permission permission = new Tbs5530TsSmoke.Permission() {
+                            boolean used;
+                            public void requireCurrent(long generation) throws IOException { if (!f.consent.get() || generation != f.handoff.generation()) throw new IOException("Fake epoch"); }
+                            public void consume(Tbs5530TsSmoke.Limits limits, long generation) throws IOException {
+                                requireCurrent(generation); if (used) throw new IOException("Consumed fake TS"); used = true;
+                            }
+                            public void audit(String event, int ordinal, int count) { }
+                            public boolean endpointPreparationApproved() { return auto; }
+                        };
+                        Tbs5530TsSmoke.Result ts = f.handoff.smoke(permission, () -> 0L)
+                                .run(new Tbs5530TsSmoke.Limits(564, 1, 5000, 500, 4096, auto));
+                        assertEquals(Tbs5530TsSmoke.Status.STRUCTURE_CONFIRMED, ts.status);
+                        assertEquals(0, ts.lastReadErrno);
+                        assertEquals(4, consumed.size());
+                    } catch (Throwable failure) { error.set(failure); } finally { done.countDown(); }
+                });
+                assertTrue(done.await(10, TimeUnit.SECONDS)); if (error.get() != null) throw new AssertionError(error.get());
+                assertEquals(1, f.manager.opens); assertEquals(1, f.manager.raw.claims); assertEquals(1, f.manager.raw.bulkReads);
+                assertEquals(auto ? 187 : 188, f.manager.raw.controls); assertEquals(auto ? 1 : 0, f.manager.raw.preparations);
+            }
+        }
+    }
+    @Test public void freshOwnerNeverReusesIdentityEvenWhenPathAndGenerationAreReused() throws Exception {
+        String previous;
+        try (Fixture f = new Fixture()) { f.start(); previous = f.handoff.approvalIdentity(); }
+        try (Fixture f = new Fixture()) { f.start(); assertNotEquals(previous, f.handoff.approvalIdentity()); }
     }
     @Test public void freshOperationalTreeClaimsOnceButNeverDeclaresFrontendReadyOrUploads() throws Exception {
         Fixture f = new Fixture();

@@ -14,15 +14,26 @@ public final class Tbs5530TsSmoke {
         /** Check foreground, live host consent, and unchanged RF IN conditions before every call. */
         void requireCurrent(long generation) throws IOException;
         void audit(String event, int ordinal, int count) throws IOException;
+        default boolean endpointPreparationApproved() { return false; }
     }
     public static final class Limits {
-        public final int maxBytes, maxReads, durationMillis, readTimeoutMillis;
+        public final int maxBytes, maxReads, durationMillis, readTimeoutMillis, readChunkBytes;
+        public final boolean prepareEndpoint;
+        public long maximumMillis() { return durationMillis + 2000L + (prepareEndpoint ? 5000L : 0); }
         public Limits(int maxBytes, int maxReads, int durationMillis, int readTimeoutMillis) {
-            if (maxBytes < 564 || maxBytes > 1024 * 1024 || maxReads < 1 || maxReads > 256
+            this(maxBytes, maxReads, durationMillis, readTimeoutMillis, 4096);
+        }
+        /** 4096-byte default matches tbs5530.c stream.bulk.buffersize, not a cure for USB -1. */
+        public Limits(int maxBytes, int maxReads, int durationMillis, int readTimeoutMillis, int readChunkBytes) {
+            this(maxBytes, maxReads, durationMillis, readTimeoutMillis, readChunkBytes, false);
+        }
+        public Limits(int maxBytes, int maxReads, int durationMillis, int readTimeoutMillis, int readChunkBytes, boolean prepareEndpoint) {
+            this.prepareEndpoint = prepareEndpoint;
+            if (readChunkBytes < 1 || readChunkBytes > 16384 || maxBytes < 564 || maxBytes > 1024 * 1024 || maxReads < 1 || maxReads > 256
                     || durationMillis < 1 || durationMillis > 10000 || readTimeoutMillis < 1 || readTimeoutMillis > 2000
                     || readTimeoutMillis > durationMillis) throw new IllegalArgumentException("Invalid TS smoke bounds");
             this.maxBytes = maxBytes; this.maxReads = maxReads; this.durationMillis = durationMillis;
-            this.readTimeoutMillis = readTimeoutMillis;
+            this.readTimeoutMillis = readTimeoutMillis; this.readChunkBytes = readChunkBytes;
         }
     }
     public static final class Result {
@@ -30,8 +41,17 @@ public final class Tbs5530TsSmoke {
         public final int bytes, reads;
         public final long elapsedNanos;
         public final Tbs5530TsParser.Snapshot packets;
-        Result(Status status, int bytes, int reads, long elapsedNanos, Tbs5530TsParser.Snapshot packets) {
+        public final int lastReadResult, lastReadRequestedBytes, lastReadTimeoutMillis, lastReadErrno;
+        /** Managed read wall time includes ownership checks; it is not isolated native latency. */
+        public final long lastReadWallNanos;
+        public final boolean endpointPrepared;
+        Result(Status status, int bytes, int reads, long elapsedNanos, Tbs5530TsParser.Snapshot packets,
+               int lastReadResult, int requested, int timeout, long readWallNanos, boolean endpointPrepared, int errno) {
+            lastReadErrno = errno;
+            this.endpointPrepared = endpointPrepared;
             this.status = status; this.bytes = bytes; this.reads = reads; this.elapsedNanos = elapsedNanos; this.packets = packets;
+            this.lastReadResult = lastReadResult; lastReadRequestedBytes = requested;
+            lastReadTimeoutMillis = timeout; lastReadWallNanos = readWallNanos;
         }
         public double bytesPerSecond() { return elapsedNanos > 0 ? bytes * 1_000_000_000.0 / elapsedNanos : 0; }
     }
@@ -55,29 +75,56 @@ public final class Tbs5530TsSmoke {
             if (used) throw new IOException("TS smoke cannot be retried");
             used = true;
         }
-        requireLocked(); permission.requireCurrent(generation); permission.consume(limits, generation);
-        long started = clock.nanos();
-        int bytes = 0, reads = 0;
+        requireLocked(); permission.requireCurrent(generation);
+        if (limits.prepareEndpoint && !permission.endpointPreparationApproved()) throw new IOException("Separate endpoint preparation approval required");
+        permission.consume(limits, generation);
+        long started = clock.nanos(), dataStarted = started;
+        boolean endpointPrepared = false;
+        int bytes = 0, reads = 0, lastRead = Integer.MIN_VALUE, lastRequested = 0, lastTimeout = 0;
+        long lastReadWall = 0;
+        int lastErrno = -1;
         Tbs5530TsParser parser = new Tbs5530TsParser();
         Status status = Status.LIMIT_REACHED;
         Throwable failure = null;
         try {
+            if (limits.prepareEndpoint) {
+                // Official usb-urb.c:usb_urb_init:220, before any URBs, on the same claimed endpoint.
+                permission.audit("ENDPOINT82_CLEAR_HALT_INTENT", 0, 0);
+                permission.requireCurrent(generation); requireLocked();
+                if (!permission.endpointPreparationApproved()) throw new IOException("Endpoint approval revoked");
+                bulk.prepareEndpoint82(); endpointPrepared = true;
+                permission.audit("ENDPOINT82_CLEAR_HALT_COMPLETE", 0, 0);
+                permission.requireCurrent(generation); requireLocked();
+                if (elapsed(started) >= (limits.maximumMillis() - limits.durationMillis) * 1_000_000L) {
+                    throw new IOException("Insufficient remaining program budget after endpoint preparation");
+                }
+                dataStarted = clock.nanos();
+            }
             permission.audit("STREAM_SELECT_INTENT", 0, 2);
             permission.requireCurrent(generation); requireLocked();
             bridge.selectTerrestrialStream();
             permission.audit("STREAM_SELECT_COMPLETE", 0, 2);
             session.streamingStarted(generation);
-            byte[] buffer = new byte[Math.min(16384, limits.maxBytes)];
+            byte[] buffer = new byte[Math.min(limits.readChunkBytes, limits.maxBytes)];
             while (bytes < limits.maxBytes && reads < limits.maxReads) {
                 permission.requireCurrent(generation); requireLocked();
-                long elapsed = elapsed(started);
+                long elapsed = elapsed(dataStarted);
                 long remaining = limits.durationMillis * 1_000_000L - elapsed;
                 if (remaining < 1_000_000L) break;
                 int timeout = (int)Math.min(limits.readTimeoutMillis, remaining / 1_000_000L);
                 int length = Math.min(buffer.length, limits.maxBytes - bytes);
                 permission.audit("BULK_READ_INTENT", reads + 1, length);
                 permission.requireCurrent(generation); requireLocked();
+                remaining = limits.durationMillis * 1_000_000L - elapsed(dataStarted);
+                if (remaining < 1_000_000L) {
+                    permission.audit("BULK_READ_NOT_STARTED_DEADLINE", reads + 1, 0);
+                    break;
+                }
+                timeout = (int)Math.min(limits.readTimeoutMillis, remaining / 1_000_000L);
+                lastRequested = length; lastTimeout = timeout;
+                long readStarted = clock.nanos();
                 int count = bulk.read(buffer, length, timeout);
+                lastRead = count; lastErrno = bulk.lastReadErrno(); lastReadWall = elapsed(readStarted);
                 reads++;
                 permission.audit("BULK_READ_COMPLETE", reads, count);
                 permission.requireCurrent(generation); requireLocked();
@@ -85,13 +132,16 @@ public final class Tbs5530TsSmoke {
                 bytes += count; parser.accept(buffer, 0, count);
             }
             Tbs5530TsParser.Snapshot parsed = parser.snapshot();
-            if (status != Status.NO_DATA_OR_USB_FAILURE && parsed.packets >= 3 && parsed.synchronizedToStream && parsed.syncLosses == 0
-                    && parsed.continuityErrors == 0 && parsed.malformedPackets == 0 && parsed.transportErrorPackets == 0) {
-                status = Status.STRUCTURE_CONFIRMED;
-            } else if (bytes > 0 && status != Status.NO_DATA_OR_USB_FAILURE) status = Status.INVALID_TS;
             long elapsed = elapsed(started);
+            boolean validStructure = parsed.packets >= 3 && parsed.synchronizedToStream && parsed.syncLosses == 0
+                    && parsed.continuityErrors == 0 && parsed.malformedPackets == 0 && parsed.transportErrorPackets == 0;
+            if (status != Status.NO_DATA_OR_USB_FAILURE) {
+                if (validStructure && elapsed(dataStarted) <= limits.durationMillis * 1_000_000L
+                        && elapsed <= limits.maximumMillis() * 1_000_000L) status = Status.STRUCTURE_CONFIRMED;
+                else if (!validStructure && bytes > 0) status = Status.INVALID_TS;
+            }
             permission.audit("TS_SMOKE_FINISHED", reads, bytes);
-            return new Result(status, bytes, reads, elapsed, parsed);
+            return new Result(status, bytes, reads, elapsed, parsed, lastRead, lastRequested, lastTimeout, lastReadWall, endpointPrepared, lastErrno);
         } catch (IOException | RuntimeException error) {
             failure = error;
             session.failed(generation, error);

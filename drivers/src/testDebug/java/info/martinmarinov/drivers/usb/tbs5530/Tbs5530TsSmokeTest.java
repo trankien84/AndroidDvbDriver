@@ -18,10 +18,12 @@ public class Tbs5530TsSmokeTest {
         final Owner owner = new Owner();
         final long token;
         final Tbs5530TsSmoke smoke;
-        int consumes, selects, reads, count = 188 * 3, audits;
-        boolean rf = true, consent = true, failAudit;
+        int consumes, selects, reads, count = 188 * 3, audits, requested, timeoutRequested;
+        boolean rf = true, consent = true, failAudit, endpointApproved, failPreparation;
+        int preparations, errno = -1;
+        long preparationNanos;
         long nanos;
-        Runnable duringRead;
+        Runnable duringRead, beforeBulk;
         Fixture(boolean locked) throws Exception {
             token = session.requestPermission(); session.permissionResult(token, true); session.connected(token, owner);
             session.interfaceClaimed(token); session.ready(token); session.frontendInitialized(token); session.frontendLock(token, locked);
@@ -30,14 +32,18 @@ public class Tbs5530TsSmokeTest {
                 assertArrayEquals(new byte[]{10, 0}, bytes); selects++; return length;
             }, session, token);
             Tbs5530BulkTransport bulk = new Tbs5530BulkTransport(session, token, owner, () -> { }, (bytes, length, timeout) -> {
-                assertTrue(timeout > 0 && timeout <= 2000); reads++;
+                assertTrue(timeout > 0 && timeout <= 2000); reads++; requested = length; timeoutRequested = timeout;
                 for (int at = 0, packet = 0; at + 188 <= length && packet < 3; at += 188, packet++) {
                     bytes[at] = 0x47; bytes[at+1] = 0; bytes[at+2] = 0x20; bytes[at+3] = (byte)(0x10 | packet);
                 }
                 if (duringRead != null) duringRead.run(); nanos += 100_000_000L; return count;
-            });
+            }, () -> {
+                assertEquals(1, consumes); assertEquals(0, selects); preparations++; nanos += preparationNanos;
+                if (failPreparation) throw new IOException("Synthetic clear-halt failed, no retry");
+            }, () -> errno);
             smoke = new Tbs5530TsSmoke(session, token, bridge, bulk, this, () -> nanos);
         }
+        public boolean endpointPreparationApproved() { return endpointApproved && consent && rf; }
         public void consume(Tbs5530TsSmoke.Limits limits, long generation) throws IOException {
             requireCurrent(generation); if (consumes++ != 0) throw new IOException("consumed");
         }
@@ -46,6 +52,7 @@ public class Tbs5530TsSmokeTest {
         }
         public void audit(String event, int ordinal, int count) throws IOException {
             audits++; if (failAudit) throw new IOException("audit");
+            if ("BULK_READ_INTENT".equals(event) && beforeBulk != null) beforeBulk.run();
         }
         Tbs5530TsSmoke.Limits limits() { return new Tbs5530TsSmoke.Limits(564, 2, 1000, 500); }
     }
@@ -56,6 +63,52 @@ public class Tbs5530TsSmokeTest {
         assertEquals(1, f.selects); assertEquals(1, f.reads); assertEquals(1, f.owner.releases); assertEquals(1, f.owner.closes);
         assertEquals(5640.0, result.bytesPerSecond(), 0.001);
         assertThrows(IOException.class, () -> f.smoke.run(f.limits())); assertEquals(1, f.selects);
+    }
+    @Test public void endpointPreparationNeedsSeparateConsentAndRunsOnceBeforeSelect() throws Exception {
+        Tbs5530TsSmoke.Limits limits = new Tbs5530TsSmoke.Limits(564, 1, 1000, 500, 4096, true);
+        assertEquals(8000, limits.maximumMillis());
+        Fixture denied = new Fixture(true);
+        assertThrows(IOException.class, () -> denied.smoke.run(limits));
+        assertEquals(0, denied.preparations); assertEquals(0, denied.consumes); denied.session.close();
+        Fixture allowed = new Fixture(true); allowed.endpointApproved = true;
+        Tbs5530TsSmoke.Result result = allowed.smoke.run(limits);
+        assertTrue(result.endpointPrepared); assertEquals(Tbs5530TsSmoke.Status.STRUCTURE_CONFIRMED, result.status);
+        assertEquals(1, allowed.preparations); assertEquals(1, allowed.selects); assertEquals(1, allowed.reads);
+        assertThrows(IOException.class, () -> allowed.smoke.run(limits)); assertEquals(1, allowed.preparations);
+    }
+    @Test public void failedOrOverBudgetPreparationCannotSelectStreamOrRetry() throws Exception {
+        Tbs5530TsSmoke.Limits limits = new Tbs5530TsSmoke.Limits(564, 1, 1000, 500, 4096, true);
+        for (boolean fail : new boolean[]{true, false}) {
+            Fixture f = new Fixture(true); f.endpointApproved = true; f.failPreparation = fail;
+            f.preparationNanos = fail ? 0 : 8_000_000_000L;
+            assertThrows(IOException.class, () -> f.smoke.run(limits)); assertEquals(1, f.preparations);
+            assertEquals(0, f.selects); assertEquals(0, f.reads); assertEquals(1, f.owner.closes);
+        }
+    }
+    @Test public void sourceSizedChunkAndNegativeReadTelemetryDoNotInventErrnoOrRetry() throws Exception {
+        Fixture f = new Fixture(true); f.count = -1; f.errno = 32;
+        Tbs5530TsSmoke.Limits limits = new Tbs5530TsSmoke.Limits(65536, 16, 5000, 500);
+        assertEquals(4096, limits.readChunkBytes);
+        Tbs5530TsSmoke.Result result = f.smoke.run(limits);
+        assertEquals(Tbs5530TsSmoke.Status.NO_DATA_OR_USB_FAILURE, result.status);
+        assertEquals(-1, result.lastReadResult); assertEquals(32, result.lastReadErrno);
+        assertEquals(4096, result.lastReadRequestedBytes);
+        assertEquals(500, result.lastReadTimeoutMillis); assertEquals(100_000_000L, result.lastReadWallNanos);
+        assertEquals(1, f.reads); assertEquals(4096, f.requested); assertEquals(500, f.timeoutRequested);
+        assertThrows(IllegalArgumentException.class, () -> new Tbs5530TsSmoke.Limits(564, 1, 1000, 500, 0));
+        assertThrows(IllegalArgumentException.class, () -> new Tbs5530TsSmoke.Limits(564, 1, 1000, 500, 16385));
+        assertEquals(16384, new Tbs5530TsSmoke.Limits(65536, 16, 5000, 500, 16384).readChunkBytes);
+    }
+    @Test public void lateNativeReturnCannotPublishTsPassOutsideApprovedDuration() throws Exception {
+        Fixture f = new Fixture(true); f.duringRead = () -> f.nanos = 1_000_000_000L;
+        assertEquals(Tbs5530TsSmoke.Status.LIMIT_REACHED, f.smoke.run(f.limits()).status);
+        assertEquals(1, f.reads);
+    }
+    @Test public void auditCannotSpendReadBudgetAndStillStartNativeWithOldTimeout() throws Exception {
+        Fixture f = new Fixture(true); f.beforeBulk = () -> f.nanos = 1_000_000_000L;
+        Tbs5530TsSmoke.Result result = f.smoke.run(f.limits());
+        assertEquals(0, f.reads); assertEquals(0, result.bytes);
+        assertEquals(Tbs5530TsSmoke.Status.LIMIT_REACHED, result.status);
     }
     @Test public void absentRfOrLockOrApprovalSendsNoStreamSelect() throws Exception {
         for (int missing = 0; missing < 3; missing++) {

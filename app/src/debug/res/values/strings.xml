@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="tbs5530_rf_in_confirmation" translatable="false">Đã xác nhận coax DVB-T2 vào RF IN (không LNB IN), nguồn trên dây đã kiểm an toàn.</string>
+    <string name="tbs5530_k36_frequency" translatable="false">594000000</string>
+    <string name="tbs5530_k36_bandwidth" translatable="false">8000000</string>
+    <string name="tbs5530_auto_plp_warning" translatable="false">AUTO thử nghiệm — bank23/AD=0, không ghi AF; cần duyệt rủi ro riêng, PLP thực chưa biết</string>
+    <string name="tbs5530_endpoint_preparation_warning" translatable="false">Chuẩn bị pipe 0x82 bằng CLEAR_HALT một lần theo Linux; cần approval riêng, dự trù 5 giây cho ioctl; không phải reset tuner.</string>
 </resources>

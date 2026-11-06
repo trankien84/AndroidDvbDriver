@@ -149,14 +149,15 @@ public final class Tbs5530Frontend {
 
         /** Canonical, versioned approval input, including read-dependent formulae, not resolved bytes. */
         public String getApprovalTranscript() {
-            StringBuilder text = new StringBuilder("TBS5530-CXD2878-PLAN/v1\n");
+            StringBuilder text = new StringBuilder(tuneParameters == null
+                    ? "TBS5530-CXD2878-PLAN/v1\n" : "TBS5530-CXD2878-PLAN/v2\n");
             text.append(operation).append('|').append(generation).append('|').append(revision)
                     .append('|').append(usbOutCount).append('|').append(usbInCount)
                     .append('|').append(delayMillis).append('|').append(maximumMillis)
                     .append('|').append(countsAreUpperBounds).append('\n');
             text.append("EP0|WRITE=40/80|READ=40/90,C0/91|value=0|index=0|timeoutMs=2000|retry=0\n");
             if (tuneParameters != null) text.append(tuneParameters.frequencyHz).append('|')
-                    .append(tuneParameters.bandwidthHz).append('|').append(tuneParameters.plpId).append('\n');
+                    .append(tuneParameters.bandwidthHz).append('|').append(tuneParameters.selection.transcript()).append('\n');
             for (RegisterTransaction step : transactions) {
                 text.append(step.kind).append('|').append(step.address).append('|').append(step.bank)
                         .append('|').append(step.register).append('|').append(step.readLength)
@@ -200,18 +201,29 @@ public final class Tbs5530Frontend {
             tsLock = (raw & 0x20) != 0;
             unlockDetected = (raw & 0x10) != 0;
             // cxd2878_read_status:3312-3323; this is not a TS packet/continuity observation.
-            locked = syncState >= 6 && tsLock && !unlockDetected;
+            // Reserved sync=7 is not sufficient evidence to authorize streaming.
+            locked = syncState == 6 && tsLock && !unlockDetected;
+        }
+    }
+
+    public static final class StatusSample {
+        public final long generation, elapsedRealtimeMillis;
+        public final Status status;
+        private StatusSample(long generation, long time, Status status) {
+            this.generation = generation; elapsedRealtimeMillis = time; this.status = status;
         }
     }
 
     public static final class Result {
+        public final List<StatusSample> statusSamples;
         public final Operation operation;
         public final State state;
         public final int chipId;
         public final Status status;
         public final int usbOutCompleted;
         public final int usbInCompleted;
-        private Result(Operation operation, State state, int chipId, Status status, int out, int in) {
+        private Result(Operation operation, State state, int chipId, Status status, int out, int in, List<StatusSample> samples) {
+            statusSamples = Collections.unmodifiableList(new ArrayList<>(samples));
             this.operation = operation;
             this.state = state;
             this.chipId = chipId;
@@ -280,8 +292,20 @@ public final class Tbs5530Frontend {
     }
 
     public synchronized Plan planTune(Tbs5530DvbT2TuneParameters parameters) throws TransferException {
+        return planTune(parameters, false);
+    }
+    /** Debug gate may propose this plan; creation is not experimental register approval. */
+    synchronized Plan planTune(Tbs5530DvbT2TuneParameters parameters, boolean experimentalAuto) throws TransferException {
         if (parameters == null) throw new IllegalArgumentException("Explicit tune parameters required");
         requireState(State.READY_FOR_TUNE, State.DVBT2_LOCKED);
+        if (parameters.selection.mode == Tbs5530DvbT2TuneParameters.Mode.MONITOR_RESOLVED) {
+            throw new UnsupportedOperationException("CXD6802 L1 monitor is not source-verified");
+        }
+        if (parameters.selection.mode == Tbs5530DvbT2TuneParameters.Mode.AUTO
+                && (!experimentalAuto || chipId != 0x197 || parameters.frequencyHz != 594_000_000L
+                || parameters.bandwidthHz != 8_000_000)) {
+            throw new UnsupportedOperationException("Experimental AUTO requires separate consent and exact K36/8MHz/0x197 scope");
+        }
         Builder b = new Builder();
         Tbs5530Cxd2878Sequences.tune(b, parameters, tuned);
         return new Plan(this, Operation.TUNE, b, parameters);
@@ -321,6 +345,7 @@ public final class Tbs5530Frontend {
         revision++;
         final List<byte[]> reads = new ArrayList<>(Collections.nCopies(plan.transactions.size(), null));
         final Status[] status = {null};
+        final List<StatusSample> samples = new ArrayList<>();
         final int[] counts = {0, 0};
         try {
             session.transaction(generation, () -> {
@@ -373,6 +398,7 @@ public final class Tbs5530Frontend {
                             break;
                         case STATUS:
                             status[0] = new Status(reads.get(step.sourceStep)[0] & 255);
+                            samples.add(new StatusSample(generation, clock.elapsedRealtimeMillis(), status[0]));
                             break;
                         default: throw new AssertionError(step.kind);
                     }
@@ -394,7 +420,7 @@ public final class Tbs5530Frontend {
                             break;
                         default: throw new AssertionError(plan.operation);
                     }
-                    return new Result(plan.operation, state, chipId, status[0], counts[0], counts[1]);
+                    return new Result(plan.operation, state, chipId, status[0], counts[0], counts[1], samples);
                 }
             }
         } catch (TransferException e) {
@@ -458,6 +484,7 @@ public final class Tbs5530Frontend {
         private final int[] banks = new int[128];
         Builder() { java.util.Arrays.fill(banks, -1); }
         void source(String source) { provenance = Tbs5530Cxd2878Sequences.OFFICIAL + source; }
+        void provenance(String source) { provenance = source; }
         void bank(int address, int bank) {
             banks[address] = bank;
             write(address, 0, bank);

@@ -388,12 +388,112 @@ public class Tbs5530FrontendTest {
         ready.script.assertComplete();
     }
 
+    @Test public void explicitPlpModesNeverEncodeAutoAsFfOrSilentlyEnableMonitor() throws Exception {
+        Rig r = new Rig(); r.initialize();
+        for (int id : new int[]{0, 1, 42, 254, 255}) {
+            Tbs5530DvbT2TuneParameters p = new Tbs5530DvbT2TuneParameters(594_000_000L, 8_000_000,
+                    Tbs5530DvbT2TuneParameters.Selection.manual(id));
+            assertEquals(id, p.plpId); assertEquals(Integer.valueOf(id), p.selection.id);
+            assertEquals(Tbs5530DvbT2TuneParameters.Mode.MANUAL, p.selection.mode);
+        }
+        for (int id : new int[]{-1, 256}) assertThrows(IllegalArgumentException.class,
+                () -> Tbs5530DvbT2TuneParameters.Selection.manual(id));
+        assertThrows(IllegalArgumentException.class, () -> new Tbs5530DvbT2TuneParameters(594_000_000L, 8_000_000, null));
+        Tbs5530DvbT2TuneParameters auto = autoParameters();
+        assertNull(auto.selection.id);
+        assertThrows(UnsupportedOperationException.class, () -> r.frontend.planTune(auto));
+        assertThrows(UnsupportedOperationException.class, () -> r.frontend.planTune(new Tbs5530DvbT2TuneParameters(
+                594_000_000L, 8_000_000, Tbs5530DvbT2TuneParameters.Selection.monitorResolved(42))));
+        for (int width : new int[]{7_610_000, 7_710_000, 7_770_000}) assertThrows(IllegalArgumentException.class,
+                () -> new Tbs5530DvbT2TuneParameters(594_000_000L, width, 42));
+        assertThrows(UnsupportedOperationException.class, () -> r.frontend.planTune(new Tbs5530DvbT2TuneParameters(
+                602_000_000L, 8_000_000, Tbs5530DvbT2TuneParameters.Selection.automatic()), true));
+        assertEquals(84, r.io.calls);
+    }
+
+    private static Tbs5530DvbT2TuneParameters autoParameters() {
+        return new Tbs5530DvbT2TuneParameters(594_000_000L, 8_000_000, Tbs5530DvbT2TuneParameters.Selection.automatic());
+    }
+
+    @Test public void experimentalAutoGoldenDiffIsOnlyAfOmissionAndAdZero() throws Exception {
+        Rig r = new Rig(); r.initialize();
+        Plan manual = r.frontend.planTune(new Tbs5530DvbT2TuneParameters(594_000_000L, 8_000_000, 42));
+        Plan auto = r.frontend.planTune(autoParameters(), true);
+        assertEquals(84, auto.usbOutCount); assertEquals(15, auto.usbInCount);
+        assertEquals(198_120, auto.maximumMillis); assertEquals(120, auto.delayMillis);
+        assertNotEquals(manual.getSha256(), auto.getSha256());
+        assertTrue(auto.getApprovalTranscript().contains("mode=AUTO|id=NOT_MEASURED"));
+        assertTrue(auto.getApprovalTranscript().contains("CROSS-CHIP-ANALOGY:torvalds/linux@adc218"));
+        List<RegisterTransaction> a = auto.getTransactions(), m = manual.getTransactions();
+        assertEquals(m.size() - 1, a.size());
+        assertArrayEquals(bytes(3, 0xc8, 0, 0x23), a.get(0).usbWritePayload(0));
+        assertArrayEquals(bytes(3, 0xc8, 0xad, 0), a.get(1).usbWritePayload(0));
+        for (RegisterTransaction step : a) assertFalse(step.address == T && step.bank == 0x23 && step.register == 0xaf);
+        for (int i = 2; i < a.size(); i++) {
+            RegisterTransaction left = a.get(i), right = m.get(i + 1);
+            assertEquals(right.kind, left.kind); assertEquals(right.address, left.address);
+            assertEquals(right.bank, left.bank); assertEquals(right.register, left.register);
+            assertEquals(right.readLength, left.readLength); assertEquals(right.delayMillis, left.delayMillis);
+            assertArrayEquals(right.getData(), left.getData());
+            assertEquals(right.sourceStep < 0 ? -1 : right.sourceStep - 1, left.sourceStep);
+        }
+        tuneFixture(r.script, autoParameters(), false); r.frontend.execute(auto); r.script.assertComplete();
+    }
+
+    @Test public void autoToManualRetuneWritesTheNewIdAndAdOneEveryTime() throws Exception {
+        Rig r = new Rig(); r.initialize();
+        tuneFixture(r.script, autoParameters(), false); r.frontend.execute(r.frontend.planTune(autoParameters(), true));
+        r.tune(new Tbs5530DvbT2TuneParameters(594_000_000L, 8_000_000, 255), true);
+        r.tune(new Tbs5530DvbT2TuneParameters(594_000_000L, 8_000_000, 42), true);
+        r.script.assertComplete();
+    }
+
+    @Test public void qcvnSyntheticTopologiesAreNotOnAirPresetsOrCommonPlpDiscovery() throws Exception {
+        final String provenance = "SYNTHETIC_TEST_FIXTURE";
+        int[][] data = {{42}, {1, 2}, {17, 254}, {2}, {42, 17}};
+        Integer[] common = {null, 0, null, 0, null};
+        for (int scenario = 0; scenario < data.length; scenario++) {
+            assertEquals("SYNTHETIC_TEST_FIXTURE", provenance);
+            Rig r = new Rig(); r.initialize(); boolean active = false;
+            for (int id : data[scenario]) {
+                assertNotEquals(common[scenario], Integer.valueOf(id));
+                Tbs5530DvbT2TuneParameters p = new Tbs5530DvbT2TuneParameters(594_000_000L, 8_000_000, id);
+                assertTrue(p.selection.transcript().contains("NOT_RF_MEASURED"));
+                r.tune(p, active); active = true;
+            }
+            r.script.assertComplete();
+        }
+    }
+
+    @Test public void statusProgressionHasImmutableEpochAndMonotonicSamples() throws Exception {
+        Rig r = new Rig(); r.initialize(); r.tune(parameters(8_000_000, 42), false);
+        statusFixture(r.script, 1); statusFixture(r.script, 5); statusFixture(r.script, 0x26);
+        Tbs5530Frontend.Result result = r.frontend.execute(r.frontend.planPollStatus(20));
+        assertEquals(3, result.statusSamples.size());
+        for (int i = 0; i < 3; i++) {
+            assertEquals(r.session.getGeneration(), result.statusSamples.get(i).generation);
+            assertEquals(204 + 1000L * i, result.statusSamples.get(i).elapsedRealtimeMillis);
+        }
+        assertEquals(5, result.statusSamples.get(1).status.syncState);
+        assertTrue(result.statusSamples.get(2).status.locked);
+        assertThrows(UnsupportedOperationException.class, () -> result.statusSamples.clear());
+        r.script.assertComplete();
+    }
+
+    @Test public void reservedSyncSevenCannotAuthorizeTsEvenWithTsBitSet() throws Exception {
+        Rig r = new Rig(); r.initialize(); r.tune(parameters(8_000_000, 42), false);
+        statusFixture(r.script, 0x27);
+        assertFalse(r.frontend.execute(r.frontend.planStatus()).status.locked);
+        assertEquals(State.READY_FOR_TUNE, r.frontend.getState());
+        r.script.assertComplete();
+    }
+
     @Test public void statusUsesSourceBitSemanticsAndNeverInventsMetrics() throws Exception {
         Rig r = new Rig(); r.initialize(); r.tune(parameters(8_000_000, 0), false);
         for (int raw = 0; raw < 256; raw++) {
             statusFixture(r.script, raw);
             Tbs5530Frontend.Result result = r.frontend.execute(r.frontend.planStatus());
-            boolean expected = (raw & 7) >= 6 && (raw & 0x20) != 0 && (raw & 0x10) == 0;
+            boolean expected = (raw & 7) == 6 && (raw & 0x20) != 0 && (raw & 0x10) == 0;
             assertEquals(expected, result.status.locked);
             assertEquals(expected ? State.DVBT2_LOCKED : State.READY_FOR_TUNE, result.state);
             assertEquals(Tbs5530Frontend.Metric.NOT_AVAILABLE, result.status.signalStrength);
@@ -527,7 +627,7 @@ public class Tbs5530FrontendTest {
     }
 
     // Golden fixtures are independent of Plan/Builder: official cxd2878.c at the pinned SHA.
-    private static void probeFixture(ScriptedFakeControlIo f, int id) {
+    static void probeFixture(ScriptedFakeControlIo f, int id) {
         w(f, X, 0, 0); rd(f, X, 0xfb, id >>> 8); rd(f, X, 0xfd, id & 255);
     }
     private static void resetFixture(ScriptedFakeControlIo f, int id) {
@@ -546,7 +646,7 @@ public class Tbs5530FrontendTest {
         w(f, U, 0x81, 0x18, 0x84, 0xa8, 0x82, 0, 0, 0xc4, 0x40, 0x10, 0, 0x45, 0x75, 7, 0x1c, 0x3f, 2, 0x10, 0x20, 0x0a, 0);
         w(f, U, 0x9b, 0);
     }
-    private static void initFixture(ScriptedFakeControlIo f) {
+    static void initFixture(ScriptedFakeControlIo f) {
         initPrefixFixture(f, 0x197, 0xe1); tunerBootWrites(f); rd(f, U, 0x1a, 0);
         w(f, U, 0x17, 0x2a, 0x0e); rd(f, U, 0x19, 0xab); w(f, U, 0x95, 0x0b);
         w(f, U, 0xb0, 0); w(f, U, 0x30, 0xe0); w(f, U, 0xb1, 0x1e); w(f, U, 0xb3, 2);
@@ -562,8 +662,10 @@ public class Tbs5530FrontendTest {
         w(f, T, 0, 0); rmw(f, T, 0x95, 1, 0x15);
         w(f, T, 0, 0); w(f, T, 0x96, 0x54); w(f, T, 0, 0); w(f, T, 0x97, 0x54);
     }
-    private static void tuneFixture(ScriptedFakeControlIo f, Tbs5530DvbT2TuneParameters p, boolean active) {
-        w(f, T, 0, 0x23); w(f, T, 0xaf, p.plpId); w(f, T, 0xad, 1);
+    static void tuneFixture(ScriptedFakeControlIo f, Tbs5530DvbT2TuneParameters p, boolean active) {
+        w(f, T, 0, 0x23);
+        if (p.selection.mode == Tbs5530DvbT2TuneParameters.Mode.AUTO) w(f, T, 0xad, 0);
+        else { w(f, T, 0xaf, p.selection.id); w(f, T, 0xad, 1); }
         w(f, T, 0, 0x2e); w(f, T, 0x10, 0); w(f, T, 0, 0x2b); w(f, T, 0x9d, 0x2e);
         if (active) { streamFixture(f, false); }
         else {
@@ -592,7 +694,9 @@ public class Tbs5530FrontendTest {
             case 8_000_000: bw = 2; offset = 0x1c; widthOffset = 0x1a; break;
             default: throw new AssertionError();
         }
-        w(f, U, 0x68, 0, 0x88, 0, 0x0b, 0x22, bw, offset, widthOffset, 0x90, 0x29, 0x0a, 255, 0x11, 0x99, 0, 0x24, 0x87);
+        assertTrue(p.frequencyHz == 594_000_000L || p.frequencyHz == 666_000_000L);
+        int[] channel = p.frequencyHz == 594_000_000L ? new int[]{0x50, 0x10, 0x09} : new int[]{0x90, 0x29, 0x0a};
+        w(f, U, 0x68, 0, 0x88, 0, 0x0b, 0x22, bw, offset, widthOffset, channel[0], channel[1], channel[2], 255, 0x11, 0x99, 0, 0x24, 0x87);
         w(f, U, 0x88, 0); w(f, U, 0x87, 0xc0); w(f, X, 0, 0); w(f, X, 8, 0);
         w(f, T, 0, 0); w(f, T, 0xfe, 1); streamFixture(f, true);
     }
@@ -626,7 +730,7 @@ public class Tbs5530FrontendTest {
     private static void streamFixture(ScriptedFakeControlIo f, boolean enable) {
         w(f, T, 0, 0); rd(f, T, 0xa9, 0); w(f, T, 0, 0); w(f, T, 0xc3, enable ? 0 : 1);
     }
-    private static void statusFixture(ScriptedFakeControlIo f, int raw) { w(f, T, 0, 0x20); rd(f, T, 0x10, raw); }
+    static void statusFixture(ScriptedFakeControlIo f, int raw) { w(f, T, 0, 0x20); rd(f, T, 0x10, raw); }
     private static void rmw(ScriptedFakeControlIo f, int address, int register, int before, int after) {
         rd(f, address, register, before); w(f, address, register, after);
     }

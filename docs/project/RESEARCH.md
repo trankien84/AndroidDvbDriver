@@ -1,5 +1,131 @@
 # Research log (append-only)
 
+## 2026-11-07 — Phase 3.1: AUTO đã được kiểm thật; errno chỉ ra lỗi nhận USB EOVERFLOW
+
+### Kết luận và giới hạn bằng chứng
+
+`RUNTIME-OBSERVED`: Năm fresh-owner workflows đều probe ID `0x197`, init ASCOT3I E-family và AUTO tune K36 / 594 MHz / 8 MHz thành công; status đầu mỗi lượt có syncState=6, tsLock=true, unlockDetected=false. Vì vậy không còn blocker phải biết PLP ID trước tune. AUTO bank 0x23/AD=0, không ghi AF, đã đạt `DVBT2_LOCK_CONFIRMED` trên đường CXD6802 đang thử. Bằng chứng này không đo active PLP ID, không xác nhận mọi silicon revision, Common PLP hoặc mọi dịch vụ Multi PLP; L1/PLP monitor đúng chip vẫn `UNVERIFIED`, không có register probe suy đoán.
+
+`REGULATORY_RECEIVER_REQUIREMENT` và `LAB_TEST_FIXTURE` từ QCVN vẫn tách khỏi `ACTUAL_RF_BROADCAST`: ID 42/0/1/2 trong tests không trở thành thông số SDTV. Bandwidth tuner giữ 8000000 Hz, không thay bằng băng thông tín hiệu chiếm dụng. Kết quả lock hiện tại chỉ chứng minh có đường đồng bộ trên ứng viên K36 lúc test; chưa có nội dung dịch vụ vì TS chưa đến.
+
+### Bốn phép thử TS có approval riêng
+
+| Lượt trên fresh owner | Backend / chunk / chuẩn bị endpoint | Kết quả đo | Diễn giải được phép |
+| --- | --- | --- | --- |
+| Workflow thứ hai | Android synchronous Bulk / 16384 byte / không clear | Một 0x8A full-length, một read=-1, 0 byte; smoke 46530260 ns | `NO_DATA_OR_USB_FAILURE`; chưa có errno |
+| Workflow thứ ba | Android synchronous Bulk / 4096 byte / không clear | Một 0x8A full-length, một read=-1; timeout thực 500 ms, managed read 5218021 ns, smoke 31229531 ns | Chunk theo official không chữa được lỗi; không phải benchmark tăng tốc |
+| Workflow thứ tư | Android synchronous Bulk / 4096 byte / một CLEAR_HALT được duyệt | Clear hoàn tất, một 0x8A, một read=-1, 0 byte; smoke 50912135 ns | Không xác nhận endpoint từng bị HALT hoặc clear đã sửa transport |
+| Workflow thứ năm | Native USBDEVFS_BULK / 4096 byte / một CLEAR_HALT được duyệt mới | Clear hoàn tất, một 0x8A, một read=-1, `errno=75`; timeout 500 ms, managed read 13419167 ns, smoke 62119843 ns | `EOVERFLOW` được đo trực tiếp; vẫn 0 byte/packet, không TS PASS |
+
+Workflow thứ nhất đã lock nhưng ADB mất trước TS, không consume TS/0x8A/Bulk từ lượt đó. Mỗi smoke dừng ngay read lỗi, không retry hoặc fallback PLP. Các số thời gian smoke gồm guards/audit/control/read, không phải native-only latency; managed read cũng gồm wrapper/JNI. Không có paired benchmark, không tính throughput hoặc speedup từ các lượt lỗi.
+
+### Nguồn giải thích errno và thứ tự streaming
+
+`SOURCE-CONFIRMED`: Header `asm-generic/errno.h` của NDK 30.0.16248370 định nghĩa `EOVERFLOW=75`. [Linux USB error codes](https://docs.kernel.org/driver-api/usb/error-codes.html), truy cập 2026-11-07, mô tả EOVERFLOW là dữ liệu endpoint trả vượt max packet hoặc buffer còn lại, còn EPIPE là stall và ETIMEDOUT là hết thời gian chờ. Vì thế phép thử mới đã phân biệt lỗi USB hiện tại với các giả thuyết timeout/stall chưa kiểm trước đó; chưa xác định chính xác bên nào gây sai kích thước gói.
+
+`SOURCE-CONFIRMED`: Official TBS tại SHA `2ce787de9f6e81b4294692a45de15596ae2e1322`, `drivers/media/usb/dvb-usb/dvb-usb-dvb.c:dvb_usb_ctrl_feed`, bật `streaming_ctrl` trước `usb_urb_submit`. `usb-urb.c:usb_urb_init:220` clear endpoint trước khi tạo URBs; `tbs5530.c` dùng 0x82, tám URBs, 4096 byte/buffer. Port vẫn khác official ở synchronous read thay vì hàng đợi tám URBs, nhưng chưa có bằng chứng đó là nguyên nhân EOVERFLOW; không tự đổi thứ tự stream-select hoặc tạo concurrent native I/O để thử đại.
+
+`OFFLINE-TESTED` và `RUNTIME-OBSERVED`: JNI v4 hardcode endpoint 0x82, dùng fd của chính connection đang claim, giới hạn length 1..16384 và timeout 1..2000 ms; lưu errno ngay sau ioctl, trước JNI release. Với fd âm, test native trả -1/errno22 và không sửa buffer, không ioctl USB. Fake tests kiểm -1/errno32 không retry, stale owner bị từ chối, và errno truyền qua đủ facade/binding/handoff/coordinator đến TS result. Bản chạy thật dùng 4096/500 ms, không tự nâng giới hạn. Transcript TS v4 bind `readApi=USBDEVFS_BULK_ERRNO`; hash của scope có clear là `9687b7a1e306c899bce71e76d89b6bdd766937ebadfcb60c5ed3bfddd94f94b0`.
+
+### Phân loại nguyên nhân và bước phân biệt độc lập
+
+| Giả thuyết | Bằng chứng hiện có | Trạng thái |
+| --- | --- | --- |
+| Không biết PLP nên không thể lock | Năm AUTO workflows đạt demod/TS lock mới, không AF/id giả | Không còn là blocker lock; selected PLP số vẫn chưa đo |
+| Timeout 500 ms hoặc endpoint stall | Lượt v4 trả errno75 sau managed read khoảng 13,42 ms; clear đã hoàn tất | Không được gọi timeout/EPIPE từ phép đo này |
+| Chunk 16384 không hợp | Chunk 4096 cũng lỗi; native v4 errno75 với length chia hết 512 | Không đủ giải thích nguyên nhân chỉ bằng chunk |
+| Thiết bị/firmware, host controller hoặc liên kết USB trả gói không hợp lệ | Errno75 được đo trên OnePlus/API30, chưa có trace packet/đo đối chứng | `UNVERIFIED` nguyên nhân vật lý cụ thể; không đổ lỗi anten hoặc cáp khi chưa đo |
+| Tốc độ USB, trạng thái host hoặc queue policy khác Linux | Read-only sysfs không xác lập được tốc độ; chưa có phép thử Windows cùng tuner tại thời điểm này | `NOT MEASURED`; không dùng descriptor wMaxPacketSize thay số đo tốc độ bus |
+
+`PHASE_3_1_BLOCKED_WITH_EVIDENCE` tại transport, không phải vì thiếu PLP công khai. Bước thực tế duy nhất được đề nghị là kiểm nhận TS độc lập chính TBS5530 bằng Windows driver/ứng dụng hãng trên cùng anten K36 594 MHz/8 MHz; chưa chạy và chưa có consent chuyển ownership. Nếu đối chứng nhận TS thì thu hẹp về host/port Android; nếu cũng lỗi thì cần điều tra đường thiết bị/firmware/link, không tự suy RF tốt hoặc hỏng. Mọi phép thử tiếp vẫn nằm trong Phase 3.1 và cần proposal/approval mới; không tái dùng các scope đã consumed.
+
+Tổng control checked theo delta năm workflows là 776 OUT/160 IN; cộng một upload firmware 132 OUT thành 908 OUT/160 IN, không bao gồm descriptor reads hoặc host-only failures. Có bốn stream-select, hai clear và bốn Bulk attempts; tổng byte/packet nhận được là 0. Raw evidence chỉ giữ ngoài Git trong session files, không lưu hoặc gửi broadcast, permit, boot ID hay ledger thật lên dịch vụ ngoài.
+
+## 2026-11-06 — Phase 3.1: hai chunk đều lỗi; phát hiện thiếu bước chuẩn bị USB pipe của Linux
+
+Lượt user-approved TS v2 với chunk 4096 vẫn đạt lock mới rồi Bulk đầu trả -1, yêu cầu 4096 byte/timeout 500 ms, managed read wall time 5218021 ns, toàn smoke 31229531 ns; 0 byte/packet. Giảm chunk không chứng minh sửa được transport. Giữ riêng cả hai kết quả v1/v2, không retry hoặc nạp lại firmware. Owner/UI/helper của lượt này đã đóng. Sau ba workflow, control checked tổng 464 OUT/96 IN, cộng một firmware upload là 596 OUT/96 IN; có hai stream-select và hai Bulk đều -1. Số này không bao gồm raw descriptor hoặc host-only failures.
+
+SOURCE-CONFIRMED mới: official TBS cùng SHA `2ce787de9f6e81b4294692a45de15596ae2e1322`, `drivers/media/usb/dvb-usb/usb-urb.c:usb_urb_init:213–220`, gọi **usb_clear_halt cho stream endpoint trước khi tạo URBs**. TBS5530 cấu hình endpoint 0x82 trong `tbs5530.c:342`. Port Android mới chỉ có claim/stream-select/read, chưa có bước chuẩn bị pipe này. Đây là khác biệt source rõ ràng và giả thuyết hợp lý cho lỗi Bulk tức thì, **chưa chứng minh endpoint thật đang HALT hoặc errno là EPIPE**.
+
+[Linux USB core v6.12](https://github.com/torvalds/linux/blob/adc218676eef25575469234709c2d87185ca223a/drivers/usb/core/message.c), hàm `usb_clear_halt:1207`, gửi CLEAR_FEATURE(ENDPOINT_HALT) rồi reset endpoint phía host khi thành công. `include/linux/usb.h:1891` định nghĩa USB_CTRL_SET_TIMEOUT=5000 ms. `devio.c:proc_clearhalt` cung cấp USBDEVFS_CLEAR_HALT trên fd đã có quyền. Vì thế không thay bằng vendor/I²C tùy ý hoặc chỉ gửi raw CLEAR_FEATURE mà bỏ host toggle reset. Không dùng SET_INTERFACE, reset device, power-cycle, B7 hoặc satellite GPIO làm phép chữa thay thế.
+
+Đang bổ sung đường opt-in cố định 0x82 trên cùng claimed connection/worker/generation, thông qua ioctl USBDEVFS_CLEAR_HALT có kiểm âm errno; không mở fd USB mới. Mặc định tắt. TS plan v3 sẽ ghi rõ prepare operation/source, hai OUT tối đa (một standard clear-halt và một vendor stream-select), giới hạn program 12000 ms gồm dự trù ioctl 5000 ms + control 2000 ms + data window 5000 ms. Giữ Bulk timeout 500 ms, chunk 4096, trần byte/read và TTL/heartbeat cũ; không tự tăng timeout để giải quyết PLP. Native syscall đồng bộ không thể được hủy vật lý an toàn, nên cleanup vẫn đợi trả về. Bất kỳ thử nghiệm thật nào cần consent riêng mới cho endpoint preparation; **chưa có CLEAR_HALT thật tại checkpoint nguồn này**.
+
+## 2026-11-06 — Phase 3.1 live: AUTO đạt lock, lượt TS đầu trả -1
+
+### Firmware và owner mới
+
+Sau approval riêng và user tự cấp permission, raw mới xác nhận FX2_DEFAULT 189 byte. Đúng một upload dùng helper Phase 2.9 không đổi đã đạt 132/132 A0 full-length, image 8192/payload 8196 byte, duration runner 111344 ms gồm điều phối/approval/audit, không phải USB-only. Terminal vẫn UNCERTAIN/JAVA_IO_EXCEPTION, after NOT_OBSERVED; không retry hoặc sửa thành PASS. Observation độc lập sau permission mới đạt READ_AND_CLOSED, operational 50 byte/hash `22e2f1df9f66c58dbb6c554e400b6b8abcb78ee4f277e03679bc0fac7a25add5`, 14 ms, open/read/close 1/1/1, claim/vendor 0. Prefix firmware ledger 545 records/182748 byte giữ nguyên; sau lượt này 812 records/271744 byte.
+
+### AUTO và status mới
+
+Host approval PROBE đầu đã consumed nhưng dừng trước native: tệp tạm `phase31-permit.json.new` bị AtomicFile reader coi là tệp phục hồi và xóa trước rename. Giữ cả hai host records consumed/stop, không có app execute hoặc I²C trong lần lỗi này. Đổi helper sang `phase31-permit.tmp`, tái hiện bằng Android instrumentation cách ly và kiểm channel UID/clock. User duyệt PROBE mới, mở owner mới, probe đạt ID 0x197 với 3 OUT/2 IN; init ASCOT3I E-family đạt 65/14; AUTO K36/594 MHz/8 MHz đạt 84/15 theo hash `93208a78c0f677dd62a81fdfad51da2dc2ccca25b0ae522f3599300168940df2`. Không ghi AF, AD=0; không Common PLP monitor hoặc scan.
+
+POLL_STATUS tối đa ba mẫu dừng ngay mẫu đầu: epoch 1, monotonic clock 362269254 ms, syncState 6, tsLock true, unlockDetected false. Đây là DVBT2_LOCK_CONFIRMED thật, không còn chỉ là analog hay giả lập. Selected PLP ID vẫn NOT_MEASURED, không suy PLP 0 hoặc chứng minh Multi/Common PLP đầy đủ. Tổng control checked full-length tại checkpoint đầu là 154 OUT/32 IN; không có native-boundary latency counter riêng.
+
+TCP ADB mất trước TS, không còn target online. Không phát 0x8A/Bulk hoặc consume TS từ lượt đó. User đóng operational và khôi phục TCP, duyệt workflow mới; chỉ pin TCP sau kiểm đúng OnePlus GM1900/API 30/USB Host/boot, không tự adb connect hoặc failover alias. Owner mới probe/init/AUTO/status lại đạt, mẫu đầu syncState 6/tsLock true/unlock false tại clock 363014342 ms. Không nạp firmware lần hai.
+
+### TS smoke đầu: NO_DATA_OR_USB_FAILURE, không phải INVALID_TS
+
+Trên owner thứ hai, approval TS v1 riêng đúng một 0x8A [0x0A,0x00] full-length rồi một Bulk IN 0x82 yêu cầu 16384 byte, timeout theo limits 500 ms. Audit STREAM_SELECT_INTENT/COMPLETE tại 363027807/363027820 ms; BULK_READ_INTENT/COMPLETE tại 363027825/363027845 ms, result **-1**; FINISHED tại 363027853 ms, bytes 0. Runner elapsed 46530260 ns, khoảng 46,530260 ms, gồm storage/guards/stream-select/read chứ không phải USB-only. Không tự gán lỗi timeout hoặc NO_SIGNAL từ -1 và không có errno riêng. Logcat giới hạn các tag USB không cho thêm errno hữu ích.
+
+Kết quả: một read, 0 byte/packet/sync loss/TEI/continuity error; số 0 lỗi parser là vì chưa có dữ liệu, không phải TS PASS. Trạng thái NO_DATA_OR_USB_FAILURE; chưa TS_SMOKE_PASS. Tổng checked control của hai workflow là 309 OUT/64 IN, gồm một stream-select; cộng firmware là 441 OUT/64 IN trong phiên, không tính raw descriptor hoặc các host-only failures. UI counters giữ tích lũy trong Activity dù owner đã đổi; các delta từng plan mới là counts của owner đó. Đã Back để đóng operational sau khi smoke tự cancel/drain, không giữ owner/màn hình hoặc helper chờ.
+
+### Điều tra an toàn và ứng viên sửa tiếp trong cùng phase
+
+SOURCE-CONFIRMED: official `tbs5530.c:337–345` dùng stream Bulk 0x82, 8 URBs và **4096 byte/buffer**. Port Android cũ dùng synchronous Bulk, tối đa 16384 byte/call; khác kích thước không tự chứng minh root cause của -1. Endpoint/metadata/worker/owner/claim path đã đối chiếu lại, không thấy bằng chứng đang đọc 0x81 hoặc sai hướng. Request 0xB7 và 0x8A [0x08,0x01] xuất hiện trong attach/init M88RS6060 ở official/C/Go; không nhập vào terrestrial như một lệnh sửa FIFO vì nguồn chưa chứng minh an toàn/ý nghĩa đó và phạm vi cấm satellite.
+
+Đang bổ sung TS limits v2 có chunkBytes tường minh, mặc định 4096 theo official, vẫn tối đa 64 KiB/16 reads/5 giây/timeout 500 ms và dừng ngay read <=0, không retry trong smoke. Bổ sung telemetry last result/requested length/timeout/managed read wall time, không giả errno hoặc native-only latency. Đây là ứng viên giúp phân biệt transport, **chưa được chứng minh sửa lỗi phần cứng** và mọi lượt hardware tiếp cần approval mới với hash mới.
+
+Phát hiện thêm report TS dùng lastPlanHash của status trước đó: native approval vẫn scope đúng limits/hash, nhưng trường summary bị stale. Lượt live được đối chiếu bằng app CONSUMED audit đúng TS hash và OUT delta 1, không nhận nhầm stale report hash là TS hash. Test fake tái hiện ComparisonFailure trước sửa; đang sửa cập nhật hash TS ngay khi prepare. Không sửa audit/terminal live cũ hoặc đổi số đo để khớp code mới.
+
+## 2026-11-06 — Phase 3.1: quyết định PLP trước triển khai, chưa cấp quyền phần cứng
+
+Baseline thực `9621a8028d2cd3e5d98652cde69ba80d27cd7ee2`, nhánh `chore/modernize-android-build`, origin đúng fork; worktree và stage sạch, không có commit mới sau baseline. Ba reference chỉ đọc vẫn là official `2ce787de9f6e81b4294692a45de15596ae2e1322`, community C `c5fa27eecbe80633cbb365cc44656daea1c0e2e3`, Go `11228b05fb1626bf41c4e1879ace10cd0a8d575c`. Không fetch/sync hoặc phục hồi phiên USB cũ.
+
+### Bảng quyết định trước coding và hardware
+
+| Nhánh | Nguồn silicon / mức bằng chứng | Chương trình dự kiến | Đảo ngược / thành công / rủi ro | Quyền và trạng thái |
+| --- | --- | --- | --- | --- |
+| Manual PLP đã biết | SOURCE-CONFIRMED cho CXD6802 trong official `cxd2878_set_dvbt2:2468–2475`; C `3311–3318`; Go `terrestrial.go:144–162` chỉ manual | SLV-T 0x64, bank23, AF=id, AD=1; giữ toàn bộ init/tune/status hiện có | RAM, có thể khôi phục bằng power-cycle được duyệt; thành công cần status mới và TS thật, không phải OUT đủ byte; ID K36 chưa biết | IMPLEMENTABLE; approval TUNE riêng và ID đo đúng multiplex, không mặc định 0/255 |
+| AUTO ứng viên AD=0 | CROSS-CHIP-ANALOGY, không SOURCE-CONFIRMED CXD6802; Linux v6.12 SHA `adc218676eef25575469234709c2d87185ca223a`, `cxd2841er.c:cxd2841er_dvbt2_set_plp_config:2148–2167` và `cxd2820r_t2.c:cxd2820r_set_frontend_t2` | Khác manual đúng hai điểm: không ghi AF, AD=0 ở bank23; giữ profile Base, tuner ASCOT3I/24MHz và phần tune còn lại | Register RAM, không flash; nguồn chip khác chưa chứng minh side effect/selected data PLP trên 0x197. Chỉ lock và TS mới kiểm được đường auto; power-cycle không được tự thực hiện | EXPERIMENTAL_WITH_APPROVAL; mặc định runtime từ chối, debug opt-in và consent thử nghiệm riêng theo hash; chỉ đề nghị K36/594MHz/8MHz |
+| PLP từ monitor L1 | UNVERIFIED cho 0x197; official/C/Go không có monitor danh sách/active PLP được xác minh | Không tạo allowlist monitor hardware. CXD2880 cùng SHA có `mon_data_plps` dùng bank0B/0C, L1-post-valid86, numC1/listC2; đây là chip khác, không chép sang bank22/23 | Monitor chức năng vẫn có bank/pointer OUT và có thể freeze/unfreeze; đọc sai bank không chứng minh PLP. Không gửi probe suy đoán | BLOCKED; biểu diễn MONITOR_RESOLVED nhưng không cho tune cho tới nguồn đúng chip và test hợp lệ |
+| PLP đo bằng thiết bị độc lập | ACTUAL_RF_BROADCAST chỉ khi có INFO/thiết bị đo đúng K36 và thời điểm; chưa có dữ liệu đó | Dùng manual theo ID đo, không quét PLP 0..255 | Không đụng tuner khi đọc INFO TV; không dùng ID của multiplex khác, bảng quy chuẩn hoặc tên dịch vụ | BLOCKED do chưa có measurement; chỉ yêu cầu một ảnh INFO nếu auto không được phép hoặc không đủ chẩn đoán |
+
+Chọn triển khai AUTO dưới dạng ứng viên thử nghiệm tách quyền, không dùng mặc định PLP 0 và không coi analog là bằng chứng silicon. [Linux DVB property API](https://docs.kernel.org/userspace-api/media/dvb/fe_property_parameters.html), mục DTV_STREAM_ID, quy định ID 0..255 và NO_STREAM_ID_FILTER để bỏ lọc; đó là semantic API, không chứng minh chip đưa mọi PLP đồng thời hoặc chuyển sentinel thành byte. Go `PLPOrZero` ánh xạ số âm thành 0 là fallback phần mềm, không phải chứng minh chip không có auto.
+
+### Quy chuẩn và cấu hình sóng phải tách riêng
+
+REGULATORY_RECEIVER_REQUIREMENT: [Thông báo chính thức Thông tư 17/2020](https://cspl.mic.gov.vn/Pages/TinTuc/tinchitiet.aspx?tintucid=138179), truy cập 2026-11-06, xác nhận QCVN 63:2020 thay QCVN 63:2012 và hiệu lực 01/07/2021. Trang có một câu lỗi biên tập về chống sét; không dùng câu đó làm nội dung quy chuẩn. [VSQI](https://tieuchuanxaydung.vsqi.gov.vn/quychuan/view?sohieu=QCVN+63%3A2020%2FBTTTT) hiện trả Website Disabled, nên chưa kiểm được trạng thái hiệu lực qua cơ sở dữ liệu này. [Bản HTML 2020 đối chiếu](https://dulieuphapluat.vn/van-ban/xay-dung-do-thi-van-ban/quy-chuan-ky-thuat-quoc-gia-qcvn-632020btttt-ve-thiet-bi-thu-truyen-hinh-so-mat-dat-dvb-t2-27864.html) xác nhận 2.4.4 hỗ trợ Multi không Common, 2.4.5 có Common và 2.4.7 thích ứng thay đổi tham số. Không tuyên bố chứng nhận hợp quy từ kiểm thử driver.
+
+LAB_TEST_FIXTURE: ví dụ Single PLP ID42, Multi 0/1/2 với Common0, Multi không Common và thay đổi cấu hình chỉ dùng SYNTHETIC_TEST_FIXTURE/USB fake-only; không đưa vào preset/approval live. PDF 2012 được đính kèm nhưng model không nhận được nội dung native, không báo đã đọc 102 trang hoặc kiểm số trang; bản 2012 là lịch sử theo văn bản thay thế, việc kiểm appendix công khai được ghi tiếp khi có kết quả.
+
+ACTUAL_RF_BROADCAST: tìm công khai SDTV K36/Vũng Chua và trang kênh phát sóng không tìm thấy PLP đáng tin cậy trong kết quả đã kiểm; không phải bằng chứng PLP không tồn tại. K36 giữ `594000000 Hz`/`8000000 Hz`; băng thông chiếm dụng 7,61/7,71/7,77 MHz không thay bandwidth tuner. PLP live, RF hiện tại, tune/lock/TS vẫn UNVERIFIED/NOT RUN; owner/init/consent Phase 3.0 đã hết, không có hardware operation trong checkpoint này.
+
+### Kết quả đối chiếu và kiểm offline Phase 3.1
+
+Bản HTML 2020 đã kiểm thêm 3.2.4.2/3.2.5.2: thực hiện tìm kênh tự động rồi kiểm giải mã dịch vụ. Trong 3.2.5.1, Common PLP0 mang PSI/SI, data PLP1/2 mang hai TS là cấu hình phép đo, không phải quy tắc SDTV. Chính xác hơn về cách đánh số: **mục A.2 chứa Bảng A.2 Single PLP, Bảng A.3 Multi PLP và Bảng A.4 tham số biến đổi**; không gọi mục A.3/A.4 là bảng PLP. Bảng A.2 đánh dấu ID của PLP bằng (*) và chú thích cho phép giá trị bất kỳ; Bảng A.3 dùng 0/1/2. Fixtures ID42 và cấu hình có/không Common đều chỉ là kiểm phần mềm, không giải mã bài đo quy chuẩn thật. Bản DOC 2012 công khai tìm được tại [vanbanphapluat.co](https://vanbanphapluat.co/data/2012/12/285356_qcvn63-2012-btttt.doc) nhưng fetch lỗi transport; không báo đã đọc bản 2012 hoặc xác minh trang ảnh. Nguồn ban hành lịch sử đối chiếu tại [Thông tư 20/2012](https://vanban.chinhphu.vn/default.aspx?pageid=27160&docid=165849).
+
+CROSS-CHIP-ANALOGY bổ sung: Linux cùng SHA cố định, `cxd2880/cxd2880_tnrdmd_dvbt2.c:cxd2880_tnrdmd_dvbt2_set_plp_cfg:1112–1145` cũng dùng bank23, bỏ AF khi auto và AD=0; chỉ cho sleep/active và không cho diversity-sub. Monitor của chip này lại dùng bank0B/0C, vì vậy không suy monitor bank22/23 của CXD6802. `cxd2820r_t2.c:cxd2820r_set_frontend_t2` phân biệt stream_id>255 thành AD=0, manual AF/id rồi AD=1. Các nguồn này đủ để trình bày một thử nghiệm có kiểm soát, **chưa chứng minh register AUTO của ID0x197 hoặc Common PLP output**.
+
+OFFLINE-TESTED: full JVM cuối 355 methods PASS; instrumentation cách ly 61 app +43 library PASS, gồm cùng fake manager/owner/coordinator/control gate qua probe/init/manual hoặc AUTO/status/TS. Approval protocol2 dùng namespace Phase31, boot-count/lease identity dạng hash, generation/challenge/plan hash, maximum được host duyệt và quỹ khởi động tối thiểu maximum+5000 ms; không nới TTL/heartbeat/USB timeout. UI pause drain owner rồi xóa frontend/RF/plan cũ; kiểm nhập qua InputConnection giữ chữ/cursor khi tick. L1 monitor thật vẫn bị chặn; không thêm scan API hoặc whitelist register suy đoán. Kết quả và lỗi trung gian ghi tại [TEST-MATRIX.md](TEST-MATRIX.md).
+
+Hai lỗi TS được tái hiện FAIL rồi sửa: audit tiêu hết ngân sách nhưng Bulk vẫn bắt đầu với timeout cũ; native trả ngoài hạn nhưng vẫn báo TS PASS. `Tbs5530TsSmoke` nay tính lại thời gian ngay trước native và giữ LIMIT_REACHED nếu packet hợp lệ nhưng quá hạn. SyncState7 cũng không được dùng làm bằng chứng cấp quyền stream: đây là lựa chọn bảo thủ dựa trên trạng thái chưa hợp lệ ở chip Sony đối chiếu, không sửa diễn giải Linux official thành bằng chứng silicon mới. Không có paired benchmark hoặc hardware mới, nên không báo tăng tốc/giảm latency.
+
+### Đề nghị phạm vi phần cứng tại checkpoint, chưa thực thi
+
+| Chương trình | USB OUT / IN hoặc Bulk tối đa | Thay đổi / trần được đưa vào approval |
+| --- | --- | --- |
+| Descriptor/owner mới | Raw observation và claim(false), 0 vendor | Đúng một 734c:5530, cây operational mới + metadata; nếu FX2_DEFAULT phải dừng để xin approval firmware riêng |
+| PROBE | 3 OUT / 2 IN | 0x66 bank00, FB/FD; ID phải là 0x197 trước init; bound10000 ms |
+| INITIALIZE | 65 OUT / 14 IN | Board24MHz, terrestrial 0x66/0x64/0x60, ASCOT3I E-family; source delay84 ms, bound158084 ms |
+| AUTO TUNE ứng viên | 84 OUT / 15 IN | Đúng K36/594000000/8000000; bank23/AF không ghi, AD=0 thay AD=1; source delay120 ms, bound198120 ms; cần duyệt thử nghiệm riêng |
+| POLL_STATUS, 3 samples | Tối đa 6 OUT / 3 IN | Bank20/reg10, khoảng cách1000 ms; bound20000 ms, dừng sớm lock/unlock; không tự retune hoặc gán NO_SIGNAL |
+| TS_SMOKE, chỉ sau lock mới | Một OUT 0x8A [0x0A,0x00], tối đa16 Bulk IN0x82 | 65536 byte,5000 ms, tối đa16384 byte/call, timeout500 ms giảm theo thời gian còn lại; approval TS riêng, RAM-only và không raw broadcast vào Git/cloud |
+| Firmware nếu default | NOT APPROVED / NOT RUN | Approval Phase 2.9 độc lập cho đúng 132 A0, không gộp với control/tune; không upload khi operational |
+
+Mỗi chương trình vẫn phải có permit mới theo exact transcript/hash và owner hiện hành; bảng này **không phải quyền chạy**. Script firmware Phase2.9 không được dùng để cấp control Phase31. Provisioning/heartbeat host thật cho protocol2 chưa chạy; phải kiểm tương thích helper và dừng nếu không giữ được identity/budget/consume, không dùng permit viết tay thiếu field hoặc nới thời hạn để vượt gate. Không có helper vô hạn, không giữ Activity operational hoặc màn hình sáng trong khi chờ người dùng. Trạng thái hiện tại là phần mềm đã kiểm, chờ phê duyệt rõ ràng; lock/TS thật chưa được thử.
+
 ## 2026-11-06 17:57 +07 — Ảnh Công báo xác nhận trực tiếp K36 = 594 MHz, kênh rộng 8 MHz
 
 Người dùng cung cấp bốn ảnh chụp các trang Thông tư 27/2026/TT-BKHCN, Công báo số 333 ngày 16/06/2026. Đây là nội dung ảnh do người dùng gửi, không phải tải DOCX đã thành công; lần tải browser bị timeout bên dưới vẫn giữ nguyên lịch sử. Không sửa hoặc chép ảnh vào Git.

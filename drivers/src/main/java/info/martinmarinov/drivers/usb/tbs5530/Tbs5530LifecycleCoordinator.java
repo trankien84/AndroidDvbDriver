@@ -87,6 +87,8 @@ public final class Tbs5530LifecycleCoordinator implements AutoCloseable {
         default int bulkTransfer(byte[] buffer, int length, int timeoutMillis) throws IOException {
             throw new IOException("Bulk transfer is unavailable");
         }
+        default int lastBulkErrno() throws IOException { return -1; }
+        default void prepareBulkIn82() throws IOException { throw new IOException("Endpoint preparation unavailable"); }
         default void requireControlWorker() throws IOException { }
         default int controlTransfer(int requestType, int request, int value, int index,
                                     byte[] buffer, int offset, int length, int timeoutMillis) throws IOException {
@@ -270,7 +272,7 @@ public final class Tbs5530LifecycleCoordinator implements AutoCloseable {
             session.requireOwned(request.token, owned);
             Lease lease = owned;
             return new Tbs5530BulkTransport(session, request.token, lease, lease.connection::requireControlWorker,
-                    lease.connection::bulkTransfer);
+                    lease.connection::bulkTransfer, lease.connection::prepareBulkIn82, lease.connection::lastBulkErrno);
         }
     }
 

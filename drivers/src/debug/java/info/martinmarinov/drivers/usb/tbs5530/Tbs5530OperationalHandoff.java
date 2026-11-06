@@ -12,6 +12,8 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
     private final Tbs5530Session session;
     private final Tbs5530UsbBinding binding;
     private final Consent consent;
+    private final String leaseNonce = java.util.UUID.randomUUID().toString();
+    private Tbs5530UsbBinding.Device device;
     private final AtomicReference<Tbs5530OperationalProfile> profile = new AtomicReference<>();
     private final AtomicReference<Throwable> failure = new AtomicReference<>();
 
@@ -77,6 +79,10 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
                     public Tbs5530Descriptors.Endpoint streamEndpoint() throws IOException {
                         requireControlWorker(); return connection.streamEndpoint();
                     }
+                    public int lastBulkErrno() throws IOException { requireControlWorker(); return connection.lastBulkErrno(); }
+                    public void prepareBulkIn82() throws IOException {
+                        requireControlWorker(); connection.prepareBulkIn82(); requireControlWorker();
+                    }
                     public void cancel() throws IOException { connection.cancel(); }
                     public void release() throws IOException { connection.release(); }
                     public void close() throws IOException { connection.close(); }
@@ -94,7 +100,7 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
     }
 
     public void start(Tbs5530UsbBinding.Device device) throws IOException {
-        consent.requireCurrent(); profile.set(null); binding.start(device);
+        consent.requireCurrent(); profile.set(null); this.device = device; binding.start(device);
     }
     public boolean pending() { return binding.isPending(); }
     public Tbs5530OperationalProfile observation() { return profile.get(); }
@@ -110,6 +116,18 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
         session.requireUsable(session.getGeneration());
         long generation = session.getGeneration();
         return new Tbs5530TsSmoke(session, generation, new Tbs5530Bridge(controlIo(), session, generation), bulkIo(), permission, clock);
+    }
+    /** Opaque binding, kept in private approval files; raw USB identity never enters project logs. */
+    public String approvalIdentity() throws IOException {
+        consent.requireCurrent(); session.requireUsable(generation());
+        if (!operationalOwner() || profile.get() == null || device == null) throw new IOException("No fresh operational owner");
+        String text = leaseNonce + "|" + device.path + "|" + device.id + "|" + generation() + "|" + profile.get().descriptorHash;
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder result = new StringBuilder(64);
+            for (byte b : digest) result.append(String.format(java.util.Locale.ROOT, "%02x", b & 255));
+            return result.toString();
+        } catch (java.security.NoSuchAlgorithmException error) { throw new IOException(error); }
     }
     public long generation() { return session.getGeneration(); }
     public IOException cleanupFailure() { return session.getCleanupFailure(); }

@@ -19,7 +19,8 @@ import static org.junit.Assert.*;
 public class Tbs5530DurabilityFaultTest {
     private static File directory() {
         Context c = InstrumentationRegistry.getInstrumentation().getTargetContext();
-        assertEquals("info.martinmarinov.dvbdriver.phase29offline",c.getPackageName());
+        assertTrue(c.getPackageName().equals("info.martinmarinov.dvbdriver.phase29offline")
+                || c.getPackageName().equals("info.martinmarinov.dvbdriver.phase31offline"));
         File d = new File(c.getCacheDir(),"durability-"+UUID.randomUUID()); assertTrue(d.mkdirs()); return d;
     }
     @Test public void standaloneRawObservationIsSavedPrivatelyWithoutChangingItsBytes() throws Exception {
@@ -62,7 +63,8 @@ public class Tbs5530DurabilityFaultTest {
     }
     private static void runPort(int failCheckpoint, int result, boolean loseAtFinal, boolean denyDispatch) throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
-        assertEquals("info.martinmarinov.dvbdriver.phase29offline", context.getPackageName());
+        assertTrue(context.getPackageName().equals("info.martinmarinov.dvbdriver.phase29offline")
+                || context.getPackageName().equals("info.martinmarinov.dvbdriver.phase31offline"));
         Tbs5530UsbBinding.Device d = new Tbs5530UsbBinding.Device("fake",1,0x734c,0x5530);
         boolean[] present = {true}; int[] calls = {0}, checkpoints = {0};
         Tbs5530AndroidUsbFacade.Manager manager = new Tbs5530AndroidUsbFacade.Manager() {

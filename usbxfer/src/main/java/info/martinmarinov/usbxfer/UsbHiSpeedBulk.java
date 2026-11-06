@@ -146,7 +146,33 @@ public class UsbHiSpeedBulk {
         return requests.get(readyRequestId);
     }
 
+    /** Only endpoint 0x82; caller must own its claimed connection and a separate explicit approval. */
+    public static void prepareBulkIn82(UsbDeviceConnection connection) throws IOException {
+        if (!IS_PLATFORM_SUPPORTED || connection == null || connection.getFileDescriptor() < 0) {
+            throw new IOException("Claimed USB connection/native library required");
+        }
+        IoctlUtils.res(jni_clearHalt82(connection.getFileDescriptor()));
+    }
+
+    public static final class BulkReadResult {
+        public final int count, errno;
+        private BulkReadResult(int count, int errno) { this.count = count; this.errno = errno; }
+    }
+
+    /** Same synchronous USBDEVFS_BULK as libusbhost, with errno captured before JNI cleanup. */
+    public static BulkReadResult readBulkIn82(UsbDeviceConnection connection, byte[] bytes, int length, int timeoutMillis) throws IOException {
+        if (!IS_PLATFORM_SUPPORTED || connection == null || connection.getFileDescriptor() < 0) throw new IOException("USB/native connection unavailable");
+        if (bytes == null || length < 1 || length > bytes.length || length > 16384 || timeoutMillis < 1 || timeoutMillis > 2000) {
+            throw new IllegalArgumentException("Invalid bounded IN 0x82 request");
+        }
+        int[] error = {-1};
+        int count = jni_readBulk82(connection.getFileDescriptor(), bytes, length, timeoutMillis, error);
+        return new BulkReadResult(count, error[0]);
+    }
+
     // native
 
+    private static native int jni_readBulk82(int fd, byte[] bytes, int length, int timeoutMillis, int[] error);
+    private static native int jni_clearHalt82(int fd);
     private static native int jni_setInterface(int fd, int interfaceId, int alternateSettings);
 }

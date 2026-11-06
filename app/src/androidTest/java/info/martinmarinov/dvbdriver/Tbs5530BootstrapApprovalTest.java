@@ -17,8 +17,9 @@ public class Tbs5530BootstrapApprovalTest extends Tbs5530ApprovalDeterministicTe
         Context testContext = InstrumentationRegistry.getInstrumentation().getTargetContext();
         // Instrumentation runs as the target UID; its APK Context need not own writable data.
         // Check exact isolated IDs BEFORE requesting any files/preferences directory.
-        assertEquals("info.martinmarinov.dvbdriver.phase29offline.test", instrumentationContext.getPackageName());
-        assertEquals("info.martinmarinov.dvbdriver.phase29offline", testContext.getPackageName());
+        String target = testContext.getPackageName();
+        assertTrue(target.equals("info.martinmarinov.dvbdriver.phase29offline") || target.equals("info.martinmarinov.dvbdriver.phase31offline"));
+        assertEquals(target + ".test", instrumentationContext.getPackageName());
         String namespace = "approval-test-" + UUID.randomUUID();
         File directory = new File(testContext.getFilesDir(), namespace);
         assertTrue(directory.mkdir());

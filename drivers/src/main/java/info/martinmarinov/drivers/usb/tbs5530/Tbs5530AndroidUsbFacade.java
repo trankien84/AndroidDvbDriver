@@ -78,6 +78,8 @@ public final class Tbs5530AndroidUsbFacade implements Tbs5530UsbBinding.Facade {
                                  int timeoutMillis) throws IOException {
             throw new IOException("Bulk transfer is unavailable");
         }
+        default int lastBulkErrno() throws IOException { return -1; }
+        default void prepareBulkIn82() throws IOException { throw new IOException("Endpoint preparation unavailable"); }
         boolean claim(int index, boolean force) throws IOException;
         boolean release(int index) throws IOException;
         void close() throws IOException;
@@ -361,6 +363,15 @@ public final class Tbs5530AndroidUsbFacade implements Tbs5530UsbBinding.Facade {
             }
         }
 
+        @Override public int lastBulkErrno() throws IOException {
+            requireWorker(); synchronized (this) { requireClaimed(); requireCurrent(device); return raw.lastBulkErrno(); }
+        }
+        @Override public void prepareBulkIn82() throws IOException {
+            requireWorker();
+            synchronized (this) {
+                requireClaimed(); requireCurrent(device); raw.prepareBulkIn82(); requireCurrent(device);
+            }
+        }
         @Override public void cancel() { /* Synchronous reads drain before resource cleanup. */ }
 
         @Override public synchronized void release() throws IOException {
@@ -455,7 +466,15 @@ public final class Tbs5530AndroidUsbFacade implements Tbs5530UsbBinding.Facade {
                     }
                     if (address != 0x82 || selectedEndpoint == null || selectedEndpoint.getDirection() != 128
                             || selectedEndpoint.getType() != 2) throw new IOException("Bulk IN 0x82 unavailable");
-                    return connection.bulkTransfer(selectedEndpoint, buffer, length, timeoutMillis);
+                    info.martinmarinov.usbxfer.UsbHiSpeedBulk.BulkReadResult result =
+                            info.martinmarinov.usbxfer.UsbHiSpeedBulk.readBulkIn82(connection, buffer, length, timeoutMillis);
+                    bulkErrno = result.errno;
+                    return result.count;
+                }
+                private int bulkErrno = -1;
+                @Override public int lastBulkErrno() { return bulkErrno; }
+                @Override public void prepareBulkIn82() throws IOException {
+                    info.martinmarinov.usbxfer.UsbHiSpeedBulk.prepareBulkIn82(connection);
                 }
                 @Override public boolean claim(int index, boolean force) {
                     return connection.claimInterface(descriptor(index), force);

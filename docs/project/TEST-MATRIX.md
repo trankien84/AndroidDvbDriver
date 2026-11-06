@@ -1,5 +1,81 @@
 # TBS5530 test matrix
 
+## 2026-11-07 — Phase 3.1: gate cuối và hardware EOVERFLOW, chưa nhận TS
+
+HEAD `9621a8028d2cd3e5d98652cde69ba80d27cd7ee2`, nhánh `chore/modernize-android-build`, worktree chưa commit; source fingerprint cuối `988919f6fe1c8cc070c4488c86caf50dd77cf652397221f96eab6502fb674270`. Windows PowerShell, JDK Machine 25.0.5.0.3, wrapper 9.8.2/AGP9.5.0, SDK37.2, NDK30.0.16248370, CMake4.1.2; không nâng package. Evidence đầy đủ ngoài Git trong thư mục `files` của session Copilot bắt đầu ngày 2026-11-06; các tên dưới đây không phải tệp để commit.
+
+| Gate thực chạy trên mã cuối | Kết quả | Evidence / giới hạn |
+| --- | --- | --- |
+| Full JVM v4 | PASS 361 methods | Drivers 347 + usbxfer 1 + service 13, failure/error 0; `phase31-errno-regression.log`, XML module; app unit NO-SOURCE được xác nhận riêng trong `phase31-errno-app-unit.log` |
+| Debug/release/lint v4 | PASS | `phase31-errno-regression.log`: BUILD SUCCESSFUL 3m45s, lint 0 errors/10 warnings cũ; không suppress hoặc nâng toolchain |
+| Build instrumentation cách ly | PASS | `phase31-errno-isolated-build.log`: 1m52s; thêm assertion forwarding rồi build lại library trong `phase31-errno-isolated-final.log` |
+| App instrumentation v4 | PASS 67 methods / 12,351 s | `phase31-errno-app-tests.log`; `.phase31offline`, storage/USB giả, native fd âm không ioctl, không production ledger |
+| Library instrumentation v4 | PASS 43 methods / 1,589 s | `phase31-errno-library-tests.log`; full fake manager→owner→probe/init/manual hoặc AUTO/status/TS và errno forwarding |
+| APK/JNI/bytecode tĩnh | PASS có phạm vi | `phase31-errno-static.log`: debug/release có bốn ABIs và hai JNI symbols clear/read; ELF64 alignment 16 KiB, zipalign, minSdk 21/targetSdk 37; debug 150/release 78 TBS classes major 52; không firmware/TS/capture/audit/permit hoặc lớp test Phase31 trong DEX |
+| API21 / 16KiB runtime mới | NOT RUN | Native negative-fd chạy API30 không thay gate API21/16KiB runtime; static alignment không phải runtime proof |
+| Host protocol2 | PASS scope/channel | 26 checks offline, không ADB/USB; isolated shell-clock/app-UID roundtrip có 12 gaps, max310ms, không USB; không phải benchmark native transport |
+| Firmware mới từ FX2_DEFAULT | PASS full-length, terminal UNCERTAIN giữ nguyên | Một upload 132/132 A0, image 8192/payload 8196 byte; auto-observation UNCERTAIN/JAVA_IO_EXCEPTION/NOT_OBSERVED; permission mới và observation độc lập xác nhận operational 50 byte, không sửa terminal cũ |
+| Probe/init/AUTO/status thật | PASS lock, 5 workflows | Mỗi fresh owner có ID 0x197; OUT/IN: probe 3/2, init 65/14, AUTO 84/15, status 2/1; mẫu đầu syncState=6/tsLock=true/unlockDetected=false; không biết trước PLP số, không scan |
+| TS Java16KiB rồi Java4KiB | FAIL mục tiêu TS, terminal NO_DATA_OR_USB_FAILURE | Hai approvals, hai stream-select full-length, mỗi lượt một read=-1/0 byte; chưa có errno, không tự gọi timeout |
+| TS Java4KiB + CLEAR_HALT | FAIL mục tiêu TS | Approval clear riêng, clear hoàn tất, một stream-select/read=-1/0 byte; `phase31-fourth-endpoint-TS_SMOKE-result-private.json` |
+| TS native 4 KiB + CLEAR_HALT v4 | FAIL mục tiêu TS, errno đã đo | Approval workflow/clear mới, một read=-1/errno=75, 0 byte, timeout 500 ms; managed read 13419167 ns/smoke 62119843 ns; `phase31-fifth-errno-TS_SMOKE-result-private.json` |
+| MPEG-TS parser trên broadcast thật | NOT RUN do không có dữ liệu | Tổng bốn reads, 0 bytes/packets; sync loss/TEI/continuity bằng 0 chỉ vì chưa nhận data, không phải TS PASS |
+| L1/selected PLP/Multi/Common đầy đủ | UNVERIFIED | Không exact-chip monitor allowlist, không gán PLP0/1/2 từ QCVN; fixtures vẫn fake-only |
+| GitNexus / đồ thị phụ thuộc | NOT VERIFIED / NOT USED | Status CLI1.6.12 không hoàn tất, không reindex/repair; source/diff/tests là evidence độc lập |
+
+Tổng chênh lệch control checked của năm workflow là 776 OUT/160 IN; cộng firmware 132 OUT thành 908 OUT/160 IN. Bốn stream-select và hai clear đã tính trong OUT; bốn Bulk calls là lượt nhận dữ liệu riêng, không phải register IN. Không tính descriptor reads hoặc host-only attempts. Scope/status/TS terminal cũ vẫn giữ; không biến `failure=NONE` của report thành TS PASS khi `state=NO_DATA_OR_USB_FAILURE`.
+
+### Bảng trước/sau bổ sung sau các lượt live
+
+| Blocker / lỗi thật | Root cause hoặc mức chắc chắn | File/hàm sửa | Tái hiện trước sửa | Kiểm sau sửa | Hardware / hiệu năng / rủi ro |
+| --- | --- | --- | --- | --- | --- |
+| Host permit biến mất trước rename | AtomicFile dùng `.json.new` làm tệp nội bộ và có thể xóa nó khi đọc | Helper riêng `Watch-Phase31-Operational.ps1`, đổi temp sang `.tmp` | Host consumed/stop trước app execute; instrumentation tái hiện collision | PASS AtomicFile regression và channel live; owner/permit mới mới được chạy | Không I²C từ attempt lỗi; không tái dùng permit, không sửa ledger cũ |
+| TS report mang hash của status trước | UI không cập nhật lastPlanHash khi prepare TS | `OperationalDiagnosticActivity` | Fake UI ComparisonFailure trong `phase31-ts-hash-before.log` | PASS hash UI/approval và full isolated instrumentation | Native scope cũ đúng; báo cáo cũ đối chiếu bằng audit CONSUMED và OUT delta, không sửa evidence |
+| Endpoint preparation mất qua strict wrapper | Thiếu forwarding capability trong binding | `Tbs5530UsbBinding` và full fake path | Library fake FAIL trước forwarding | PASS library43 gồm clear tùy chọn và errno end-to-end | Clear thật hoàn tất nhưng không chữa Bulk; không gọi đây là transport fix |
+| Java chỉ trả -1 không phân biệt lỗi | API không cung cấp errno trong result | JNI `jni_readBulk82`, `UsbHiSpeedBulk`, facade/binding/handoff/coordinator/BulkTransport/TsSmoke/report | Ba TS attempts chỉ có -1; không có test FAIL giả tạo cho feature chưa tồn tại | PASS native fd âm/errno22, fake -1/errno32/no retry/stale và full path; v4 thật đo errno75 | Chẩn đoán đã rõ hơn, chưa sửa root cause EOVERFLOW; không speedup |
+| Đổi chunk/clear được đề nghị như ứng viên | Khác biệt source, chưa biết nguyên nhân hardware | TS limits/transcript v2→v3→v4 | Java16384/4096 đều lỗi | Software guards PASS; hardware clear và native vẫn lỗi | Không tuyên bố giảm chunk/clear đã thành công, không có paired benchmark |
+
+Kết luận `PHASE_3_1_BLOCKED_WITH_EVIDENCE` tại đường USB, giữ `DVBT2_LOCK_CONFIRMED`. Một phép đối chứng được đề nghị, chưa chạy: chính TBS5530 trên Windows driver hãng/cùng anten K36 594MHz/8MHz để xem có TS hay không. Không tự chuyển ownership, reset hoặc consume approval mới. Lệnh và cleanup cuối tại [WORKLOG.md](WORKLOG.md); giải thích errno tại [RESEARCH.md](RESEARCH.md), ADR-027 tại [DECISIONS.md](DECISIONS.md).
+
+## 2026-11-06 — Phase 3.1: PLP và đường thu có kiểm soát, chỉ kiểm USB giả
+
+Baseline `9621a8028d2cd3e5d98652cde69ba80d27cd7ee2`, nhánh `chore/modernize-android-build`; kết quả dưới đây áp dụng worktree chưa commit, fingerprint nguồn SHA-256 `078edc85048dfc147d268a8b802924dbe296856abe62890ad86abbba2e38d637`. Môi trường Windows/PowerShell, wrapper Gradle 9.8.2, AGP 9.5.0, JDK 25.0.5.0.3, SDK 37.2; không nâng package. Evidence riêng nằm trong thư mục `files` của session Copilot hiện tại ngoài Git, các tên log dưới đây không chứa identity/permit thật.
+
+| Gate mới | Kết quả | Bằng chứng và giới hạn |
+| --- | --- | --- |
+| Git preflight | PASS | HEAD bằng baseline, branch/origin đúng, worktree/stage sạch lúc đầu; không tự Git write hoặc sync reference |
+| Matrix nguồn PLP | PASS đối chiếu source | Manual đúng CXD6802; AUTO AD=0 trên CXD2841ER/CXD2820R/CXD2880 chỉ CROSS-CHIP-ANALOGY; monitor CXD6802 UNVERIFIED và runtime chặn |
+| QCVN 2020 / 2012 | PASS có giới hạn nguồn | Thông báo Bộ xác nhận thay thế/hiệu lực 01/07/2021; HTML 2020 kiểm được yêu cầu và bảng A.2/A.3/A.4. VSQI disabled, DOC 2012 fetch lỗi, attachment PDF không đọc được bởi model; không xác minh trang ảnh hoặc tuyên bố hợp quy |
+| Focused lần đầu | FAIL do fixture, đã sửa | 40 methods, 5 failures: golden tuner còn cố định 666 MHz khi thêm K36; fake test kỳ vọng drain mà chưa yêu cầu close. Sửa fixture có byte K36 độc lập và đóng session giả; không đổi register hardware để làm test xanh |
+| Full JVM cuối | PASS 355 methods | Drivers 341 + usbxfer 1 + dvbservice 13; app unit NO-SOURCE. Không failure/error/skipped. `phase31-final-regression.log`, XML tại các module build/test-results |
+| Golden và fault injection | PASS trong full JVM | Manual 0/1/42/254/255, từ chối -1/256/null; AUTO không AF/FF, AD=0; manual retune AF/id/AD=1; toàn bộ phần tune còn lại không đổi; hash/mode/evidence, sai silicon, epoch/consume/cancel và 99 biên native short của AUTO |
+| Synthetic QCVN | PASS fake-only, không phải bài đo hợp quy | SYNTHETIC_TEST_FIXTURE: Single ID 42, Multi Common 0/data 1,2, Multi không Common, data khác Common, cấu hình thay đổi; MONITOR_RESOLVED chưa hỗ trợ bị chặn; không dùng băng chiếm dụng thay 8 MHz |
+| Fake full path JVM và Android | PASS | Cùng owner/session/coordinator/control gate, probe → init → manual hoặc AUTO → status → TS giả. Android fake raw có đúng 187/188 control calls cho AUTO/manual, một fake Bulk; không gọi A0 hoặc USB thật |
+| Build debug/release và lint cuối | PASS | `phase31-final-regression.log`: BUILD SUCCESSFUL 2m11s; lint 0 errors/10 warnings cũ. Lượt trung gian 13 warnings được sửa ba SetTextI18n mới bằng debug resources, không suppress toàn dự án |
+| Build instrumentation cách ly | PASS | `phase31-final-isolated-build.log`: BUILD SUCCESSFUL 1m17s; init script ngoài Git, app `.phase31offline`, app test `.phase31offline.test`, library test `drivers.phase31offline.test` tự target theo AAPT |
+| App instrumentation cuối | PASS 61 methods / 11,247 s | `phase31-final-app-instrumentation.log`; approval deterministic/storage/fault/report/UI, boot/owner/hash/max budget, consent AUTO riêng, cursor InputConnection và pause/drain/reconnect/RF reset; không dùng production stores |
+| Library instrumentation cuối | PASS 43 methods / 1,675 s | `phase31-final-drivers-instrumentation.log`; toàn bộ library androidTest dùng manager/raw giả, bao gồm owner mới và full path; không thật sự nạp firmware hoặc khóa RF |
+| App instrumentation trung gian | FAIL 3/61 → PASS 61/61 | Ba test durability còn assert package Phase 2.9; mở đúng hai namespace cách ly Phase 2.9/3.1 trong test, vẫn từ chối production. Lần FAIL giữ `phase31-app-instrumentation.log`, không gán PASS ngược lịch sử |
+| Bytecode và APK | PASS static | 148 TBS main classes major 52; minSdk 21/target 37; debug 5 DEX/release 2 DEX không có Phase31 test harness; operational debug Activity vắng release; firmware/TS/capture entries 0; zipalign 16 KiB PASS cả hai |
+| Latest stable / toolchain audit script | NOT RUN / BLOCKED có phạm vi | Script kiểm kê bị ExecutionPolicy chặn; không Bypass hoặc đổi policy. Đã đọc trực tiếp build declarations/JDK/SDK source.properties; không kiểm latest stable và không cài/gỡ/nâng package |
+| GitNexus | NOT VERIFIED | CLI 1.6.12 status không hoàn tất trong cửa sổ chờ, đã dừng đúng process tree; không query graph, reindex hoặc repair FTS; source/diff/tests làm bằng chứng độc lập |
+| Host provisioning protocol2 thật | NOT RUN | Đã kiểm app bằng storage/clock giả; trước USB thật phải kiểm helper giữ boot/owner/plan/budget/heartbeat và consume. Không dùng script firmware Phase 2.9 cấp control |
+| Native API 21 / 16 KiB runtime mới, host benchmark | NOT RUN | Không đổi JNI/toolchain; static alignment không thay runtime. Không báo speedup hoặc paired latency từ tests giả |
+| Firmware / chip-ID / init / tune / lock / TS thật mới | NOT RUN, chưa có approval | 0 A0, 0 vendor/I²C, 0 tune/poll/0x8A/Bulk thật. ID/init Phase 3.0 chỉ là lịch sử; chưa DVBT2_LOCK_CONFIRMED/TS_SMOKE_PASS thật |
+
+### Bảng trước/sau lỗi và thay đổi trong phạm vi
+
+| Blocker hoặc lỗi ban đầu | Root cause / nguồn | File hoặc hàm sửa | Test trước sửa | Test sau sửa | Hiệu năng / hardware / rủi ro còn lại |
+| --- | --- | --- | --- | --- | --- |
+| Không biểu diễn AUTO an toàn | Constructor int từ chối -1; official chỉ manual, không được encode sentinel | `Tbs5530DvbT2TuneParameters.Selection`, `Frontend.planTune`, `Sequences.tune`, `ControlProbe` | Hành vi từ chối được xác nhận source và test cũ; chưa có hardware tune | PASS golden/manual/auto diff và fake full path | Không tăng tốc đã đo; AUTO vẫn thử nghiệm chờ consent/silicon evidence |
+| Sync 7 có TS bit bị coi locked | Điều kiện cũ `>=6` có thể cấp stream khi sync chưa hợp lệ; chọn guard bảo thủ, không tuyên bố sửa silicon semantics | `Frontend.Status` | FAIL 1/1, `phase31-before.log` | PASS test riêng và 256 raw bytes trong full JVM | Không có RF test mới; metrics vẫn NOT_AVAILABLE |
+| Audit tiêu hết thời gian nhưng Bulk vẫn bắt đầu | Timeout tính trước audit/storage | `TsSmoke.run` | FAIL test mới, `phase31-focused2.log` (40 test khác PASS) | PASS trong full JVM | NOT MEASURED; không nới timeout, không force-close call |
+| TS hợp lệ trả quá hạn vẫn được PASS | Chỉ kiểm cấu trúc, thiếu kiểm duration khi publish | `TsSmoke.run` | FAIL 1/8, `phase31-ts-late-before.log` | PASS 8 smoke tests và full JVM | LIMIT_REACHED không bị nhầm INVALID_TS; OS vẫn có thể trả muộn |
+| Bắt đầu chương trình dài sát hết permit | Eligibility cũ không chừa bound+margin; scope chưa gắn owner hash/bound host duyệt | `OperationalApproval` protocol2 | Source-confirmed; không chạy lại code cũ trên hardware | PASS biên maximum+4999/+5000 ms, owner/hash/protocol/consent/consume và heartbeat tests | Chưa benchmark host thật; margin 5000 ms là safety reserve, không số đo latency |
+| Quay lại Activity giữ đối tượng owner đã revoke | onPause hủy quyền nhưng không bỏ pipeline cũ | `OperationalDiagnosticActivity.retireOwner` và `OperationalHandoff.approvalIdentity` | Source-confirmed; không có lượt FAIL UI trước sửa | PASS pause/drain/resume với owner giả, nonce mới dù generation/path lặp; InputConnection giữ text/cursor | Cleanup đợi native đồng bộ; chưa kiểm pause khi có tuner thật |
+
+Lệnh chính xác và danh sách test selector ghi tại [WORKLOG.md](WORKLOG.md). Mọi số native trong fake tests là kiểm phần mềm, không được cộng vào USB hardware counters hoặc suy tín hiệu on-air.
+
 ## 2026-11-06 17:57 +07 — Kiểm chứng tài liệu tần số từ ảnh Công báo
 
 | Gate tài liệu | Kết quả | Bằng chứng / giới hạn |

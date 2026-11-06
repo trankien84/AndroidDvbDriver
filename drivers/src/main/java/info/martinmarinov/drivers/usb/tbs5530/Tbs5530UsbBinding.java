@@ -219,6 +219,10 @@ public final class Tbs5530UsbBinding implements AutoCloseable {
                 ensureCurrent(attempt);
                 return count;
             }
+            public int lastBulkErrno() throws IOException { ensureCurrent(attempt); return connection.lastBulkErrno(); }
+            public void prepareBulkIn82() throws IOException {
+                ensureCurrent(attempt); connection.prepareBulkIn82(); ensureCurrent(attempt);
+            }
             public Tbs5530Descriptors.Endpoint streamEndpoint() throws IOException { return connection.streamEndpoint(); }
             public void cancel() throws IOException { connection.cancel(); }
             public void release() throws IOException { connection.release(); }

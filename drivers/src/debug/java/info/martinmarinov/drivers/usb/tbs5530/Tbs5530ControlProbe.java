@@ -16,6 +16,7 @@ public final class Tbs5530ControlProbe {
         void audit(String boundary, int ordinal, int type, int request, int length, int result) throws IOException;
         /** A fresh physical RF IN confirmation is independent of control-write approval. */
         boolean rfInConfirmed();
+        default boolean experimentalAutoPlpApproved() { return false; }
     }
     private final Tbs5530Session session;
     private final long generation;
@@ -40,6 +41,12 @@ public final class Tbs5530ControlProbe {
     public Tbs5530Frontend.Plan planInitialize() throws IOException { return frontend.planInitialize(); }
     public void readyForTune() throws IOException { frontend.readyForTune(); }
     public Tbs5530Frontend.Plan planTune(Tbs5530DvbT2TuneParameters parameters) throws IOException { return frontend.planTune(parameters); }
+    public Tbs5530Frontend.Plan planExperimentalAutoTune(Tbs5530DvbT2TuneParameters parameters) throws IOException {
+        if (parameters == null || parameters.selection.mode != Tbs5530DvbT2TuneParameters.Mode.AUTO) {
+            throw new IllegalArgumentException("Explicit AUTO candidate required");
+        }
+        return frontend.planTune(parameters, true);
+    }
     public Tbs5530Frontend.Plan planPollStatus(int maximumSamples) throws IOException { return frontend.planPollStatus(maximumSamples); }
     public Tbs5530Frontend.State state() { return frontend.getState(); }
     public void cancel() { frontend.cancel(); session.requestCancellation(generation, false); }
@@ -51,6 +58,7 @@ public final class Tbs5530ControlProbe {
         session.requireUsable(generation);
         authorization.requireCurrent();
         if (needsRf(plan) && !authorization.rfInConfirmed()) throw new IOException("AWAITING_RF_IN_CONNECTION");
+        requireExperimentalConsent(plan);
         authorization.consume(plan);
         executing = true;
         gate.begin(plan);
@@ -72,6 +80,10 @@ public final class Tbs5530ControlProbe {
         } catch (IOException | RuntimeException error) {
             frontend.cancel(); session.failed(generation, error); throw error;
         } finally { executing = false; gate.end(); }
+    }
+    private void requireExperimentalConsent(Tbs5530Frontend.Plan plan) throws IOException {
+        if (plan.tuneParameters != null && plan.tuneParameters.selection.mode == Tbs5530DvbT2TuneParameters.Mode.AUTO
+                && !authorization.experimentalAutoPlpApproved()) throw new IOException("EXPERIMENTAL_AUTO_PLP_NOT_APPROVED");
     }
     private static boolean needsRf(Tbs5530Frontend.Plan plan) {
         return plan.operation == Tbs5530Frontend.Operation.TUNE || plan.operation == Tbs5530Frontend.Operation.STATUS
@@ -120,6 +132,7 @@ public final class Tbs5530ControlProbe {
             int current = ++ordinal;
             authorization.audit("INTENT", current, type, request, length, -1);
             authorization.requireCurrent(); session.requireUsable(generation);
+            requireExperimentalConsent(plan);
             int result = io.controlTransfer(type, request, value, index, bytes, offset, length, timeout);
             authorization.audit("RETURN", current, type, request, length, result);
             authorization.requireCurrent(); session.requireUsable(generation);
