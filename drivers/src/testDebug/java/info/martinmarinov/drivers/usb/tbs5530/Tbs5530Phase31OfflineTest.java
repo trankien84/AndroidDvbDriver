@@ -70,9 +70,7 @@ public class Tbs5530Phase31OfflineTest {
             int[] reads = {0};
             Tbs5530BulkTransport bulk = new Tbs5530BulkTransport(f.session, f.generation, f.resources, () -> { }, (bytes, length, timeout) -> {
                 assertTrue(length <= 16384); reads[0]++;
-                for (int i = 0; i < 564; i += 188) {
-                    bytes[i] = 0x47; bytes[i + 2] = 0x20; bytes[i + 3] = (byte)(0x10 | i / 188);
-                }
+                System.arraycopy(Tbs5530TsParserPsiTest.patPmtFixture(), 0, bytes, 0, 564);
                 return 564;
             });
             Tbs5530TsSmoke.Limits limits = new Tbs5530TsSmoke.Limits(564, 1, 5000, 500);

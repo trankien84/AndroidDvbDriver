@@ -78,6 +78,7 @@ public final class Tbs5530AndroidUsbFacade implements Tbs5530UsbBinding.Facade {
                                  int timeoutMillis) throws IOException {
             throw new IOException("Bulk transfer is unavailable");
         }
+        default int negotiatedUsbSpeed() { return -1; }
         default int lastBulkErrno() throws IOException { return -1; }
         default void prepareBulkIn82() throws IOException { throw new IOException("Endpoint preparation unavailable"); }
         boolean claim(int index, boolean force) throws IOException;
@@ -391,9 +392,21 @@ public final class Tbs5530AndroidUsbFacade implements Tbs5530UsbBinding.Facade {
         return failure instanceof IOException ? (IOException) failure : new IOException(message, failure);
     }
 
+    interface ReceiveBackend extends AutoCloseable {
+        int read(byte[] bytes, int length, int timeoutMillis) throws IOException;
+        int errno();
+        @Override void close() throws IOException;
+    }
+    interface ReceiveBackendFactory {
+        ReceiveBackend create(UsbDeviceConnection connection, UsbEndpoint endpoint) throws IOException;
+    }
     static final class AndroidManager implements Manager {
         private final Context application;
-        AndroidManager(Context application) { this.application = application; }
+        private final ReceiveBackendFactory receiveFactory;
+        AndroidManager(Context application) { this(application, null); }
+        AndroidManager(Context application, ReceiveBackendFactory receiveFactory) {
+            this.application = application; this.receiveFactory = receiveFactory;
+        }
 
         private UsbManager usb() throws IOException {
             UsbManager usb = (UsbManager) application.getSystemService(Context.USB_SERVICE);
@@ -428,6 +441,9 @@ public final class Tbs5530AndroidUsbFacade implements Tbs5530UsbBinding.Facade {
             if (connection == null) return null;
             return new RawConnection() {
                 @Override public byte[] rawDescriptors() { return connection.getRawDescriptors(); }
+                @Override public int negotiatedUsbSpeed() {
+                    return info.martinmarinov.usbxfer.UsbHiSpeedBulk.negotiatedSpeed(connection);
+                }
                 private UsbInterface descriptor(int index) { return selected.getInterface(index); }
                 @Override public int interfaceCount() { return selected.getInterfaceCount(); }
                 @Override public int interfaceId(int index) { return descriptor(index).getId(); }
@@ -466,11 +482,18 @@ public final class Tbs5530AndroidUsbFacade implements Tbs5530UsbBinding.Facade {
                     }
                     if (address != 0x82 || selectedEndpoint == null || selectedEndpoint.getDirection() != 128
                             || selectedEndpoint.getType() != 2) throw new IOException("Bulk IN 0x82 unavailable");
+                    if (receiveFactory != null) {
+                        if (receive == null) receive = receiveFactory.create(connection, selectedEndpoint);
+                        int count = receive.read(buffer, length, timeoutMillis);
+                        bulkErrno = receive.errno();
+                        return count;
+                    }
                     info.martinmarinov.usbxfer.UsbHiSpeedBulk.BulkReadResult result =
                             info.martinmarinov.usbxfer.UsbHiSpeedBulk.readBulkIn82(connection, buffer, length, timeoutMillis);
                     bulkErrno = result.errno;
                     return result.count;
                 }
+                private ReceiveBackend receive;
                 private int bulkErrno = -1;
                 @Override public int lastBulkErrno() { return bulkErrno; }
                 @Override public void prepareBulkIn82() throws IOException {
@@ -479,8 +502,14 @@ public final class Tbs5530AndroidUsbFacade implements Tbs5530UsbBinding.Facade {
                 @Override public boolean claim(int index, boolean force) {
                     return connection.claimInterface(descriptor(index), force);
                 }
-                @Override public boolean release(int index) { return connection.releaseInterface(descriptor(index)); }
-                @Override public void close() { connection.close(); }
+                @Override public boolean release(int index) throws IOException {
+                    if (receive != null) receive.close();
+                    return connection.releaseInterface(descriptor(index));
+                }
+                @Override public void close() throws IOException {
+                    if (receive != null) receive.close();
+                    connection.close();
+                }
             };
         }
     }

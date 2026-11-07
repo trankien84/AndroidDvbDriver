@@ -1,5 +1,33 @@
 # Architecture decision record (ADR)
 
+## ADR-028 — Phase 3.1: quyền phiên debug hữu hạn thay cho hỏi từng giao dịch routine
+
+**Date:** 2026-11-07
+
+**Status:** Được người dùng phê duyệt trong prompt tiếp nối; đã triển khai phần mềm, đang kiểm proof-of-guard và runtime trước khi công nhận hoạt động thật. Không phải hoàn tất Phase 3.1 hoặc phê duyệt mặc định cho các phiên tương lai. HEAD lúc bắt đầu `1ad3b251f19779450a2c5d9cffc9f37f9c9a5470`; không commit/push.
+
+**Context:** Các permit từng chương trình và ACK từng firmware ordinal trước đây giúp giới hạn quyền nhưng gây chờ UI/host không cần thiết trong một phiên debug đã có phạm vi rõ. Người dùng yêu cầu tự chạy routine đã xác minh, vẫn giữ Android USB permission, nhật ký một lần dùng và fail-stop khi trạng thái native không rõ. Đối chứng Windows đã có TS thật nhưng không xác định nguyên nhân Android EOVERFLOW.
+
+**Decision:** Thêm namespace `autonomous-v1`, một grant phiên gắn model GM1900/API 30, boot, VID:PID 734c:5530, firmware SHA, golden plan và transport variant. Grant không được suy từ intent hoặc descriptor. `AUTO_VERIFIED` chỉ cho dual-reset RAM đã khóa, probe/init/K36 AUTO/status/stream-select và synchronous receive đã duyệt; `EXPERIMENTAL_DIAGNOSTIC` mới cho biến thể nhận queue. Mỗi exact plan vẫn được kiểm, audit và consume riêng trong namespace mới; quyền phiên không tái sử dụng attempt đã consume. Legacy manual và consumed/ledger Phase 2.9–3.1 giữ nguyên.
+
+**Bounds / safety:** Tổng phiên tối đa 300000 ms, host heartbeat 2000 ms, giữ timeout và start reserve hiện hữu. Firmware đúng 8192 byte/SHA `b97cf208bb586f706b26aa5450de6bb97375a3e3eabe833cddb0ae3a4f69d0dc`, tối đa một upload cho attachment hợp lệ, 132 boundary theo thứ tự. Fresh raw descriptors/metadata và permission bắt buộc; operational thì bỏ upload, sau firmware phải bỏ owner cũ và lấy bằng chứng mới. Partial/uncertain, corrupt ledger, mất quyền, STOP, detach hoặc host offline đóng write gate; không tự CPU-release, reset, reconnect hay retry để cứu một attempt.
+
+**Transport / TS evidence:** Biến thể queue chỉ debug/API 26+, 8 × 4096 byte trên cùng connection; không khẳng định bằng Windows 8 IRP/actual8192 là cùng requested length. Drain có giới hạn, không giải phóng request/buffer hoặc đóng fd khi ownership còn bất định. TS smoke phải có PAT/PMT hợp lệ CRC và quan hệ program/ES; ba packet sync không còn đủ. Báo riêng có bytes, cấu trúc và chất lượng; TEI/CC còn lỗi không được gọi CLEAN hay chất lượng xem TV đã đạt. Raw capture private chỉ giữ exact chunks đã giao parser, byte nhận trong cleanup được audit riêng.
+
+**Compatibility / exclusions:** Không đổi toolchain, Java 8/minSdk 21, ABI hoặc driver DVB khác. Không bundle firmware, player/EPG hoặc satellite. EEPROM/flash, LNB/antenna DC, mode/driver/ownership changes, power-cycle và vendor/register writes mới đều ngoài grant; cần quyết định riêng. Ngoại lệ pause chỉ cho hộp thoại USB hệ thống trước khi có owner, không bypass OS permission bằng shell/root. Không service qua reboot, port mới hoặc remote control không giám sát dài hạn.
+
+**Rollback / reopen trigger:** Dùng Activity manual cũ nếu không chọn phiên autonomous; sync v4 giữ transcript cũ, queue có v5 riêng. Rollback bằng source/build đã kiểm, không reset store hoặc tạo lệnh undo phần cứng giả. Mở lại khi runtime chứng minh guard hoặc cleanup chưa đúng, hoặc có trace/source đúng chip hỗ trợ một thay đổi allowlist cụ thể. Gate SW/runtime thực chạy được ghi tiếp tại [TEST-MATRIX.md](TEST-MATRIX.md) và [WORKLOG.md](WORKLOG.md).
+
+### Bổ sung kiểm chứng ADR-028 — firmware, epoch và hardware receive, 2026-11-07
+
+Proof-of-guard đã chạy 94 app + 43 library instrumentation, full JVM 421 trước live. Firmware autonomous đầu gửi đủ 132 native full-length rồi terminal UNCERTAIN sau CPU release; giữ nguyên lịch sử đó và dừng write. Sau người dùng phục hồi vật lý, handoff patch được tái hiện BEFORE/AFTER: phân biệt presence/permission loss với cancellation/unknown I/O, chỉ cho transition read-only khi đủ mọi native/full-length/audit 132. External observation là opt-in autonomous, legacy mặc định không đổi. App 95 và library 43 instrumentation sau patch PASS; tại checkpoint đó chưa có Bulk/TS mới.
+
+Attempt tiếp dừng native = 0 trước consume firmware do identity path/id tái dùng. Đã triển khai epoch cố định tương ứng đúng sự kiện phục hồi vật lý người dùng xác nhận; bound trong grant bất biến và chống reuse toàn epoch, không mint mỗi retry. History cũ chỉ append, corrupt/missing state fail-closed. Ba khóa history (legacy attachment, epoch và attachment+epoch) không phải ba uploads. Lượt phục hồi sau fix có native 132/132, handoff sạch và permission/owner mới; không sửa terminal UNCERTAIN cũ thành PASS.
+
+Runtime synchronous 4096/500 ms vẫn errno75, queued 8×4096 vẫn 0 byte/errno unknown; cả initial/operational đo GET_SPEED enum3. Người dùng bật OTG, UI CHECKED rồi fresh-owner sync retest vẫn errno75/0 byte. Mỗi lượt đã dừng/drain, không tự đổi mode/register/reset hoặc thử lại không có điều kiện mới. Queue thực có một replenishment sau completion 0 trước dừng; chốt source không resubmit count 0 và kiểm fake/full regression, không sửa audit cũ. `USB_RECEIVE_ERROR_COMPLETED` chỉ khi synchronous có result/errno đã biết và cleanup DRAIN_CONFIRMED; queue không lộ native status vẫn báo uncertainty về receive, không suy errno75 hoặc NO_SIGNAL. Helper trả nonzero khi không đạt cấu trúc/cleanup, không dùng exit0 trước đây làm TS PASS.
+
+Final software gates 430 JVM, 97 app + 43 library instrumentation, debug/release/lint/static PASS có phạm vi; final APK đã cài giữ stores, package test/owner đã dọn. Queued hardware sau zero-completion patch và API 21/16 KiB runtime mới NOT RUN. Phần policy/automation đã runtime-verified tới Bulk; mục tiêu TS và nguyên nhân EOVERFLOW vẫn `BLOCKED_WITH_EVIDENCE`, cần host/OTG khác hoặc trace phù hợp được duyệt riêng. Không mở phase mới chỉ vì parser/policy đã xong.
+
 ## ADR-027 — Phase 3.1: lấy errno USB có giới hạn, không đoán RF hoặc sửa register sau lỗi
 
 **Date:** 2026-11-07

@@ -172,7 +172,11 @@ public final class Tbs5530OneShotBootstrap {
                                 record(step, "FULL_LENGTH", now);
                             } catch (IOException | RuntimeException error) {
                                 Tbs5530BootstrapTelemetry.Snapshot boundary = telemetry.snapshot();
-                                String status = expectedFinalReleaseDetach(error) ? "FULL_LENGTH_FINAL_RELEASE_ATTACHMENT_CHANGED"
+                                boolean finalDetached = expectedFinalReleaseDetach(error);
+                                if (finalDetached) synchronized (this) {
+                                    completed = boundary.fullLengthCompleted; bytes = boundary.payloadBytesFullLength;
+                                }
+                                String status = finalDetached ? "FULL_LENGTH_FINAL_RELEASE_ATTACHMENT_CHANGED"
                                         : boundary.nativeCallStarted > boundary.nativeCallCompleted
                                         ? Tbs5530BootstrapStop.Kind.UNKNOWN_IN_FLIGHT.name()
                                         : Tbs5530BootstrapStop.kindOf(error).name();
@@ -202,6 +206,7 @@ public final class Tbs5530OneShotBootstrap {
         if (s.fullLengthCompleted != 132 || s.nativeCallStarted != 132 || s.nativeCallCompleted != 132) return false;
         if (Tbs5530BootstrapStop.sanitizedChain(error).contains(Tbs5530BootstrapStop.Kind.AUDIT_FAILED.name())) return false;
         for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (cause instanceof Tbs5530UsbBinding.AttachmentChangedException) return true;
             if (cause instanceof Tbs5530BootstrapStop) {
                 return ((Tbs5530BootstrapStop) cause).kind == Tbs5530BootstrapStop.Kind.USB_DETACHED;
             }

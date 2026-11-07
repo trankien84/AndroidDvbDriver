@@ -230,10 +230,12 @@ public final class Tbs5530UsbBinding implements AutoCloseable {
         };
     }
 
+    static final class AttachmentChangedException extends IOException {
+        AttachmentChangedException() { super("Attachment or OS permission changed during acquisition"); }
+    }
     private void ensureCurrent(Attempt attempt) throws IOException {
-        if (!active(attempt) || !present(attempt.device) || !facade.hasPermission(attempt.device)) {
-            throw new IOException("Attachment changed during acquisition");
-        }
+        if (!active(attempt)) throw new IOException("Acquisition cancelled or owner invalidated");
+        if (!present(attempt.device) || !facade.hasPermission(attempt.device)) throw new AttachmentChangedException();
     }
 
     private boolean present(Device expected) throws IOException {

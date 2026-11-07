@@ -21,11 +21,19 @@ public final class Tbs5530AndroidBootstrap implements AutoCloseable {
     private final Tbs5530OneShotBootstrap.Guard authorization;
     private final long preparedAt = android.os.SystemClock.elapsedRealtime();
     private Tbs5530UsbBinding.Cancellation watchdog;
+    private final boolean externalObservation;
 
     public Tbs5530AndroidBootstrap(Context context, Tbs5530AndroidRuntime runtime,
                                   Tbs5530UsbBinding.Device device, Tbs5530FirmwarePlan validated,
                                   Tbs5530OneShotBootstrap.Guard authorization,
                                   Tbs5530OneShotBootstrap.AttemptStore store) throws IOException {
+        this(context, runtime, device, validated, authorization, store, false);
+    }
+    public Tbs5530AndroidBootstrap(Context context, Tbs5530AndroidRuntime runtime,
+                                  Tbs5530UsbBinding.Device device, Tbs5530FirmwarePlan validated,
+                                  Tbs5530OneShotBootstrap.Guard authorization,
+                                  Tbs5530OneShotBootstrap.AttemptStore store, boolean externalObservation) throws IOException {
+        this.externalObservation = externalObservation;
         this.runtime = runtime; this.authorization = authorization;
         // Public callers cannot substitute a synthetic policy or another plan on the Android path.
         java.io.ByteArrayOutputStream image = new java.io.ByteArrayOutputStream();
@@ -107,6 +115,7 @@ public final class Tbs5530AndroidBootstrap implements AutoCloseable {
             runner.execute();
             port.finishWrites();
             runner.releaseUpload();
+            if (externalObservation) { finish(); return; }
             schedule(this::openObservation);
         } catch (IOException | RuntimeException error) { fail(error); }
     }

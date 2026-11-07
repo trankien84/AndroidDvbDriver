@@ -63,9 +63,10 @@ public class Tbs5530OperationalHandoffTest {
         }
         public int bulkTransfer(int interfaceIndex, int endpointIndex, byte[] bytes, int length, int timeout) {
             assertTrue(syntheticDemod); assertEquals(0x82, endpointIndex); assertTrue(length <= 16384); bulkReads++;
-            for (int at = 0; at < 564; at += 188) { bytes[at] = 0x47; bytes[at + 2] = 0x20; bytes[at + 3] = (byte)(0x10 | at / 188); }
+            System.arraycopy(Tbs5530AndroidTsFixture.stream(), 0, bytes, 0, 564);
             return 564;
         }
+        public int negotiatedUsbSpeed() { return 3; }
         public int lastBulkErrno() { return bulkReads > 0 ? 0 : -1; }
         public void prepareBulkIn82() { assertTrue(syntheticDemod); preparations++; }
         public void close() { closes++; }
@@ -146,6 +147,7 @@ public class Tbs5530OperationalHandoffTest {
         Fixture f = new Fixture();
         try {
             f.start(); assertTrue(f.handoff.operationalOwner());
+            assertEquals(3, f.handoff.observation().negotiatedUsbSpeed);
             assertEquals(Tbs5530Session.State.CONNECTED, f.handoff.session().getState());
             assertFalse(f.handoff.session().isFrontendInitialized()); assertFalse(f.handoff.session().isFirmwareUploaded());
             assertEquals(1, f.manager.opens); assertEquals(1, f.manager.raw.rawReads); assertEquals(1, f.manager.raw.claims);

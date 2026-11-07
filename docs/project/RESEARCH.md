@@ -1,5 +1,61 @@
 # Research log (append-only)
 
+## 2026-11-07 — Phase 3.1: High-Speed đo thực, queue không nhận bytes và OTG toggle không khắc phục
+
+`RUNTIME-OBSERVED`: Sau sửa guard/handoff và dùng đúng recovery epoch cố định, firmware có 132/132 native full-length, image 8192/payload 8196, TRANSITIONING sạch trong 4706 ms. Fresh operational permission được OS hỏi và cấp qua UI, sau đó pipeline probe/init/AUTO K36/status/stream-select đi tới IN82, không cần Approve từng plan. Firmware raw đúng SHA khóa; không upload lại operational. Sáu preferences legacy giữ nguyên.
+
+Read-only `USBDEVFS_GET_SPEED` trên fd đang sở hữu trả enum 3 tại default và operational. NDK `linux/usb/ch9.h` định nghĩa đây là USB_SPEED_HIGH; không còn chỉ suy speed từ descriptor 512. Sync native read 4096/500 ms vẫn -1/errno75 sau managed read 16,785 ms, 0 byte. Sau known return và drain sạch, đúng một queued candidate 8×4096 trên fresh owner trả count 0, errno không có; queue audit 9 submitted/9 completed/outstanding 0/released true và 0 cleanup bytes. Android framework không lộ status URB, nên không gán EOVERFLOW cho queue chỉ từ count 0. Đã dừng, không clear/reset hoặc đổi register.
+
+Người dùng không có OTG/cáp/Android host khác, nhưng báo vừa bật “Lưu trữ OTG” và yêu cầu thử lại. Đã đọc UI switch BẬT/CHECKED trước/sau, không tự đổi setting; một fresh-owner sync retest không upload firmware vẫn High-Speed 3 và -1/errno75, managed read 17,883385 ms, 0 byte; cleanup sạch. Thay đổi toggle này chưa khắc phục lỗi, không phải bằng chứng thiếu quyền hệ thống hoặc RF.
+
+Runtime queue audit cho thấy một empty completion được replenish trước khi TsSmoke dừng. Đã thêm fake regression BEFORE FAIL và sửa không resubmit count 0, giữ cancel/drain các slot cũ. Đây là chặt fail-stop, không phải sửa EOVERFLOW đã kiểm trên hardware; audit 9 submit cũ được giữ, queued hardware sau patch NOT RUN.
+
+| Nhánh nguyên nhân | Bằng chứng ủng hộ/chống | Trạng thái / phép phân biệt còn cần |
+| --- | --- | --- |
+| RF/TEI đồng tồn tại | Windows dài có TEI/CC/PES, mẫu mới TEI0 nhưng CC/PES còn; Android đã tới lock trước Bulk | RF quality có vấn đề riêng có thể tồn tại, không giải thích chắc chắn errno75 hoặc no-bytes |
+| Chỉ BDA mode | Windows đổi sang DVB-T/T2 rồi có TS; Android sau Windows vẫn errno75 | Chưa biết persistent mode, không suy EEPROM hoặc root cause |
+| Firmware mismatch | Android image đúng SHA8192 và operational; Windows tải firmware thực không thấy trong trace này | Chưa loại mọi device/firmware behavior, không tự đổi image |
+| Full-Speed hoặc quên bật OTG | GET_SPEED3/High-Speed đã đo; bật OTG CHECKED rồi retest vẫn errno75 | Không đủ giải thích lỗi hiện tại |
+| Sync so với queued scheduling | Windows peak8 IRP, official 8×4096; Android queue 8×4096 vẫn 0 | Thử nghiệm này không chữa, không chứng minh mọi async transport đều tương đương |
+| Host controller/link/packetization | Android native errno75 lặp ở 4096 sau HS/lock; không có Android packet trace hoặc host khác | UNKNOWN; cần host/OTG khác hoặc trace phù hợp theo phạm vi riêng |
+| Buffer/backpressure | Windows actual8192/request unknown; Android 4K chia hết 512 vẫn lỗi, queue không data | Chưa có bằng chứng tăng buffer hoặc arbitrary writes sẽ chữa; không quét biến thể |
+
+Ba firmware-history records là các khóa chống reuse (legacy attachment, recovery epoch và attachment+epoch), không phải ba uploads. Audit chứng minh hai uploads 132 trong phiên dài này, một refusal native = 0, rồi hai operational receive scopes và một OTG retest; chỉ upload phục hồi sạch mới đi tiếp frontend. Các terminal và report giữ raw counts, không biến no-data counter 0 thành TS quality PASS. Báo cáo tổng hợp ngoài Git: `D:\TSDuck\reports\phase31-closeout-20261107-163301-6dedd387.md`.
+
+## 2026-11-07 — Phase 3.1: phân biệt native firmware hoàn tất với lỗi handoff và refusal trước native
+
+`RUNTIME-OBSERVED`: Sau proof-of-guard, autonomous sync session đầu gọi đủ 132 native A0, mỗi kết quả full-length, image 8192/payload 8196. Native audit có STOP JAVA_IO_EXCEPTION ngay sau ordinal 132; không raw-after hoặc frontend/TS. Đây là firmware transfer full-length nhưng terminal UNCERTAIN, không phải firmware operational đã chứng nhận hoặc lỗi Bulk 0x82. Đã fail-stop, cleanup DRAIN_CONFIRMED; không write/retry trên attachment đó.
+
+`OFFLINE-REPRODUCED`: Fake cho permission mất ở raw call 132, trước broadcast detach, làm UsbBinding.ensureCurrent ném generic IOException sau native trả; runner chưa tăng completed và nhánh expectedFinalReleaseDetach không nhận ra nguyên nhân. Test BEFORE có 1 FAIL/2, sau typed exception và proof full 132/no audit failure thì transition sạch được giữ để owner mới quan sát. Cancellation, unknown IOException, short final và suppressed audit failure vẫn UNCERTAIN. Đây là lỗi software đã tái hiện và sửa; audit runtime cũ thiếu cause chi tiết nên chưa thể khẳng định toàn bộ runtime failure thuộc đúng nhánh này.
+
+`IMPLEMENTED`: AndroidBootstrap có opt-in externalObservation, mặc định legacy false. Autonomous true chỉ kết thúc upload sạch ở TRANSITIONING sau release/drain; app bỏ selected cũ, lấy descriptor/OS permission/owner mới. Không biến observation failed hoặc snapshot UNCERTAIN thành thành công. Báo cáo mới giữ bootstrap counts/failure_chain đã lọc để lần sau không mất thông tin.
+
+Sau người dùng phục hồi vật lý đúng một lần, attempt mới có raw-before nhưng dừng native = 0/attempted = 0, ledger phiên chỉ SESSION_GRANTED, lịch sử attachment vẫn 1 consumed record. Giả thuyết cụ thể cần đối chiếu: key từ boot + path/id không phân biệt power-cycle nếu Android tái dùng địa chỉ. Không được chữa bằng xóa history hoặc random nonce mỗi retry; generation vật lý mới phải có provenance từ xác nhận người dùng hoặc observer liên tục đã kiểm. Chưa gọi đây là EOVERFLOW được sửa; chưa có I²C/tune/0x8A/Bulk Android mới.
+
+## 2026-11-07 — Phase 3.1: đối chứng Windows sau commit 1ad3b251 và giả thuyết hàng đợi nhận
+
+### Kết luận độc lập từ dữ liệu Windows
+
+`OFFLINE-TESTED`: Gate A đọc đủ hai mẫu, tổng 276.417 packet 188 byte; 15 self-test và 410 kiểm chéo đạt. Mẫu ngắn 10.000.096 byte, SHA-256 `e9d107766826d9cf335a9cfac3e0043a62a931e5f1a0309d3da5c05650996061`, có 53.192 packet, TEI 0 và 18 discontinuity bất thường. Mẫu dài 41.966.300 byte, SHA-256 `74204d0c768da055e5c41969aff3704f9f105c3e594edf195f72ce06b39b8f2a`, có 223.225 packet, TEI 5.101 (2,285138%), 2.738 discontinuity bất thường theo TSDuck; 54 trường hợp cùng CC gồm 8 bản sao nguyên byte và 46 packet khác nội dung. Cả hai không mất sync, có TSID 6, 14 dịch vụ và 46 PID không TEI. Provider SDTV và loại dịch vụ không chứng minh độ phân giải SD; tên một số dịch vụ có HD.
+
+Lỗi mẫu dài tập trung ở 29/224 cửa sổ, mỗi cửa sổ 1.000 packet; đoạn TEI dài nhất 421 packet, chỉ số 123610–124030. Header trong packet TEI có thể làm sai PID; không xem 363 PID đọc từ raw header là 363 dịch vụ. Error-summary 36/92 là dòng hoặc nhóm lỗi, không phải số packet lỗi. Hai lệnh `tsbitrate --full` đều báo `insufficient PCR` dù exit 0; không dùng 132–134 Mb/s từ PCR làm tốc độ RF hoặc USB. Không có wall-clock acquisition cho hai mẫu cũ, nên tốc độ thực của chúng là `NOT MEASURED`.
+
+`RUNTIME-OBSERVED`: BDA mới liệt kê tuner ở DVB-T/DVB-T2 và báo lock. Người dùng trước đó tự đổi ChangeMode từ DVB-S/S2 sang DVB-T/T2; chỉ xác nhận mode công bố trên Windows, chưa chứng minh trạng thái lưu bền hoặc nguyên nhân Android. Lượt TS thường mới thu 44.999.868 byte / 239.361 packet trong process 16,406 giây, có 14 dịch vụ, TEI/sync 0 nhưng 41 continuity bất thường và 1 invalid PES. Tốc độ 2,743 MB/s theo toàn thời gian process chỉ là trung bình host, gồm cả khởi động, không phải tốc độ multiplex đã hiệu chỉnh.
+
+### USBPcap đã đo được gì
+
+Sau khi quyền thường bị `Access is denied`, người dùng duyệt một lượt UAC hữu hạn. Trace chỉ TBS5530 xác nhận High-Speed từ hub, peak 8 IRP outstanding và 5.962 completion IN82 thành công báo actual 8.192 byte. Requested buffer length không quan sát được; snaplen 128 cố ý không giữ đầy đủ payload. Có 5.970 submit / 5.970 completion ghép đủ, cuối không còn outstanding; status 0 chỉ là hoàn tất USB, không chứng nhận TS sạch. Mẫu TS kèm trace vẫn TEI/sync 0, 41 continuity bất thường và 4 invalid PES.
+
+Không thấy request `0x8A` trong cửa sổ trace. Trước first IN82 có 71 vendor OUT, gồm 53 request `0x80` và 18 request `0x90`; control cuối có payload đầy đủ `03c80020`, trước first Bulk submit khoảng 258 µs. Chưa xác minh tác dụng thanh ghi, không replay hoặc coi nó tương đương `0A 00`. Không suy request chưa từng xảy ra trước cửa sổ capture. Tất cả client do lượt Windows tạo đã đóng trước khi người dùng chuyển tuner sang OnePlus.
+
+### So sánh nguồn và phép thử được chọn
+
+Nguồn official tại `2ce787de9f6e81b4294692a45de15596ae2e1322`, `tbs5530.c` dùng 8 URB × 4096 byte, endpoint 0x82 và terrestrial select `0x8A / 0A 00`. Community C tại `c5fa27eecbe80633cbb365cc44656daea1c0e2e3`, `tbs5530_start_streaming`, cũng select trước submit nhiều URB; completion lỗi được resubmit, nhưng port debug không sao chép retry này. Go tại `11228b05fb1626bf41c4e1879ace10cd0a8d575c`, `internal/coaxd/usb/bridge/tbs5530/tbs5530.go`, xác nhận cùng bridge/endpoint, không cung cấp bằng chứng sửa EOVERFLOW trên Android.
+
+`IMPLEMENTED, NOT YET RUNTIME-VERIFIED`: Giữ synchronous native baseline, thêm đúng một biến thể nhận `QUEUED_USB_REQUEST_8X4096` để kiểm giả thuyết scheduling, không gọi đây là cách sửa đã chứng minh. Chỉ debug/API 26+ dùng `requestWait(timeout)`; API 21 giữ được build và đường cũ, không có fallback chờ vô hạn. Cùng claimed connection, một worker, sắp lại completion theo slot, bounded cancel/drain và giữ fd/buffer nếu không xác nhận được cleanup. Backend async không cung cấp errno đáng tin cậy nên ghi null, không suy errno 75 từ kết quả cũ. Transcript riêng và profile experimental bắt buộc.
+
+Evidence ngoài Git: `D:\TSDuck\reports\gate-a-20261107-124416-97b66f634bda\baseline-gate-a.md`, manifest cùng run trong `logs`; `gate-b-20261107-124939-e0bd6360-report.md`, `gate-b-trace-20261107-132011-2180e213-trace-report.md` và phần bổ sung stream-selection trong `reports`. Trace SHA-256 `7367355df8cc9ccf83aced6be3b8b105aa4533d9f5a588af93f4a2fbab54b190`. Raw TS/trace/firmware không đưa vào Git hoặc dịch vụ ngoài. Tất cả kết quả NOT RUN dưới đây giữ nguyên ý nghĩa lịch sử; chúng không phủ định đối chứng Windows mới.
+
 ## 2026-11-07 — Phase 3.1: AUTO đã được kiểm thật; errno chỉ ra lỗi nhận USB EOVERFLOW
 
 ### Kết luận và giới hạn bằng chứng

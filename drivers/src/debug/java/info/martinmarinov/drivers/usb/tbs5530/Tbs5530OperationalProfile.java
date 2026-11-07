@@ -10,9 +10,18 @@ public final class Tbs5530OperationalProfile {
     public final Kind kind;
     public final String descriptorHash;
     public final int streamPacketSize, controlPacketSize;
+    /** Linux USB_SPEED enum from host ioctl, not inferred from descriptors; negative means unavailable. */
+    public final int negotiatedUsbSpeed;
 
     private Tbs5530OperationalProfile(Kind kind, String hash, int stream, int control) {
+        this(kind, hash, stream, control, -1);
+    }
+    private Tbs5530OperationalProfile(Kind kind, String hash, int stream, int control, int speed) {
         this.kind = kind; descriptorHash = hash; streamPacketSize = stream; controlPacketSize = control;
+        negotiatedUsbSpeed = speed;
+    }
+    Tbs5530OperationalProfile withSpeed(int speed) {
+        return new Tbs5530OperationalProfile(kind, descriptorHash, streamPacketSize, controlPacketSize, speed);
     }
 
     public static Tbs5530OperationalProfile observe(byte[] bytes) {

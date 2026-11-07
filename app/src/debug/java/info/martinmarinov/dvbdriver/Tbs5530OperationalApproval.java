@@ -30,10 +30,10 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
     private static final long START_MARGIN_MS = 5000;
     private final long generation, maximumMillis;
     private final String ownerIdentity;
-    private final boolean experimentalAuto, endpointPreparation;
+    private final boolean experimentalAuto, endpointPreparation, queuedReception;
     private final String operation, planHash;
     private final String challenge = UUID.randomUUID().toString();
-    private final long created;
+    private final long created, heartbeatNotBefore;
     private volatile boolean foreground = true, revoked, rf;
     private boolean consumed;
     private String approvalId;
@@ -59,20 +59,29 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
     }
     Tbs5530OperationalApproval(Storage storage, Clock clock, Tbs5530Frontend.Plan plan,
                               Tbs5530TsSmoke.Limits limits, long generation, String ownerIdentity) throws IOException {
+        this(storage, clock, plan, limits, generation, ownerIdentity, -1);
+    }
+    Tbs5530OperationalApproval(Storage storage, Clock clock, Tbs5530Frontend.Plan plan,
+                              Tbs5530TsSmoke.Limits limits, long generation, String ownerIdentity,
+                              long sessionCreated) throws IOException {
         if (ownerIdentity == null || ownerIdentity.isEmpty()) throw new IOException("Owner identity required");
         this.storage = storage; this.clock = clock; this.plan = plan; tsLimits = limits;
         this.ownerIdentity = ownerIdentity;
         maximumMillis = plan == null ? limits.maximumMillis() : plan.maximumMillis;
         endpointPreparation = plan == null && limits.prepareEndpoint;
+        queuedReception = plan == null && limits.readApi == Tbs5530TsSmoke.ReadApi.QUEUED_USB_REQUEST_8X4096;
         experimentalAuto = plan != null && plan.tuneParameters != null
                 && plan.tuneParameters.selection.mode == info.martinmarinov.drivers.usb.tbs5530.Tbs5530DvbT2TuneParameters.Mode.AUTO;
         this.generation = generation; created = clock.now();
+        heartbeatNotBefore = sessionCreated == -1 ? created : sessionCreated;
+        if (heartbeatNotBefore < 0 || heartbeatNotBefore > created || created - heartbeatNotBefore >= 300000)
+            throw new IOException("Invalid session heartbeat origin");
         operation = plan == null ? "TS_SMOKE" : plan.operation.name();
-        String transcript = plan == null ? "TBS5530-TS-SMOKE/v4|generation=" + generation
+        String transcript = plan == null ? (queuedReception ? "TBS5530-TS-SMOKE/v5|generation=" : "TBS5530-TS-SMOKE/v4|generation=") + generation
                 + "|OUT=40/8A/0/0/0a00|timeoutMs=2000|BulkIN=82|bytes=" + limits.maxBytes
                 + "|reads=" + limits.maxReads + "|durationMs=" + limits.durationMillis
                 + "|readTimeoutMs=" + limits.readTimeoutMillis + "|chunkBytes=" + limits.readChunkBytes
-                + "|readApi=USBDEVFS_BULK_ERRNO"
+                + (queuedReception ? "|readApi=USB_REQUEST_QUEUE_8X4096_API26|queueDepth=8|drainMaxMs=1000" : "|readApi=USBDEVFS_BULK_ERRNO")
                 + (endpointPreparation ? "|prepare=USBDEVFS_CLEAR_HALT:82|prepareMaxMs=5000"
                 + "|prepareSource=tbsdtv/linux_media@2ce787de9f6e81b4294692a45de15596ae2e1322:usb-urb.c:usb_urb_init:220" : "")
                 + "|RF_IN_CONFIRMED|LOCK_REQUIRED|retry=0"
@@ -83,6 +92,7 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
             json.put("protocol", 2); json.put("challenge", challenge); json.put("plan_sha256", planHash);
             json.put("owner_identity", ownerIdentity); json.put("experimental_auto_plp", experimentalAuto);
             json.put("endpoint_preparation", endpointPreparation);
+            if (queuedReception) json.put("queued_reception", true);
             json.put("start_margin_ms", START_MARGIN_MS);
             json.put("operation", operation); json.put("generation", generation);
             json.put("created_elapsed_ms", created); json.put("max_session_ms", 300000); json.put("heartbeat_ms", 2000);
@@ -112,14 +122,15 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
                     || permit.getLong("approved_maximum_ms") != maximumMillis
                     || experimentalAuto && !permit.getBoolean("explicit_experimental_auto_plp")
                     || endpointPreparation && !permit.getBoolean("explicit_endpoint_preparation")
+                    || queuedReception && !permit.getBoolean("explicit_queued_reception")
                     || !challenge.equals(permit.getString("challenge")) || !planHash.equals(permit.getString("plan_sha256"))
                                         || !operation.equals(permit.getString("operation")) || permit.getLong("generation") != generation
                     || !permit.getBoolean("explicit_control_approval") || !permit.getBoolean("physical_current")) {
                 throw new IOException("Control approval scope/attachment/clock mismatch");
             }
             long expires = permit.getLong("expires_elapsed_ms"), heartbeat = permit.getLong("heartbeat_elapsed_ms");
-            if (expires <= now || expires > created + 300000 || heartbeat < created || heartbeat > now || now - heartbeat >= 2000
-                    || !consumed && Math.min(expires, created + 300000) - now < maximumMillis + START_MARGIN_MS) {
+            if (expires <= now || expires > heartbeatNotBefore + 300000 || heartbeat < heartbeatNotBefore || heartbeat > now || now - heartbeat >= 2000
+                    || !consumed && Math.min(expires, heartbeatNotBefore + 300000) - now < maximumMillis + START_MARGIN_MS) {
                 throw new IOException("Control approval expired or host heartbeat stale");
             }
             String id = permit.getString("approval_id");
@@ -163,6 +174,9 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
     }
     public boolean experimentalAutoPlpApproved() {
         try { requireCurrent(); return experimentalAuto; } catch (IOException error) { return false; }
+    }
+    public boolean queuedReceptionApproved() {
+        try { requireCurrent(); return queuedReception; } catch (IOException error) { return false; }
     }
     public boolean endpointPreparationApproved() {
         try { requireCurrent(); return endpointPreparation; } catch (IOException error) { return false; }

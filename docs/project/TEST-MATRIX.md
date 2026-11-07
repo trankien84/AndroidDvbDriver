@@ -1,5 +1,117 @@
 # TBS5530 test matrix
 
+## 2026-11-07 — Phase 3.1: gate chốt source và cleanup sau hardware no-data
+
+Final source fingerprint `3fe396af975baea76b00bc21a60c691655a080df549b11418100713f19ebd189`; debug SHA `6d04f7dee03a44cd34a92931a08d689020c9d6ed40617b3d68c58483afd21311`, release SHA `f82573c0ba46d0645eebc194c9d0c07972366819b6a4c2cd07b983e34b4d6085`. Khác APK đã chạy receive conditions ở checkpoint dưới vì thêm fail-stop không replenishment count 0; không chạy lại hardware trên patch chốt.
+
+| Gate cuối thực chạy | Kết quả | Evidence / giới hạn |
+| --- | --- | --- |
+| Full JVM | PASS 430 methods | Drivers 413 + usbxfer 1 + dvbservice 13 + app 3, failures/errors 0 |
+| Debug/release/lint | PASS | Wrapper 1 phút, lint 0 errors/13 warnings; không suppress/nâng toolchain |
+| Isolated instrumentation build | PASS | Wrapper 1 phút 13 giây, namespace `.phase31offline` đúng hợp đồng test |
+| App instrumentation | PASS 97 / 22,22 giây | Fake-only, gồm legacy/manual/session/epoch/native fd âm và report; không USB thật |
+| Library instrumentation | PASS 43 / 1,7 giây | Fake full path và forwarding; không suy runtime API 21/16 KiB |
+| Static | PASS có phạm vi | Bốn ABI, JNI/read speed, ELF64 16 KiB/zipalign, min21/target37, major52 debug177/release84, release isolation và không firmware/TS/trace/private audit |
+| Zero-completion no resubmit | BEFORE fake FAIL, AFTER PASS | 14 queue tests cuối; runtime audit cũ 9 submit giữ nguyên, hardware sau patch NOT RUN |
+| Cleanup Windows unit tests | FAIL transient sharing violation rồi PASS sau bounded cleanup | FilesystemException xác nhận directory đang được giữ; chỉ cleanup test thử tối đa 10 lần/450 ms rồi vẫn throw, không retry USB hoặc thay capture semantics |
+| Final production install | PASS giữ dữ liệu | APK SHA trên điện thoại khớp debug chốt; sáu legacy preferences giữ nguyên, không clear/uninstall production |
+| Cleanup test packages/owners | PASS | Gỡ đúng 3 package phiên tạo, không `.phase31offline`/`.phase31autooffline` còn lại; không diagnostic Activity foreground hoặc helper chạy nền |
+| Android TS / chất lượng / API 21/16 KiB runtime mới | BLOCKED / NOT RUN | Hardware trước patch có 0 byte; không TS_SMOKE_PASS, không quality/stability chứng nhận |
+
+Audit riêng của ba receive workflows trước patch ghi mỗi lượt 156 OUT/33 IN managed full-length cho frontend, cộng một stream-select; không nhầm với native-boundary counts. Firmware có hai lượt 132 full-length, chỉ lượt phục hồi có handoff sạch; một refusal native = 0 giữa hai lượt không phải upload. Báo cáo tổng hợp `D:\TSDuck\reports\phase31-closeout-20261107-163301-6dedd387.md`; OTG switch CHECKED đã được xác minh nhưng sync retest vẫn errno75. Phase 3.1 vẫn `BLOCKED_WITH_EVIDENCE`.
+
+## 2026-11-07 — Phase 3.1: hardware epoch, sync/queued và retest sau bật OTG
+
+Source baseline `1ad3b251f19779450a2c5d9cffc9f37f9c9a5470`, fingerprint mã chạy `7e158a18841307cbce693e38f9b19e8ba70adda553a15138ac7f3d037c148740`; APK debug `9ecb806b6f6a04ea1ec121a6330a012b4a0ebfe8b2928d4fe67186c999afe11b`. Không nâng toolchain hoặc thay driver. Các phần dưới là checkpoint lịch sử; không dùng số test cũ làm kết quả source mới.
+
+| Gate thực chạy | Kết quả | Bằng chứng / giới hạn |
+| --- | --- | --- |
+| Full JVM epoch | PASS 429 methods | Drivers 412 + usbxfer 1 + service 13 + app 3; failures/errors 0 |
+| Debug/release/lint epoch | PASS | Wrapper 2m55s; lint 0 errors/13 warnings; isolated build 1m11s |
+| App/library instrumentation epoch | PASS 97/43 | App 18,357 giây + library 1,618 giây; fake-only, gồm native GET_SPEED fd âm/không ioctl và forwarding speed giả |
+| Static APK epoch | PASS có phạm vi | Bốn ABI, JNI, ELF64/zipalign 16 KiB, min21/target37, major 52 debug 177/release 84 classes; release SHA f82573c0ba46d0645eebc194c9d0c07972366819b6a4c2cd07b983e34b4d6085, debug-only code/capture/firmware không lọt |
+| Physical recovery epoch | PASS provenance và chống reuse | Một GUID cố định cho đúng sự kiện ngắt nguồn/cắm lại người dùng đã xác nhận; cùng epoch không upload lần hai, legacy history giữ nguyên và chỉ append |
+| Firmware phục hồi, handoff thật | PASS transfer/handoff, không phải TS | Native 132/132 full-length, 8192 image/8196 payload, duration 4706 ms, TRANSITIONING/failure NONE/cleanup NONE; OS hỏi permission mới, đã cấp bằng UI và lấy owner operational mới |
+| Sync IN82 sau bootstrap/init/AUTO/status | FAIL mục tiêu TS | Một 0x8A, một read 4096/500 ms = -1/errno 75; 0 byte/packet; managed read 16785000 ns, smoke 68550938 ns, DRAIN_CONFIRMED |
+| Android negotiated speed | PASS số đo, không suy descriptor | USBDEVFS_GET_SPEED = 3 tại initial và operational, Linux USB_SPEED_HIGH; maxpacket 512 là quan sát descriptor riêng |
+| Queued IN82 8×4096 | FAIL mục tiêu TS, status URB unknown | Fresh operational owner, không firmware upload; read 0/errno null, 0 bytes; managed read 19153906 ns/smoke 55109531 ns; audit 9 submit/9 complete/outstanding 0/released true, cleanup bytes 0 |
+| Retest sau người dùng bật Lưu trữ OTG | FAIL mục tiêu TS | UI switch BẬT/CHECKED được đọc trước/sau; fresh owner không firmware, High-Speed 3, read 4096/500 = -1/errno 75, 0 byte; managed read 17883385 ns/smoke 59436927 ns; cleanup DRAIN_CONFIRMED |
+| Android TS structure / chất lượng / stability | NOT RUN / BLOCKED | Không có bytes nên PAT/PMT, TEI/CC/PCR không có mẫu để đánh giá; counter0 không phải CLEAN |
+| API 21/16 KiB runtime mới | NOT RUN | Không lấy native API30/static thay gate runtime |
+| Queue zero completion replenishment | BEFORE fake FAIL, patch chốt sau hardware | Không resubmit khi count0; không sửa audit runtime 9 submit thành 8, chưa chạy lại queued hardware sau patch |
+
+### So sánh trước–sau bổ sung
+
+| Vấn đề | Baseline | Sửa / đo mới | Kiểm sau | Hạn chế |
+| --- | --- | --- | --- | --- |
+| Firmware handoff | Full 132 nhưng generic IO trước broadcast thành UNCERTAIN | Typed presence/permission + external observation sạch | Fake fail→pass; runtime phục hồi handoff sạch | Terminal đầu vẫn UNCERTAIN, không coi là upload lỗi Bulk |
+| Attachment key reuse | Power-cycle vẫn có path/id cũ, refusal native = 0 | Epoch vật lý từ xác nhận người dùng, bound grant và append-only keys | Fake + instrumentation + runtime upload mới đúng 1 | Ba khóa history không có nghĩa ba uploads |
+| Speed chỉ suy từ 512 | Sysfs không đủ quyền đọc | GET_SPEED read-only cùng fd | Đo enum 3 thật | High-Speed không loại host controller/link packetization lỗi |
+| Scheduling | Sync 4K errno 75 | Một queued 8×4096 không reset/vendor mới | Runtime 0 bytes, drained | Không chứng minh queue là root cause hoặc cách chữa |
+| Chế độ OTG | Người dùng báo trước đó chưa bật | UI xác nhận bật, sync retest một lần | Vẫn errno 75 | Không có đường OTG/host khác, không lặp điều kiện cũ |
+
+Run evidence: `D:\TSDuck\logs` và `reports`, các run `phase31-android-epoch-sync-20261107-162518-3c72af72`, `phase31-android-queued-20261107-162659-029afea0`, `phase31-android-user-otg-sync-20261107-163301-6dedd387`. Tất cả helper kết thúc, owner Back/drain sạch. Sáu legacy preferences giữ nguyên; không upload firmware ở queue/OTG retests, không clear/uninstall production hoặc rearm consumed. Kết luận vẫn `BLOCKED_WITH_EVIDENCE` trong Phase 3.1.
+
+## 2026-11-07 — Phase 3.1: guard đã PASS, firmware tự động dừng đúng khi handoff bất định
+
+| Gate thực chạy tiếp | Kết quả | Evidence / giới hạn |
+| --- | --- | --- |
+| App instrumentation sau sửa heartbeat/harness | PASS 94 methods / 17,552 giây | Heartbeat phiên có trước chương trình nhưng còn mới không bị từ chối; cache cũ không che heartbeat file mới; manual không nới guard |
+| Library instrumentation tương ứng | PASS 43 methods / 1,704 giây | Fake-only toàn path, không phần cứng |
+| Full JVM trước firmware live đầu | PASS 421 methods | Drivers 404 + usbxfer 1 + service 13 + app capture 3; app không còn NO-SOURCE sau bổ sung capture tests |
+| Capture JVM lần đầu final regression | FAIL 1/3 tại cleanup Windows, sau đó PASS 3/3 | Đổi cleanup test sang Files.delete để không che lỗi file; không sửa capture bytes hoặc giới hạn |
+| Production install tại chỗ | PASS giữ stores | So SHA 6 preferences trước/sau giống nhau, không clear/uninstall app chính |
+| OS USB permission | PASS qua UI hệ thống | Đã đọc đúng hộp thoại và bấm OK theo ủy quyền; không shell grant/root; metadata report cũ có dòng stale nhưng terminal permission đã cấp |
+| Autonomous firmware attachment đầu | FULL-LENGTH 132, terminal UNCERTAIN | 132 guard/native start/end/full-length; 8192 image / 8196 payload; sau ordinal132 có JAVA_IO_EXCEPTION, không raw-after, không I²C/tune/TS; cleanup DRAIN_CONFIRMED |
+| Tuân thủ fail-stop sau firmware | PASS | Không retry/write trên attachment đó; người dùng phục hồi vật lý một lần, tạo attachment mới |
+| Tái hiện software handoff khi permission mất sau native132 trước broadcast | BEFORE FAIL 1/2, AFTER PASS targeted | Typed AttachmentChangedException chỉ presence/permission; cancellation/generic IO/short/audit failure vẫn không thành transition sạch; không sửa terminal runtime cũ |
+| Full regression sau handoff patch | PASS build/JVM/lint | Wrapper 2m01s; isolated build 1m09s; static bốn ABI/ELF16KiB/major52/release isolation PASS |
+| Instrumentation sau handoff patch | PASS 95 app / 22,787 giây + 43 library / 2,095 giây | Fake-only; thêm test handoff clean không đồng nghĩa Android TS đã có |
+| Autonomous attachment đã phục hồi | PRE-NATIVE REFUSAL | Session mới chỉ SESSION_GRANTED, raw-before có, native0/attempted0; ledger upload cũ còn 1 record. Đang kiểm va chạm attachment identity khi Android tái dùng path/id, không xóa/rearm ledger |
+| Synchronous Bulk baseline mới / queued hardware | NOT RUN | Chưa vượt firmware/ledger gate, không có 0x8A/I²C hoặc Bulk mới; Android bytes0/packet0 không phải CLEAN |
+
+Terminal redacted tại `D:\TSDuck\reports\phase31-android-handoff-sync-20261107-160808-413355f4-terminal.json`; log phiên đầu `D:\TSDuck\logs\phase31-android-sync-20261107-151003-1e02d546.txt`. Hash firmware đúng khóa; không đưa native audit, boot/serial, grant hoặc firmware vào Git. Sáu legacy preferences giữ nguyên, chỉ có marker `autonomous-v1-history` mới được tạo đúng namespace.
+
+## 2026-11-07 — Phase 3.1: Gate A/B Windows và software trước bật phiên autonomous
+
+Baseline Git thực `1ad3b251f19779450a2c5d9cffc9f37f9c9a5470`, worktree chưa commit; không thay toolchain. Các kết quả dưới là checkpoint trung gian, chưa thay thế final hardware gates. Raw evidence ở `D:\TSDuck` và private session files, không đưa vào Git.
+
+| Gate mới thực chạy | Kết quả | Giới hạn / evidence |
+| --- | --- | --- |
+| Hai mẫu Windows offline, raw bytes + TSDuck | PASS phân tích, chất lượng có lỗi | 276.417 packet đọc đủ, 15 self-test + 410 kiểm chéo; mẫu dài TEI 5.101/223.225, sync 0; Gate A report/hash tại [RESEARCH.md](RESEARCH.md) |
+| tsbitrate strict toàn file | FAIL phép ước lượng đáng tin | Cả hai báo insufficient PCR dù exit 0; wall-clock bitrate cũ NOT MEASURED |
+| BDA discovery mới | PASS có phạm vi | DVB-T/T2, signal locked yes; không chứng minh mode bền hoặc Android TS |
+| Windows capture thường hữu hạn | PASS nhận TS, không CLEAN | 44.999.868 byte/239.361 packet, 14 dịch vụ, TEI/sync 0, 41 CC bất thường, 1 invalid PES; process 16,406 giây |
+| Windows USBPcap thường quyền | BLOCKED, sau đó tháo gỡ bằng UAC được duyệt | Access is denied; không sửa driver/filter để khắc phục |
+| Windows TS + USBPcap chỉ tuner | PASS capture và cleanup, không CLEAN | High-Speed, peak 8 IRP, 5.962 successful actual8192; requested length NOT OBSERVED, snaplen128; TS có 41 CC bất thường/4 invalid PES |
+| Queue receiver fake targeted | PASS 13 tests | Ordered/out-of-order, short, duplicate/foreign/oversize, timeout, submit/cancel failure, drain accounting, worker/clock; không USB thật |
+| Parser + TS gate targeted | PASS | PAT/PMT CRC/PSI/chunk, sync-only bị từ chối, TEI được báo riêng; không coi dữ liệu synthetic là RF |
+| Policy targeted JVM và app compile | PASS | Wrapper 38 giây; exact/golden plan và session guard compile, chưa thay instrumentation live |
+| Full JVM checkpoint đầu | PASS 413 methods | Drivers 399 + usbxfer 1 + dvbservice 13; app unit NO-SOURCE, không gọi là app unit PASS |
+| Debug/release/lint checkpoint đầu | PASS | Wrapper 2m05s, lint 0 errors/13 warnings; bytecode/ABI/static PASS có phạm vi |
+| Isolated library instrumentation | PASS 43 methods / 1,606 giây | Fake managers, full owner/init/tune/status/TS, PAT/PMT synthetic mới; native fd âm không ioctl tuner |
+| Isolated app instrumentation lượt đầu | FAIL 6/90 | 5 mismatch namespace `.phase31autooffline` thay `.phase31offline`, 1 session-backed approval eligibility; giữ failure, đang sửa trước live |
+| Autonomous hardware / queued IN82 / Android TS mới | NOT RUN | Không mở gate chỉ dựa trên build hoặc Windows PASS; cần app guard hết lỗi |
+| API21 / 16KiB runtime mới | NOT RUN | Static alignment/API30 không thay thế runtime gates này |
+
+### Bảng trước–sau của thay đổi phần mềm, chưa suy ra tăng tốc USB
+
+| Thành phần | Baseline / vấn đề | Sửa có giới hạn | Kiểm đã có | Giới hạn |
+| --- | --- | --- | --- | --- |
+| TsParser / TsSmoke | Ba packet sync có thể thành structure PASS dù chưa có PSI | Reassemble PSI, CRC, PAT/PMT/ES; quality riêng và raw observer | Targeted PASS, full JVM checkpoint đầu PASS | Android chưa có bytes mới; chưa đo thời gian hoặc tốc độ cải thiện |
+| QueuedReceiver / debug backend | Synchronous native4K từng errno75; official dùng queue | Một ứng viên 8×4096, cùng fd/worker, bounded wait/cancel/drain và audit tail bytes | 13 fake tests PASS, compile/API/static PASS | Chưa chứng minh sửa EOVERFLOW; async errno không có thì null |
+| Autonomous policy/session/host | Phải hỏi UI và host mỗi ordinal/plan | Một grant bounded, exact attempts mới, ledger namespace mới, STOP/heartbeat | JVM/helper PASS; app instrumentation còn 1 lỗi thật cần sửa | Chưa cấp live grant trên mã chưa qua proof-of-guard |
+
+### Windows so với Android tại checkpoint này
+
+| Số đo | Windows BDA mới | Official Linux source | Android baseline lịch sử / mã mới |
+| --- | --- | --- | --- |
+| Mode / K36 | DVB-T/T2, lock, TS thật | Terrestrial 0x8A/0A00 | Lịch sử AUTO lock; runtime mới NOT RUN |
+| Link / packet size | High-Speed được hub xác nhận; packet-level maxpacket NOT OBSERVED | Endpoint82, buffer4096 | Descriptor512 không thay số đo speed; speed Android NOT MEASURED |
+| Queue / transfer | Peak8 IRP, actual8192; requested NOT OBSERVED | 8 URB×4096 | Cũ một synchronous4K errno75/0byte; queue mới chưa hardware |
+| TEI / sync / CC | Mẫu mới TEI0/sync0, CC41; cũ dài TEI2,285138% | Không phải kết quả RF | Chưa có Android packet thật; không dùng counter0 của no-data làm CLEAN |
+| Firmware / stream-select / PCR | Firmware hash NOT OBSERVED, 0x8A không thấy trong trace, PCR không đủ đáng tin | Firmware/source pinned | SHA khóa trước RAM upload; không suy Windows firmware giống Android |
+
 ## 2026-11-07 — Phase 3.1: gate cuối và hardware EOVERFLOW, chưa nhận TS
 
 HEAD `9621a8028d2cd3e5d98652cde69ba80d27cd7ee2`, nhánh `chore/modernize-android-build`, worktree chưa commit; source fingerprint cuối `988919f6fe1c8cc070c4488c86caf50dd77cf652397221f96eab6502fb674270`. Windows PowerShell, JDK Machine 25.0.5.0.3, wrapper 9.8.2/AGP9.5.0, SDK37.2, NDK30.0.16248370, CMake4.1.2; không nâng package. Evidence đầy đủ ngoài Git trong thư mục `files` của session Copilot bắt đầu ngày 2026-11-06; các tên dưới đây không phải tệp để commit.

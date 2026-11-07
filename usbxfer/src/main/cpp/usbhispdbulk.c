@@ -8,6 +8,14 @@
 #define TAG "JNI_HiSpeedBulk"
 
 JNIEXPORT jint JNICALL
+Java_info_martinmarinov_usbxfer_UsbHiSpeedBulk_jni_1getSpeed(JNIEnv *env, jclass type, jint fd) {
+    if (fd < 0) return -EINVAL;
+    int result = ioctl(fd, USBDEVFS_GET_SPEED, 0);
+    int saved_errno = errno;
+    return result < 0 ? -saved_errno : result;
+}
+
+JNIEXPORT jint JNICALL
 Java_info_martinmarinov_usbxfer_UsbHiSpeedBulk_jni_1clearHalt82(JNIEnv *env, jclass type, jint fd) {
     unsigned int endpoint = 0x82;
     if (fd < 0) return -EINVAL;

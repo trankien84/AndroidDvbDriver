@@ -12,6 +12,7 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
     private final Tbs5530Session session;
     private final Tbs5530UsbBinding binding;
     private final Consent consent;
+    private Tbs5530TsSmoke.ReadApi readApi = Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO;
     private final String leaseNonce = java.util.UUID.randomUUID().toString();
     private Tbs5530UsbBinding.Device device;
     private final AtomicReference<Tbs5530OperationalProfile> profile = new AtomicReference<>();
@@ -19,6 +20,19 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
 
     public Tbs5530OperationalHandoff(Context context, Tbs5530AndroidRuntime runtime, Consent consent) throws IOException {
         this(context, runtime, new Tbs5530AndroidUsbFacade.AndroidManager(context.getApplicationContext()), consent);
+    }
+    public Tbs5530OperationalHandoff(Context context, Tbs5530AndroidRuntime runtime, Consent consent,
+                                    Tbs5530TsSmoke.ReadApi readApi) throws IOException {
+        this(context, runtime, manager(context, readApi), consent);
+        this.readApi = java.util.Objects.requireNonNull(readApi);
+    }
+    private static Tbs5530AndroidUsbFacade.Manager manager(Context context, Tbs5530TsSmoke.ReadApi api) throws IOException {
+        if (api == Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO) return new Tbs5530AndroidUsbFacade.AndroidManager(context.getApplicationContext());
+        if (api != Tbs5530TsSmoke.ReadApi.QUEUED_USB_REQUEST_8X4096 || android.os.Build.VERSION.SDK_INT < 26) {
+            throw new IOException("Bounded queued diagnostic requires API26+");
+        }
+        return new Tbs5530AndroidUsbFacade.AndroidManager(context.getApplicationContext(),
+                (connection, endpoint) -> new Tbs5530QueuedUsbBackend(connection, endpoint, context.getFilesDir()));
     }
     Tbs5530OperationalHandoff(Context context, Tbs5530AndroidRuntime runtime,
                              Tbs5530AndroidUsbFacade.Manager manager, Consent consent) throws IOException {
@@ -36,6 +50,7 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
             observation.set(fresh);
             fresh.requireOperational();
             fresh.requireMetadata(raw);
+            observation.set(fresh.withSpeed(raw.negotiatedUsbSpeed()));
             consent.requireCurrent();
         });
         return new Tbs5530UsbBinding.Facade() {
@@ -113,9 +128,13 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
     Tbs5530ControlIo controlIo() throws IOException { return binding.controlIo(); }
     Tbs5530BulkTransport bulkIo() throws IOException { return binding.bulkIo(); }
     public Tbs5530TsSmoke smoke(Tbs5530TsSmoke.Permission permission, Tbs5530TsSmoke.Clock clock) throws IOException {
+        return smoke(permission, clock, (bytes, length) -> { });
+    }
+    public Tbs5530TsSmoke smoke(Tbs5530TsSmoke.Permission permission, Tbs5530TsSmoke.Clock clock,
+                               Tbs5530TsSmoke.ChunkObserver observer) throws IOException {
         session.requireUsable(session.getGeneration());
         long generation = session.getGeneration();
-        return new Tbs5530TsSmoke(session, generation, new Tbs5530Bridge(controlIo(), session, generation), bulkIo(), permission, clock);
+        return new Tbs5530TsSmoke(session, generation, new Tbs5530Bridge(controlIo(), session, generation), bulkIo(), permission, clock, readApi, observer);
     }
     /** Opaque binding, kept in private approval files; raw USB identity never enters project logs. */
     public String approvalIdentity() throws IOException {

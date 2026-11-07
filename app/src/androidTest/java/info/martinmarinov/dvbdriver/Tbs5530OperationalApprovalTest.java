@@ -144,6 +144,14 @@ public class Tbs5530OperationalApprovalTest {
         errno[0] = -1; assertEquals(-1, ((Integer)read.invoke(null, -1, bytes, 16385, 500, errno)).intValue());
         assertEquals(22, errno[0]);
     }
+    @Test public void nativeSpeedObservationRejectsNegativeFdWithoutUsbIoctl() throws Exception {
+        Class<?> bulk = Class.forName("info.martinmarinov.usbxfer.UsbHiSpeedBulk");
+        assertTrue(bulk.getField("IS_PLATFORM_SUPPORTED").getBoolean(null));
+        java.lang.reflect.Method speed = bulk.getDeclaredMethod("jni_getSpeed", int.class);
+        speed.setAccessible(true); assertEquals(-22, ((Integer)speed.invoke(null, -1)).intValue());
+        java.lang.reflect.Method observed = bulk.getMethod("negotiatedSpeed", android.hardware.usb.UsbDeviceConnection.class);
+        assertEquals(-1, ((Integer)observed.invoke(null, new Object[]{null})).intValue());
+    }
     @Test public void nativeEndpointPreparationRejectsInvalidFdWithoutAnyUsbIoctl() throws Exception {
         Class<?> bulkClass = Class.forName("info.martinmarinov.usbxfer.UsbHiSpeedBulk");
         assertTrue(bulkClass.getField("IS_PLATFORM_SUPPORTED").getBoolean(null));

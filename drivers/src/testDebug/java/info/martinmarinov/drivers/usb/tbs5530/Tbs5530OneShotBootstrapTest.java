@@ -199,6 +199,32 @@ public class Tbs5530OneShotBootstrapTest {
         assertEquals(132, r.writes); assertEquals(2, r.opens); assertEquals(2, r.closes);
         assertNotEquals(Tbs5530Session.State.READY, r.session.getState());
     }
+    @Test public void finalFullLengthPermissionLossBeforeBroadcastIsCleanTransitionOnly() throws Exception {
+        Rig r = new Rig(); r.during = () -> { if (r.writes == 132) r.permission = false; };
+        r.load();
+        assertEquals(132, r.runner.snapshot().boundaries.fullLengthCompleted);
+        assertEquals(132, r.runner.snapshot().completed); assertEquals(8196, r.runner.snapshot().bytes);
+        assertEquals(Tbs5530OneShotBootstrap.State.TRANSITIONING, r.runner.snapshot().state);
+        r.runner.releaseUpload(); assertEquals(1, r.closes);
+        assertThrows(IOException.class, r.runner::acquireObservation);
+        r.permission = true; r.operational = true;
+        r.runner.acquireObservation(); r.runner.observe(); r.runner.releaseUpload();
+        assertEquals(Tbs5530OneShotBootstrap.State.OPERATIONAL_CANDIDATE, r.runner.snapshot().state);
+        assertEquals(132, r.writes);
+    }
+    @Test public void finalShortPermissionLossAndUnknownIOExceptionRemainUncertain() throws Exception {
+        Rig shortWrite = new Rig(); shortWrite.failAt = 131; shortWrite.failure = "short";
+        shortWrite.during = () -> { if (shortWrite.writes == 132) shortWrite.permission = false; };
+        shortWrite.failLoad();
+        assertEquals(Tbs5530OneShotBootstrap.State.UNCERTAIN, shortWrite.runner.snapshot().state);
+        assertEquals(131, shortWrite.runner.snapshot().boundaries.fullLengthCompleted);
+        Rig revoked = new Rig(); revoked.during = () -> { if (revoked.writes == 132) revoked.approved = false; };
+        revoked.failLoad(); assertEquals(Tbs5530OneShotBootstrap.State.UNCERTAIN, revoked.runner.snapshot().state);
+        assertEquals(132, revoked.writes);
+        Rig cancelled = new Rig(); cancelled.during = () -> { if (cancelled.writes == 132) cancelled.binding.cancel(); };
+        cancelled.failLoad(); assertEquals(Tbs5530OneShotBootstrap.State.UNCERTAIN, cancelled.runner.snapshot().state);
+        assertEquals(132, cancelled.writes);
+    }
     @Test public void fullLengthFinalDetachCannotHideSuppressedPostNativeAuditFailure() throws Exception {
         Rig r = new Rig(); r.failure = "detach-audit";
         int[] checkpoints = {0};

@@ -1,5 +1,39 @@
 # Port TBS5530 sang Android — trạng thái hiện tại
 
+## Phase 3.1 — Đóng gói checkpoint để commit/push theo yêu cầu — 2026-11-07
+
+Người dùng yêu cầu commit toàn bộ thay đổi đã kiểm và push lên `origin/chore/modernize-android-build`. Commit chứa checkpoint này là mốc đóng gói source; SHA `1ad3b251` và các câu “chưa commit/push” ở dưới là trạng thái lịch sử trước đóng gói, không phải HEAD sau commit. Không thay đổi code hoặc chạy thêm USB hardware trong bước xuất bản Git.
+
+Kết quả vẫn **`BLOCKED_WITH_EVIDENCE` tại EOVERFLOW/0 byte TS Android**, không chuyển phase hoặc gọi TS_SMOKE_PASS. Source đã chốt có fingerprint `3fe396af975baea76b00bc21a60c691655a080df549b11418100713f19ebd189`; các kiểm chứng 430 JVM, 97 app + 43 library instrumentation, build/lint/static và giới hạn hardware sau patch giữ nguyên. Không đưa firmware, APK, TS, trace hoặc private logs vào commit. Kết quả push và SHA remote được xác minh sau lệnh, không suy thành công từ yêu cầu này.
+
+## Phase 3.1 — Auto workflow tới Bulk đã chạy; bật OTG vẫn EOVERFLOW, TS chưa đạt — 2026-11-07
+
+**Kết luận hiện tại: `BLOCKED_WITH_EVIDENCE`, chưa `TS_SMOKE_PASS`, không mở phase mới.** Sau handoff/heartbeat/epoch fixes đã kiểm, pipeline tự chạy đúng firmware khi FX2_DEFAULT → permission operational mới → fresh owner → probe/init/AUTO K36/status → stream-select → Bulk. Lượt firmware phục hồi có 132/132 native full-length, image 8192/payload 8196, transition sạch 4706 ms; không hỏi Approve từng ordinal hoặc plan. Terminal UNCERTAIN đầu giữ nguyên lịch sử, không rearm ledger.
+
+**Đã đo lại Android:** GET_SPEED trên fd hiện hữu trả enum 3 (High-Speed) cả default/operational, descriptor IN82/IN81 maxpacket 512. Baseline native 4096/500 ms vẫn `-1 / errno75`, 0 byte; một queued variant 8×4096 trả 0, errno không có, 0 byte, đã drain/release hết. Sau người dùng tự bật “Lưu trữ OTG”, UI switch được đọc `CHECKED`; một fresh-owner synchronous retest không upload firmware vẫn errno75/0 byte. Không kết luận bật OTG đã chữa, thiếu RF, sai PLP hoặc timeout. Không có OTG/cáp/Android host khác để đối chứng trong môi trường hiện tại.
+
+**Phần mềm đã được kiểm:** APK chạy hardware SHA-256 `9ecb806b6f6a04ea1ec121a6330a012b4a0ebfe8b2928d4fe67186c999afe11b`, 429 JVM, 97 app + 43 library instrumentation PASS. Sau quan sát queue completion 0, thêm fail-stop không resubmit slot đó; final **430 JVM + 97 app + 43 library PASS**, debug/release/lint/static bốn ABI/16 KiB/major52/isolation PASS có phạm vi. Final debug SHA `6d04f7dee03a44cd34a92931a08d689020c9d6ed40617b3d68c58483afd21311` đã cài đè và kiểm SHA, chưa chạy lại USB hardware trên patch cuối. API 21/16 KiB runtime mới và parser trên broadcast Android NOT RUN. Sáu legacy preferences giữ nguyên; ba firmware-history keys là khóa chống tái sử dụng, không phải ba uploads. Test packages phiên tạo đã dọn, không giữ helper hoặc owner.
+
+**Bước thực tế tiếp theo:** cần đối chứng cùng APK/profile trên host Android hoặc bộ OTG khác đã biết tốt, hoặc trace USB/kernel phù hợp theo một phạm vi được duyệt riêng. Không tự đổi register/driver/mode/reset hoặc lặp lại cùng điều kiện lỗi. Báo cáo tổng hợp và terminal JSON dưới `D:\TSDuck\reports`, run OTG cuối `phase31-android-user-otg-sync-20261107-163301-6dedd387`; chi tiết tại [TEST-MATRIX.md](TEST-MATRIX.md), [RESEARCH.md](RESEARCH.md), [WORKLOG.md](WORKLOG.md) và ADR-028. Git vẫn HEAD `1ad3b251f19779450a2c5d9cffc9f37f9c9a5470`, thay đổi chưa commit/push.
+
+## Phase 3.1 — Firmware tự động đã gửi đủ; chưa vượt handoff/attachment guard để thu TS — 2026-11-07
+
+Guard phần mềm đã qua 421 JVM và 94 app + 43 library instrumentation trước lần firmware thật. Phiên `AUTO_VERIFIED` đầu gửi đủ 132/132 native A0 full-length, 8192 byte image/8196 byte payload, rồi terminal `UNCERTAIN/JAVA_IO_EXCEPTION` sau CPU release; cleanup xác nhận, không I²C/tune/TS. Đã dừng mọi write attachment đó, không retry. Người dùng phục hồi vật lý một lần và cấp OS permission mới qua UI, không root hoặc shell grant.
+
+Đã tái hiện software mất permission ngay sau native 132 trước broadcast: BEFORE FAIL, typed handoff patch và các guard hồi quy PASS; không sửa terminal UNCERTAIN cũ thành PASS. Sau rebuild, 95 app + 43 library instrumentation PASS. Attachment phục hồi dừng trước native, ledger chỉ có SESSION_GRANTED và lịch sử upload vẫn giữ 1 record; đang kiểm trường hợp Android tái dùng path/id khiến key bảo vệ va chạm. Không xóa/rearm ledger và chưa gửi thêm firmware từ refusal native = 0.
+
+Windows đã có đối chứng TS/USBPcap như checkpoint dưới; Android hiện vẫn **0 byte TS mới, root cause EOVERFLOW chưa chứng minh, Phase 3.1 chưa hoàn tất**. Bước tiếp là giải quyết bằng chứng generation/ledger theo đúng phục hồi vật lý đã xác nhận, kiểm fake rồi mới chạy một attempt mới; không tự vượt gate để thử queue. Giữ HEAD `1ad3b251f19779450a2c5d9cffc9f37f9c9a5470`, không commit/push; xem [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md) và ADR-028.
+
+## Phase 3.1 — Đối chứng Windows đã có; đang kiểm guard trước phiên Android tự động — 2026-11-07
+
+**Checkpoint tiếp nối trên Git thực:** nhánh `chore/modernize-android-build`, HEAD `1ad3b251f19779450a2c5d9cffc9f37f9c9a5470`; không reset/checkout/fetch/commit/push. Đã có thay đổi tài liệu TSDuck của người dùng trước phiên, được giữ nguyên. Các đoạn dưới ghi HEAD hoặc Windows NOT RUN là lịch sử, không phải trạng thái Git/đối chứng mới.
+
+**Windows đã nhận TS thật:** đọc toàn bộ hai mẫu cũ, xác nhận 14 dịch vụ/46 PID không TEI/TSID 6; mẫu dài có 5.101/223.225 packet TEI (2,285138%). Hai capture K36 mới có TEI/sync 0 nhưng vẫn 41 continuity bất thường, lần lượt 1 và 4 invalid PES. USBPcap hữu hạn sau UAC đã xác nhận High-Speed, peak 8 IRP và actual 8192 byte/completion; requested length không quan sát được, không thấy 0x8A trong cửa sổ trace. Không suy ChangeMode là nguyên nhân hoặc 132–134 Mb/s từ PCR là tốc độ RF thật. Chi tiết và đường dẫn report/hash ở [RESEARCH.md](RESEARCH.md).
+
+**Phần mềm:** đã thêm policy phiên debug hữu hạn, golden dry-run, namespace/attempt ledger mới, helper heartbeat/STOP và một ứng viên nhận queue 8 × 4096 byte chỉ debug/API 26+. Parser nay kiểm PAT/PMT CRC và quan hệ dịch vụ, không coi ba packet sync là TS PASS. Synchronous baseline và manual cũ giữ nguyên. Full JVM 413 methods, debug/release và lint đã PASS ở checkpoint đầu; library instrumentation 43 PASS. App instrumentation lượt đầu có 6 FAIL: 5 do namespace harness không đúng hợp đồng test cũ, 1 do session-backed approval cần điều tra. Chưa bật hardware trên mã chưa qua guard.
+
+**Phần cứng hiện tại:** người dùng đã chuyển tuner từ Windows sang OnePlus và xác nhận OTG/nguồn/coax RF IN sẵn sàng. ADB được pin lại trước grant vì TCP port thay đổi; model GM1900/API 30/cùng boot đã đối chiếu, không fallback giữa giao dịch. Chưa có USB write Android mới trong checkpoint này. Không tuyên bố sửa EOVERFLOW, có Android MPEG-TS hoặc hoàn tất Phase 3.1. Bước tiếp: sửa và kiểm app guard trong namespace cách ly rồi mới chạy đúng synchronous baseline một lần và một ứng viên queue theo phạm vi đã duyệt; dừng nếu firmware/native bất định. Xem ADR-028 và checkpoint tiếp theo.
+
 ## Phase 3.1 — AUTO đã khóa K36; TS bị chặn bởi lỗi USB EOVERFLOW — 2026-11-07
 
 **Kết quả hiện tại:** `DVBT2_LOCK_CONFIRMED`, nhưng **chưa có `TS_SMOKE_PASS`**; toàn phase ở trạng thái `PHASE_3_1_BLOCKED_WITH_EVIDENCE` tại đường nhận USB. Năm workflow được duyệt, mỗi workflow mở owner mới và chạy lại probe/init/AUTO/status, đều đọc ID `0x197` rồi đạt `syncState=6`, `tsLock=true`, `unlockDetected=false` ngay mẫu đầu trên K36 / `594000000 Hz` / `8000000 Hz`. AUTO không ghi PLP ID vào AF, dùng AD=0; đây là bằng chứng runtime cho đường AUTO đã thử, không phải đo được selected PLP ID hoặc chứng minh hỗ trợ mọi Multi/Common PLP.

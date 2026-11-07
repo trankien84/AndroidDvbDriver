@@ -170,8 +170,15 @@ public class UsbHiSpeedBulk {
         return new BulkReadResult(count, error[0]);
     }
 
+    /** Read-only host speed observation on the existing fd; negative values mean unavailable/errno. */
+    public static int negotiatedSpeed(UsbDeviceConnection connection) {
+        if (!IS_PLATFORM_SUPPORTED || connection == null || connection.getFileDescriptor() < 0) return -1;
+        return jni_getSpeed(connection.getFileDescriptor());
+    }
+
     // native
 
+    private static native int jni_getSpeed(int fd);
     private static native int jni_readBulk82(int fd, byte[] bytes, int length, int timeoutMillis, int[] error);
     private static native int jni_clearHalt82(int fd);
     private static native int jni_setInterface(int fd, int interfaceId, int alternateSettings);
