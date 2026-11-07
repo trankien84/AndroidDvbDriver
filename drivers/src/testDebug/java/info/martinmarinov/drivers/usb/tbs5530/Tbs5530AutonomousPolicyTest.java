@@ -103,6 +103,15 @@ public class Tbs5530AutonomousPolicyTest {
         Rig r = new Rig(); r.operational(); r.failAppend = true;
         assertThrows(IOException.class, () -> r.policy.consume(ATTEMPT, PLAN, 10000)); assertFalse(r.policy.consumed(ATTEMPT));
     }
+    @Test public void uploadBudgetPreflightHasNoConsumptionAndStillRechecksAtStart() throws Exception {
+        Rig r = new Rig(); r.fx2();
+        r.policy.requireUploadStartBudget(); assertEquals(1, r.audit.size());
+        r.beat(15001);
+        assertThrows(IOException.class, r.policy::requireUploadStartBudget);
+        assertThrows(IOException.class, () -> r.policy.beginUpload(ATTEMPT));
+        assertEquals(1, r.audit.size());
+        assertEquals(Tbs5530AutonomousPolicy.State.FX2_DEFAULT, r.policy.state());
+    }
     @Test public void fake132NativeBoundariesThenFreshOwnerNoStaleHandle() throws Exception {
         Rig r = new Rig(); r.fx2(); r.policy.beginUpload(ATTEMPT);
         for (int n = 1; n <= 132; n++) { r.policy.uploadNative(n); r.policy.uploadDispatch(n); }

@@ -19,14 +19,15 @@ public class Tbs5530TsSmokeTest {
         final long token;
         final Tbs5530TsSmoke smoke;
         int consumes, selects, reads, count = 188 * 3, audits, requested, timeoutRequested;
-        boolean rf = true, consent = true, failAudit, endpointApproved, failPreparation;
+        boolean rf = true, consent = true, failAudit, endpointApproved, failPreparation, nativeApproved;
         int preparations, errno = -1;
         long preparationNanos;
         long nanos;
         Runnable duringRead, beforeBulk;
         byte[] stream = Tbs5530TsParserPsiTest.patPmtFixture();
         Tbs5530TsSmoke.ChunkObserver observer;
-        Fixture(boolean locked) throws Exception {
+        Fixture(boolean locked) throws Exception { this(locked, Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO); }
+        Fixture(boolean locked, Tbs5530TsSmoke.ReadApi readApi) throws Exception {
             token = session.requestPermission(); session.permissionResult(token, true); session.connected(token, owner);
             session.interfaceClaimed(token); session.ready(token); session.frontendInitialized(token); session.frontendLock(token, locked);
             Tbs5530Bridge bridge = new Tbs5530Bridge((type, request, value, index, bytes, offset, length, timeout) -> {
@@ -41,9 +42,10 @@ public class Tbs5530TsSmokeTest {
                 assertEquals(1, consumes); assertEquals(0, selects); preparations++; nanos += preparationNanos;
                 if (failPreparation) throw new IOException("Synthetic clear-halt failed, no retry");
             }, () -> errno);
-            smoke = new Tbs5530TsSmoke(session, token, bridge, bulk, this, () -> nanos, Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO,
+            smoke = new Tbs5530TsSmoke(session, token, bridge, bulk, this, () -> nanos, readApi,
                     (bytes, length) -> { if (observer != null) observer.accept(bytes, length); });
         }
+        public boolean nativeUrbReceptionApproved() { return nativeApproved && consent && rf; }
         public boolean endpointPreparationApproved() { return endpointApproved && consent && rf; }
         public void consume(Tbs5530TsSmoke.Limits limits, long generation) throws IOException {
             requireCurrent(generation); if (consumes++ != 0) throw new IOException("consumed");
@@ -64,6 +66,49 @@ public class Tbs5530TsSmokeTest {
         assertEquals(1, f.selects); assertEquals(1, f.reads); assertEquals(1, f.owner.releases); assertEquals(1, f.owner.closes);
         assertEquals(5640.0, result.bytesPerSecond(), 0.001);
         assertThrows(IOException.class, () -> f.smoke.run(f.limits())); assertEquals(1, f.selects);
+    }
+    private static byte[] fullBoundedSample() {
+        byte[] sample = new byte[65536];
+        byte[] psi = Tbs5530TsParserPsiTest.patPmtFixture();
+        System.arraycopy(psi, 0, sample, 0, psi.length);
+        for (int at = psi.length, packet = 1; at + 4 <= sample.length; at += 188, packet++) {
+            sample[at] = 0x47; sample[at + 1] = 1; sample[at + 2] = 1;
+            sample[at + 3] = (byte) (0x10 | packet & 15);
+        }
+        return sample;
+    }
+    private static Tbs5530TsSmoke.Result nativeSample(byte[] sample, Fixture f) throws Exception {
+        f.nativeApproved = true; f.count = 4096;
+        f.beforeBulk = () -> f.stream = java.util.Arrays.copyOfRange(sample, f.reads * 4096, (f.reads + 1) * 4096);
+        return f.smoke.run(new Tbs5530TsSmoke.Limits(65536,16,5000,500,4096,false,
+                Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096));
+    }
+    @Test public void earlyPatPmtDoesNotStopBeforeEntireApprovedNativeSample() throws Exception {
+        Fixture f = new Fixture(true, Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096);
+        java.io.ByteArrayOutputStream raw = new java.io.ByteArrayOutputStream();
+        f.observer = (bytes, length) -> raw.write(bytes,0,length);
+        byte[] sample = fullBoundedSample();
+        Tbs5530TsSmoke.Result result = nativeSample(sample,f);
+        assertEquals(Tbs5530TsSmoke.Status.STRUCTURE_CONFIRMED,result.status);
+        assertEquals(65536,result.bytes); assertEquals(16,result.reads);
+        assertEquals(348,result.packets.packets); assertTrue(result.packets.hasValidProgramStructure());
+        assertEquals(0,result.packets.transportErrorPackets); assertEquals(0,result.packets.continuityErrors);
+        assertEquals(0,result.packets.syncLosses); assertEquals(0,result.packets.malformedPackets);
+        assertArrayEquals(sample,raw.toByteArray()); assertEquals(1,f.owner.closes);
+    }
+    @Test public void qualityErrorsLateInNativeSampleAreNotHiddenByEarlyStructure() throws Exception {
+        for (boolean transportError : new boolean[]{true,false}) {
+            Fixture f = new Fixture(true, Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096);
+            byte[] sample = fullBoundedSample();
+            if (transportError) sample[300 * 188 + 1] |= 0x80;
+            else sample[300 * 188 + 3] ^= 1;
+            Tbs5530TsSmoke.Result result = nativeSample(sample,f);
+            assertEquals(65536,result.bytes); assertEquals(16,result.reads);
+            assertEquals(Tbs5530TsSmoke.Status.STRUCTURE_CONFIRMED,result.status);
+            assertEquals("ERRORS_OBSERVED",result.qualityObservation());
+            if (transportError) assertEquals(1,result.packets.transportErrorPackets);
+            else assertTrue(result.packets.continuityErrors > 0);
+        }
     }
     @Test public void rawObserverSeesEveryByteAndFailureCannotPublishPass() throws Exception {
         Fixture f = new Fixture(true); java.io.ByteArrayOutputStream raw = new java.io.ByteArrayOutputStream();
@@ -97,6 +142,26 @@ public class Tbs5530TsSmokeTest {
                 Tbs5530TsSmoke.ReadApi.QUEUED_USB_REQUEST_8X4096);
         assertThrows(IOException.class, () -> f.smoke.run(limits));
         assertEquals(0, f.consumes); assertEquals(0, f.selects); assertEquals(0, f.reads); f.session.close();
+    }
+    @Test public void nativeDiagnosticNeedsItsOwnApprovalBeforeConsumeOrSelect() throws Exception {
+        Tbs5530TsSmoke.ReadApi api = Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096;
+        Tbs5530TsSmoke.Limits limits = new Tbs5530TsSmoke.Limits(65536, 16, 5000, 500, 4096, false, api);
+        assertEquals(8000, limits.maximumMillis());
+        Fixture denied = new Fixture(true, api);
+        assertThrows(IOException.class, () -> denied.smoke.run(limits));
+        assertEquals(0, denied.consumes); assertEquals(0, denied.selects); denied.session.close();
+        Fixture allowed = new Fixture(true, api); allowed.nativeApproved = true; allowed.count = -1; allowed.errno = 0;
+        Tbs5530TsSmoke.Result result = allowed.smoke.run(limits);
+        assertEquals(Tbs5530TsSmoke.Status.NO_DATA_OR_USB_FAILURE, result.status);
+        assertEquals(-1, result.lastReadResult); assertEquals(0, result.lastReadErrno);
+        assertEquals(0, result.bytes); assertEquals(1, allowed.reads); assertEquals(1, allowed.owner.closes);
+    }
+    @Test public void nativeDiagnosticRejectsUnboundedVariantsAndClearHalt() {
+        Tbs5530TsSmoke.ReadApi api = Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096;
+        assertThrows(IllegalArgumentException.class, () -> new Tbs5530TsSmoke.Limits(65536,16,5000,500,4096,true,api));
+        assertThrows(IllegalArgumentException.class, () -> new Tbs5530TsSmoke.Limits(65536,16,5000,500,8192,false,api));
+        assertThrows(IllegalArgumentException.class, () -> new Tbs5530TsSmoke.Limits(4096,16,5000,500,4096,false,api));
+        assertThrows(IllegalArgumentException.class, () -> new Tbs5530TsSmoke.Limits(65536,1,5000,500,4096,false,api));
     }
     @Test public void endpointPreparationNeedsSeparateConsentAndRunsOnceBeforeSelect() throws Exception {
         Tbs5530TsSmoke.Limits limits = new Tbs5530TsSmoke.Limits(564, 1, 1000, 500, 4096, true);

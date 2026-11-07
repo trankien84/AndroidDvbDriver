@@ -13,6 +13,17 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
     private final Tbs5530UsbBinding binding;
     private final Consent consent;
     private Tbs5530TsSmoke.ReadApi readApi = Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO;
+    private NativeConfiguration nativeConfiguration;
+    private static final class NativeConfiguration {
+        final String runId;
+        volatile Tbs5530TsSmoke.Limits limits;
+        volatile Consent pollGuard;
+        volatile Tbs5530NativeUsbfsBackend backend;
+        NativeConfiguration(String runId) {
+            if (runId == null || !runId.matches("[A-Za-z0-9_-]{1,100}")) throw new IllegalArgumentException("Invalid diagnostic run ID");
+            this.runId = runId;
+        }
+    }
     private final String leaseNonce = java.util.UUID.randomUUID().toString();
     private Tbs5530UsbBinding.Device device;
     private final AtomicReference<Tbs5530OperationalProfile> profile = new AtomicReference<>();
@@ -23,11 +34,34 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
     }
     public Tbs5530OperationalHandoff(Context context, Tbs5530AndroidRuntime runtime, Consent consent,
                                     Tbs5530TsSmoke.ReadApi readApi) throws IOException {
-        this(context, runtime, manager(context, readApi), consent);
-        this.readApi = java.util.Objects.requireNonNull(readApi);
+        this(context, runtime, consent, readApi, java.util.UUID.randomUUID().toString());
     }
-    private static Tbs5530AndroidUsbFacade.Manager manager(Context context, Tbs5530TsSmoke.ReadApi api) throws IOException {
+    public Tbs5530OperationalHandoff(Context context, Tbs5530AndroidRuntime runtime, Consent consent,
+                                    Tbs5530TsSmoke.ReadApi readApi, String runId) throws IOException {
+        this(context, runtime, consent, readApi, new NativeConfiguration(runId));
+    }
+    private Tbs5530OperationalHandoff(Context context, Tbs5530AndroidRuntime runtime, Consent consent,
+                                     Tbs5530TsSmoke.ReadApi readApi, NativeConfiguration configuration) throws IOException {
+        this(context, runtime, manager(context, readApi, consent, configuration), consent);
+        this.readApi = java.util.Objects.requireNonNull(readApi);
+        nativeConfiguration = configuration;
+    }
+    private static Tbs5530AndroidUsbFacade.Manager manager(Context context, Tbs5530TsSmoke.ReadApi api,
+                                                           Consent consent, NativeConfiguration configuration) throws IOException {
         if (api == Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO) return new Tbs5530AndroidUsbFacade.AndroidManager(context.getApplicationContext());
+        if (api == Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096) {
+            return new Tbs5530AndroidUsbFacade.AndroidManager(context.getApplicationContext(),
+                    (connection, endpoint) -> {
+                        Tbs5530NativeUsbfsBackend backend = new Tbs5530NativeUsbfsBackend(connection, endpoint, context.getFilesDir(),
+                                configuration.runId, configuration.limits, () -> {
+                                    consent.requireCurrent();
+                                    if (configuration.pollGuard == null) throw new IOException("Native poll guard unavailable");
+                                    configuration.pollGuard.requireCurrent();
+                                });
+                        configuration.backend = backend;
+                        return backend;
+                    });
+        }
         if (api != Tbs5530TsSmoke.ReadApi.QUEUED_USB_REQUEST_8X4096 || android.os.Build.VERSION.SDK_INT < 26) {
             throw new IOException("Bounded queued diagnostic requires API26+");
         }
@@ -134,7 +168,24 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
                                Tbs5530TsSmoke.ChunkObserver observer) throws IOException {
         session.requireUsable(session.getGeneration());
         long generation = session.getGeneration();
-        return new Tbs5530TsSmoke(session, generation, new Tbs5530Bridge(controlIo(), session, generation), bulkIo(), permission, clock, readApi, observer);
+        Tbs5530TsSmoke.Permission effective = permission;
+        if (readApi == Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096) {
+            effective = new Tbs5530TsSmoke.Permission() {
+                public void consume(Tbs5530TsSmoke.Limits limits, long token) throws IOException {
+                    if (nativeConfiguration.limits != null) throw new IOException("Native diagnostic already configured");
+                    permission.consume(limits, token);
+                    nativeConfiguration.pollGuard = () -> {
+                        session.requireUsable(token);
+                        permission.requireCurrent(token);
+                    };
+                    nativeConfiguration.limits = limits;
+                }
+                public void requireCurrent(long token) throws IOException { permission.requireCurrent(token); }
+                public void audit(String event, int ordinal, int count) throws IOException { permission.audit(event, ordinal, count); }
+                public boolean nativeUrbReceptionApproved() { return permission.nativeUrbReceptionApproved(); }
+            };
+        }
+        return new Tbs5530TsSmoke(session, generation, new Tbs5530Bridge(controlIo(), session, generation), bulkIo(), effective, clock, readApi, observer);
     }
     /** Opaque binding, kept in private approval files; raw USB identity never enters project logs. */
     public String approvalIdentity() throws IOException {
@@ -147,6 +198,22 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
             for (byte b : digest) result.append(String.format(java.util.Locale.ROOT, "%02x", b & 255));
             return result.toString();
         } catch (java.security.NoSuchAlgorithmException error) { throw new IOException(error); }
+    }
+    /** Read on the owner worker or after completion/cleanup; never races a native syscall. */
+    public NativeReceiveSnapshot nativeReceiveSnapshot() {
+        Tbs5530NativeUsbfsBackend backend = nativeConfiguration == null ? null : nativeConfiguration.backend;
+        return backend == null ? null : new NativeReceiveSnapshot(backend.snapshot(), backend.quarantined());
+    }
+    public static final class NativeReceiveSnapshot {
+        public final long attempted, submitted, completed, outstanding, copiedBytes, cleanupBytes, completionSequence;
+        public final int syscallErrno, syscallReturn, urbStatus, actualLength, slot;
+        public final boolean quarantined;
+        NativeReceiveSnapshot(long[] s, boolean quarantined) {
+            attempted = s[0]; submitted = s[1]; completed = s[2]; outstanding = s[3]; copiedBytes = s[4]; cleanupBytes = s[5];
+            syscallErrno = (int)s[7]; urbStatus = (int)s[9]; actualLength = (int)s[10]; slot = (int)s[11];
+            completionSequence = s[12]; syscallReturn = (int)s[13]; this.quarantined = quarantined || s[6] != 0;
+        }
+        public boolean completionKnown() { return !quarantined && syscallReturn == 0 && urbStatus != Integer.MIN_VALUE; }
     }
     public long generation() { return session.getGeneration(); }
     public IOException cleanupFailure() { return session.getCleanupFailure(); }

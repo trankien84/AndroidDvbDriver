@@ -21,7 +21,7 @@ public class Tbs5530OneShotBootstrapTest {
         final List<String> calls = new ArrayList<>();
         Tbs5530UsbBinding.Events events;
         boolean permission = true, present = true, approved = true, duplicate, consumed, closeFails, operational;
-        boolean wrongIdentity, malformed, insufficientBudget;
+        boolean wrongIdentity, malformed, insufficientBudget, missingDuringPermissionLookup;
         int writes, opens, closes, reads, failAt = -1, denyBeforeAt = -1;
         String failure = "short";
         Runnable during = () -> { };
@@ -45,7 +45,12 @@ public class Tbs5530OneShotBootstrapTest {
             return duplicate ? java.util.Arrays.asList(device, new Tbs5530UsbBinding.Device("other", 2, 0x734c, 0x5530))
                     : Collections.singletonList(device);
         }
-        public boolean hasPermission(Tbs5530UsbBinding.Device d) { return permission; }
+        public boolean hasPermission(Tbs5530UsbBinding.Device d) throws IOException {
+            if (missingDuringPermissionLookup) {
+                Tbs5530AndroidUsbFacade.AndroidManager.resolvePresentDevice(d, Collections.emptyList());
+            }
+            return permission;
+        }
         public Tbs5530UsbBinding.Registration requestPermission(Tbs5530UsbBinding.Device d, String c,
                 Tbs5530UsbBinding.PermissionCallback callback) { throw new AssertionError("No implicit grant"); }
         public Tbs5530UsbBinding.Registration listen(Tbs5530UsbBinding.Events e) { events = e; return () -> { }; }
@@ -211,6 +216,26 @@ public class Tbs5530OneShotBootstrapTest {
         r.runner.acquireObservation(); r.runner.observe(); r.runner.releaseUpload();
         assertEquals(Tbs5530OneShotBootstrap.State.OPERATIONAL_CANDIDATE, r.runner.snapshot().state);
         assertEquals(132, r.writes);
+    }
+    @Test public void finalReleaseDisappearingInsideAndroidPermissionLookupKeepsTypedHandoff() throws Exception {
+        Rig r = new Rig();
+        r.during = () -> { if (r.writes == 132) r.missingDuringPermissionLookup = true; };
+        r.load();
+        assertEquals(132, r.writes);
+        assertEquals(132, r.runner.snapshot().completed);
+        assertEquals(132, r.runner.snapshot().boundaries.fullLengthCompleted);
+        assertEquals(Tbs5530OneShotBootstrap.State.TRANSITIONING, r.runner.snapshot().state);
+        r.runner.releaseUpload(); assertEquals(1, r.closes);
+        assertThrows(IOException.class, r.runner::acquireObservation);
+        assertEquals(132, r.writes);
+    }
+    @Test public void permissionLookupLossBeforeFinalReleaseStillStopsWithoutRetry() throws Exception {
+        Rig r = new Rig(); r.during = () -> r.missingDuringPermissionLookup = true;
+        r.failLoad();
+        assertEquals(1, r.writes);
+        assertEquals(Tbs5530OneShotBootstrap.State.UNCERTAIN, r.runner.snapshot().state);
+        assertEquals(1, r.runner.snapshot().boundaries.fullLengthCompleted);
+        assertEquals(1, r.closes);
     }
     @Test public void finalShortPermissionLossAndUnknownIOExceptionRemainUncertain() throws Exception {
         Rig shortWrite = new Rig(); shortWrite.failAt = 131; shortWrite.failure = "short";

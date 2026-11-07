@@ -7,7 +7,7 @@ import java.util.Objects;
 /** One approved terrestrial stream select and bounded RAM-only Bulk IN 0x82 observation. */
 public final class Tbs5530TsSmoke {
     public enum Status { STRUCTURE_CONFIRMED, INVALID_TS, NO_DATA_OR_USB_FAILURE, LIMIT_REACHED }
-    public enum ReadApi { SYNC_NATIVE_ERRNO, QUEUED_USB_REQUEST_8X4096 }
+    public enum ReadApi { SYNC_NATIVE_ERRNO, QUEUED_USB_REQUEST_8X4096, NATIVE_USBFS_URB_8X4096 }
     public interface Clock { long nanos(); }
     public interface ChunkObserver { void accept(byte[] bytes, int length) throws IOException; }
     public interface Permission {
@@ -18,12 +18,13 @@ public final class Tbs5530TsSmoke {
         void audit(String event, int ordinal, int count) throws IOException;
         default boolean endpointPreparationApproved() { return false; }
         default boolean queuedReceptionApproved() { return false; }
+        default boolean nativeUrbReceptionApproved() { return false; }
     }
     public static final class Limits {
         public final int maxBytes, maxReads, durationMillis, readTimeoutMillis, readChunkBytes;
         public final boolean prepareEndpoint;
         public final ReadApi readApi;
-        public long maximumMillis() { return durationMillis + 2000L + (prepareEndpoint ? 5000L : 0) + (readApi == ReadApi.QUEUED_USB_REQUEST_8X4096 ? 1000L : 0); }
+        public long maximumMillis() { return durationMillis + 2000L + (prepareEndpoint ? 5000L : 0) + (readApi != ReadApi.SYNC_NATIVE_ERRNO ? 1000L : 0); }
         public Limits(int maxBytes, int maxReads, int durationMillis, int readTimeoutMillis) {
             this(maxBytes, maxReads, durationMillis, readTimeoutMillis, 4096);
         }
@@ -39,6 +40,10 @@ public final class Tbs5530TsSmoke {
             this.readApi = Objects.requireNonNull(readApi);
             if (readApi == ReadApi.QUEUED_USB_REQUEST_8X4096 && (readChunkBytes != 4096 || maxBytes % 4096 != 0)) {
                 throw new IllegalArgumentException("Queued variant requires complete 4096-byte slots");
+            }
+            if (readApi == ReadApi.NATIVE_USBFS_URB_8X4096 && (prepareEndpoint || readChunkBytes != 4096
+                    || maxBytes < 8 * 4096 || maxBytes % 4096 != 0 || maxReads < 8)) {
+                throw new IllegalArgumentException("Native URB diagnostic requires 8x4096 minimum and forbids endpoint preparation");
             }
             this.prepareEndpoint = prepareEndpoint;
             if (readChunkBytes < 1 || readChunkBytes > 16384 || maxBytes < 564 || maxBytes > 1024 * 1024 || maxReads < 1 || maxReads > 256
@@ -113,6 +118,9 @@ public final class Tbs5530TsSmoke {
         if (readApi == ReadApi.QUEUED_USB_REQUEST_8X4096 && !permission.queuedReceptionApproved()) {
             throw new IOException("Exact queued receive diagnostic approval required");
         }
+        if (readApi == ReadApi.NATIVE_USBFS_URB_8X4096 && !permission.nativeUrbReceptionApproved()) {
+            throw new IOException("Exact native usbfs URB diagnostic approval required");
+        }
         permission.consume(limits, generation);
         long started = clock.nanos(), dataStarted = started;
         boolean endpointPrepared = false;
@@ -144,7 +152,7 @@ public final class Tbs5530TsSmoke {
             byte[] buffer = new byte[Math.min(limits.readChunkBytes, limits.maxBytes)];
             while (bytes < limits.maxBytes && reads < limits.maxReads) {
                 permission.requireCurrent(generation); requireLocked();
-                if (readApi == ReadApi.QUEUED_USB_REQUEST_8X4096 && limits.maxBytes - bytes < 4096) break;
+                if (readApi != ReadApi.SYNC_NATIVE_ERRNO && limits.maxBytes - bytes < 4096) break;
                 long elapsed = elapsed(dataStarted);
                 long remaining = limits.durationMillis * 1_000_000L - elapsed;
                 if (remaining < 1_000_000L) break;

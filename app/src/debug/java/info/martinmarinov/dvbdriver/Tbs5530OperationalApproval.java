@@ -30,7 +30,7 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
     private static final long START_MARGIN_MS = 5000;
     private final long generation, maximumMillis;
     private final String ownerIdentity;
-    private final boolean experimentalAuto, endpointPreparation, queuedReception;
+    private final boolean experimentalAuto, endpointPreparation, queuedReception, nativeUrbReception;
     private final String operation, planHash;
     private final String challenge = UUID.randomUUID().toString();
     private final long created, heartbeatNotBefore;
@@ -70,6 +70,7 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
         maximumMillis = plan == null ? limits.maximumMillis() : plan.maximumMillis;
         endpointPreparation = plan == null && limits.prepareEndpoint;
         queuedReception = plan == null && limits.readApi == Tbs5530TsSmoke.ReadApi.QUEUED_USB_REQUEST_8X4096;
+        nativeUrbReception = plan == null && limits.readApi == Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096;
         experimentalAuto = plan != null && plan.tuneParameters != null
                 && plan.tuneParameters.selection.mode == info.martinmarinov.drivers.usb.tbs5530.Tbs5530DvbT2TuneParameters.Mode.AUTO;
         this.generation = generation; created = clock.now();
@@ -77,11 +78,13 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
         if (heartbeatNotBefore < 0 || heartbeatNotBefore > created || created - heartbeatNotBefore >= 300000)
             throw new IOException("Invalid session heartbeat origin");
         operation = plan == null ? "TS_SMOKE" : plan.operation.name();
-        String transcript = plan == null ? (queuedReception ? "TBS5530-TS-SMOKE/v5|generation=" : "TBS5530-TS-SMOKE/v4|generation=") + generation
+        String transcript = plan == null ? (nativeUrbReception ? "TBS5530-TS-SMOKE/v6|generation="
+                : queuedReception ? "TBS5530-TS-SMOKE/v5|generation=" : "TBS5530-TS-SMOKE/v4|generation=") + generation
                 + "|OUT=40/8A/0/0/0a00|timeoutMs=2000|BulkIN=82|bytes=" + limits.maxBytes
                 + "|reads=" + limits.maxReads + "|durationMs=" + limits.durationMillis
                 + "|readTimeoutMs=" + limits.readTimeoutMillis + "|chunkBytes=" + limits.readChunkBytes
-                + (queuedReception ? "|readApi=USB_REQUEST_QUEUE_8X4096_API26|queueDepth=8|drainMaxMs=1000" : "|readApi=USBDEVFS_BULK_ERRNO")
+                + (nativeUrbReception ? "|readApi=USBDEVFS_URB_8X4096|queueDepth=8|drainMaxMs=1000|bulkStreamId=0|errorPayload=METADATA_ONLY"
+                : queuedReception ? "|readApi=USB_REQUEST_QUEUE_8X4096_API26|queueDepth=8|drainMaxMs=1000" : "|readApi=USBDEVFS_BULK_ERRNO")
                 + (endpointPreparation ? "|prepare=USBDEVFS_CLEAR_HALT:82|prepareMaxMs=5000"
                 + "|prepareSource=tbsdtv/linux_media@2ce787de9f6e81b4294692a45de15596ae2e1322:usb-urb.c:usb_urb_init:220" : "")
                 + "|RF_IN_CONFIRMED|LOCK_REQUIRED|retry=0"
@@ -93,6 +96,7 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
             json.put("owner_identity", ownerIdentity); json.put("experimental_auto_plp", experimentalAuto);
             json.put("endpoint_preparation", endpointPreparation);
             if (queuedReception) json.put("queued_reception", true);
+            if (nativeUrbReception) json.put("native_urb_reception", true);
             json.put("start_margin_ms", START_MARGIN_MS);
             json.put("operation", operation); json.put("generation", generation);
             json.put("created_elapsed_ms", created); json.put("max_session_ms", 300000); json.put("heartbeat_ms", 2000);
@@ -123,6 +127,7 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
                     || experimentalAuto && !permit.getBoolean("explicit_experimental_auto_plp")
                     || endpointPreparation && !permit.getBoolean("explicit_endpoint_preparation")
                     || queuedReception && !permit.getBoolean("explicit_queued_reception")
+                    || nativeUrbReception && !permit.getBoolean("explicit_native_urb_reception")
                     || !challenge.equals(permit.getString("challenge")) || !planHash.equals(permit.getString("plan_sha256"))
                                         || !operation.equals(permit.getString("operation")) || permit.getLong("generation") != generation
                     || !permit.getBoolean("explicit_control_approval") || !permit.getBoolean("physical_current")) {
@@ -177,6 +182,9 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
     }
     public boolean queuedReceptionApproved() {
         try { requireCurrent(); return queuedReception; } catch (IOException error) { return false; }
+    }
+    public boolean nativeUrbReceptionApproved() {
+        try { requireCurrent(); return nativeUrbReception; } catch (IOException error) { return false; }
     }
     public boolean endpointPreparationApproved() {
         try { requireCurrent(); return endpointPreparation; } catch (IOException error) { return false; }

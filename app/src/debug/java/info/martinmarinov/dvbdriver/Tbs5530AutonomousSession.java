@@ -25,6 +25,7 @@ final class Tbs5530AutonomousSession {
     private final JSONObject challenge = new JSONObject();
     private final File root;
     private final Context contextForLedger;
+    private final String hostProfile, historyPrefix;
     private String ledger = "", grantText, owner;
     private long generation, expires;
     private boolean accepted;
@@ -33,6 +34,7 @@ final class Tbs5530AutonomousSession {
     volatile boolean preNativeRefusal;
     volatile boolean cleanupConfirmed;
     volatile Tbs5530TsSmoke.Result tsResult;
+    volatile Tbs5530OperationalHandoff.NativeReceiveSnapshot nativeReceiveSnapshot;
     volatile Tbs5530OneShotBootstrap.Snapshot bootstrapSnapshot;
     volatile Tbs5530OperationalProfile operationalObservation;
     volatile int initialNegotiatedUsbSpeed = -1;
@@ -48,6 +50,8 @@ final class Tbs5530AutonomousSession {
     }
     Tbs5530AutonomousSession(Context context, String requestedApi, String model, int api, int boot) throws IOException {
         readApi = requestedApi == null ? Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO : Tbs5530TsSmoke.ReadApi.valueOf(requestedApi);
+        hostProfile = Tbs5530VerifiedHost.profile(model, api);
+        historyPrefix = Tbs5530VerifiedHost.historyPrefix(hostProfile);
         contextForLedger = context.getApplicationContext();
         root = context.getFilesDir(); directory = new File(root, PREFIX + "-" + id);
         if (!directory.mkdir()) throw new IOException("Cannot create fresh session namespace");
@@ -67,8 +71,8 @@ final class Tbs5530AutonomousSession {
             }
         });
         try {
-            if (boot < 0 || !"GM1900".equals(model) || api != 30) throw new IOException("Unverified Android model/API/boot");
-            challenge.put("policy", Tbs5530AutonomousPolicy.VERSION).put("session", id).put("model", model)
+            if (boot < 0) throw new IOException("Unverified Android boot");
+            challenge.put("policy", Tbs5530AutonomousPolicy.VERSION).put("session", id).put("host_profile", hostProfile).put("model", model)
                     .put("api", api).put("boot_count", boot).put("vid", 0x734c).put("pid", 0x5530)
                     .put("firmware_sha256", Tbs5530FirmwareValidation.SHA256).put("firmware_protocol", "TBS_SOURCE_DUAL_RESET")
                     .put("created_elapsed_ms", policy.created()).put("max_session_ms", 300000).put("heartbeat_ms", 2000)
@@ -95,7 +99,7 @@ final class Tbs5530AutonomousSession {
         if (accepted) throw new IOException("Session grant already accepted");
         try {
             String text = read(new File(directory, "grant.json"), 16384); JSONObject grant = new JSONObject(text);
-            for (String key : new String[]{"policy", "session", "model", "api", "boot_count", "vid", "pid", "firmware_sha256",
+            for (String key : new String[]{"policy", "session", "host_profile", "model", "api", "boot_count", "vid", "pid", "firmware_sha256",
                     "firmware_protocol", "created_elapsed_ms", "golden_sha256", "ts_variant"}) {
                 if (!challenge.get(key).toString().equals(grant.get(key).toString())) throw new IOException("Grant scope mismatch: " + key);
             }
@@ -107,8 +111,8 @@ final class Tbs5530AutonomousSession {
             Tbs5530AutonomousAttachmentLedger.requireRecoveryEpoch(recoveryEpoch, recoveryConfirmed);
             expires = grant.getLong("expires_elapsed_ms");
             Tbs5530AutonomousPolicy.Profile profile = Tbs5530AutonomousPolicy.Profile.valueOf(grant.getString("profile"));
-            if (readApi == Tbs5530TsSmoke.ReadApi.QUEUED_USB_REQUEST_8X4096 && profile != Tbs5530AutonomousPolicy.Profile.EXPERIMENTAL_DIAGNOSTIC)
-                throw new IOException("Queued receive requires experimental session profile");
+            if (readApi != Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO && profile != Tbs5530AutonomousPolicy.Profile.EXPERIMENTAL_DIAGNOSTIC)
+                throw new IOException("Diagnostic receive requires experimental session profile");
             policy.grant(profile, expires, heartbeat());
             grantText = text; accepted = true;
         } catch (org.json.JSONException | IllegalArgumentException error) { throw new IOException("Malformed session grant", error); }
@@ -132,7 +136,7 @@ final class Tbs5530AutonomousSession {
         require(); boundary.require();
         if (plan != null) golden.require(plan); else {
             Tbs5530AutonomousPlans.requireTs(limits);
-            if (limits.readApi != readApi || limits.readApi == Tbs5530TsSmoke.ReadApi.QUEUED_USB_REQUEST_8X4096 && !policy.experimental())
+            if (limits.readApi != readApi || limits.readApi != Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO && !policy.experimental())
                 throw new IOException("Foreign or non-experimental receive variant");
         }
         if (plan != null && plan.generation != generation) throw new IOException("Foreign plan generation");
@@ -148,6 +152,7 @@ final class Tbs5530AutonomousSession {
                     return permit.put("approval_id", attempt).put("explicit_control_approval", true).put("physical_current", true)
                             .put("explicit_experimental_auto_plp", true).put("explicit_endpoint_preparation", false)
                             .put("explicit_queued_reception", policy.experimental() && readApi == Tbs5530TsSmoke.ReadApi.QUEUED_USB_REQUEST_8X4096)
+                            .put("explicit_native_urb_reception", policy.experimental() && readApi == Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096)
                             .put("approved_maximum_ms", maximum).put("expires_elapsed_ms", expires)
                             .put("heartbeat_elapsed_ms", heartbeat()).toString();
                 } catch (org.json.JSONException error) { throw new IOException(error); }
@@ -172,8 +177,13 @@ final class Tbs5530AutonomousSession {
     void consumeFirmwareAttachment(String attachment) throws IOException {
         synchronized (Tbs5530AutonomousSession.class) {
             require();
-            File history = new File(root, PREFIX + "-attachments.txt");
-            android.content.SharedPreferences marker = contextForLedger.getSharedPreferences(PREFIX + "-history", Context.MODE_PRIVATE);
+            try { policy.requireUploadStartBudget(); }
+            catch (IOException error) {
+                preNativeRefusal = true; stopReason = "UPLOAD_PREFLIGHT_REFUSED";
+                failureStage = policy.state().name(); throw error;
+            }
+            File history = new File(root, historyPrefix + "-attachments.txt");
+            android.content.SharedPreferences marker = contextForLedger.getSharedPreferences(historyPrefix + "-history", Context.MODE_PRIVATE);
             if (!history.exists()) {
                 if (marker.getBoolean("initialized", false)) throw new IOException("Attachment history missing; no rearm");
                 Tbs5530DurableFile.write(history, new byte[0]);
@@ -209,6 +219,16 @@ final class Tbs5530AutonomousSession {
         errorClass = safeClass(error);
         causeClass = safeClass(error == null ? null : error.getCause());
         String message = error == null ? "" : error.getMessage();
+        Throwable nested = error == null ? null : error.getCause();
+        for (int depth = 0; nested != null && depth < 8; depth++, nested = nested.getCause()) {
+            String detail = nested.getMessage();
+            if ("Control approval expired or host heartbeat stale".equals(detail)
+                    || "Session stopped, expired, background or host offline".equals(detail)
+                    || "Invalid heartbeat".equals(detail) || "Host stopped session".equals(detail)
+                    || "Foreground, OS permission or attachment changed".equals(detail)) {
+                message = detail; break;
+            }
+        }
         if (error instanceof Tbs5530AutonomousAttachmentLedger.AlreadyConsumed) stopReason = "ATTACHMENT_ALREADY_CONSUMED";
         else if ("Control approval expired or host heartbeat stale".equals(message)) stopReason = "PROGRAM_HEARTBEAT_OR_BUDGET";
         else if ("Control approval scope/attachment/clock mismatch".equals(message)) stopReason = "PROGRAM_SCOPE_MISMATCH";
@@ -274,7 +294,7 @@ final class Tbs5530AutonomousSession {
                     .put("result", result).put("ts_bytes", bytes).put("ts_packets", packets).put("last_errno", errno < 0 ? JSONObject.NULL : errno)
                     .put("cleanup", cleanupConfirmed ? "DRAIN_CONFIRMED" : "DRAIN_NOT_CERTIFIED")
                     .put("base_git_sha", BuildConfig.SOURCE_GIT_SHA)
-                    .put("ts_variant", readApi.name()).put("retry", 0).put("redacted", true)
+                    .put("ts_variant", readApi.name()).put("host_profile", hostProfile).put("retry", 0).put("redacted", true)
                     .put("stop_reason", stopReason).put("failure_stage", failureStage)
                     .put("physical_recovery_epoch_bound", recoveryConfirmed && !recoveryEpoch.isEmpty())
                     .put("pre_native_refusal", preNativeRefusal)
@@ -282,6 +302,11 @@ final class Tbs5530AutonomousSession {
                     .put("error_class", errorClass).put("cause_class", causeClass)
                     .put("raw_received_bytes", capture == null ? 0 : capture.bytes())
                     .put("raw_capture", capture == null ? "NOT_STARTED" : capture.durable() ? "SYNCED_CLOSED" : "NOT_CERTIFIED");
+            File permissionEvidence = new File(directory, "permission.json");
+            JSONObject permission = permissionEvidence.isFile() ? new JSONObject(read(permissionEvidence, 8192)) : null;
+            boolean matchingPermission = permission != null && id.equals(permission.optString("session"));
+            json.put("permission_outcome", matchingPermission ? permission.optString("outcome", "UNVERIFIED") : "UNVERIFIED");
+            json.put("permission_state", matchingPermission ? permission.optString("state", "UNVERIFIED") : "UNVERIFIED");
             json.put("initial_negotiated_usb_speed", initialNegotiatedUsbSpeed < 0 ? JSONObject.NULL : initialNegotiatedUsbSpeed);
             json.put("initial_negotiated_usb_speed_source", initialNegotiatedUsbSpeed < 0 ? "UNAVAILABLE" : "USBDEVFS_GET_SPEED_LINUX_ENUM");
             Tbs5530OperationalProfile usb = operationalObservation;
@@ -294,9 +319,18 @@ final class Tbs5530AutonomousSession {
             json.put("firmware", firmware == null ? JSONObject.NULL : bootstrapMetrics(firmware));
             Tbs5530TsSmoke.Result ts = tsResult;
             boolean synchronous = readApi == Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO;
-            boolean nativeKnown = ts != null && Tbs5530AutonomousPolicy.nativeReturnKnown(synchronous,
+            Tbs5530OperationalHandoff.NativeReceiveSnapshot urb = nativeReceiveSnapshot;
+            boolean urbKnown = urb != null && urb.completionKnown() && !urb.quarantined;
+            json.put("native_urb", urb == null ? JSONObject.NULL : new JSONObject()
+                    .put("attempted", urb.attempted).put("submitted", urb.submitted).put("completed", urb.completed)
+                    .put("outstanding", urb.outstanding).put("copied_bytes", urb.copiedBytes).put("cleanup_bytes", urb.cleanupBytes)
+                    .put("completion_sequence", urb.completionSequence).put("completion_known", urb.completionKnown())
+                    .put("syscall_return", urb.syscallReturn).put("syscall_errno", urb.syscallErrno)
+                    .put("urb_status", urb.urbStatus == Integer.MIN_VALUE ? JSONObject.NULL : urb.urbStatus)
+                    .put("actual_length", urb.actualLength).put("slot", urb.slot).put("quarantined", urb.quarantined));
+            boolean nativeKnown = urbKnown || ts != null && Tbs5530AutonomousPolicy.nativeReturnKnown(synchronous,
                     ts.reads, ts.lastReadResult, ts.lastReadErrno);
-            boolean completedError = ts != null && ts.status == Tbs5530TsSmoke.Status.NO_DATA_OR_USB_FAILURE
+            boolean completedError = urbKnown && urb.urbStatus < 0 || ts != null && ts.status == Tbs5530TsSmoke.Status.NO_DATA_OR_USB_FAILURE
                     && Tbs5530AutonomousPolicy.completedReceiveError(synchronous, ts.reads, ts.lastReadResult, ts.lastReadErrno);
             json.put("native_return_known", nativeKnown);
             json.put("receive_error", !completedError ? "NOT_CLASSIFIED_AS_COMPLETED_ERROR"
@@ -305,6 +339,12 @@ final class Tbs5530AutonomousSession {
             json.put("usb_data_received", ts == null ? bytes > 0 : ts.usbDataReceived());
             json.put("structure_confirmed", ts != null && ts.structureConfirmed());
             json.put("quality_observation", ts == null ? "NOT_ASSESSED" : ts.qualityObservation());
+            json.put("quality_min_bytes", 32768);
+            json.put("ts_smoke_pass", ts != null && ts.structureConfirmed() && ts.bytes >= 32768
+                    && "NO_ERRORS_IN_BOUNDED_SAMPLE".equals(ts.qualityObservation())
+                    && cleanupConfirmed && policy.state() == Tbs5530AutonomousPolicy.State.REPORT
+                    && capture != null && capture.durable() && capture.bytes() == ts.bytes
+                    && (urb == null || !urb.quarantined && urb.outstanding == 0));
             json.put("ts_metrics", ts == null ? JSONObject.NULL : tsMetrics(ts));
             write("report.json", json.toString());
             Tbs5530DurableFile.write(new File(root, PREFIX + "-report.json"), json.toString().getBytes(StandardCharsets.UTF_8));

@@ -9,6 +9,17 @@
     <application>
         <activity
             android:name="info.martinmarinov.dvbdriver.Tbs5530AutonomousDiagnosticActivity"
+            android:launchMode="singleTop"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/tbs5530_autonomous_device_filter" />
+        </activity>
+        <activity
+            android:name="info.martinmarinov.dvbdriver.Tbs5530PermissionPreflightActivity"
             android:exported="true" />
         <activity
             android:name="info.martinmarinov.dvbdriver.Tbs5530UsbDiagnosticActivity"

@@ -1,0 +1,66 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+package info.martinmarinov.drivers.usb.tbs5530;
+
+import android.hardware.usb.UsbDeviceConnection;
+import android.hardware.usb.UsbEndpoint;
+import info.martinmarinov.usbxfer.NativeUsbfsUrb;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
+import java.nio.charset.StandardCharsets;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.Set;
+
+/** Separate diagnostic backend; no legacy IsoRequest or Java UsbRequest is used. */
+final class Tbs5530NativeUsbfsBackend implements Tbs5530AndroidUsbFacade.ReceiveBackend {
+    private static final Set<Tbs5530NativeUsbfsBackend> QUARANTINE =
+            Collections.newSetFromMap(new IdentityHashMap<>());
+    private final UsbDeviceConnection connection;
+    private final NativeUsbfsUrb receiver;
+    private final FileOutputStream stream;
+    private final Writer audit;
+    private boolean auditClosed;
+
+    Tbs5530NativeUsbfsBackend(UsbDeviceConnection connection, UsbEndpoint endpoint, File directory,
+                             String runId, Tbs5530TsSmoke.Limits limits,
+                             Tbs5530OperationalHandoff.Consent consent) throws IOException {
+        if (connection == null || connection.getFileDescriptor() < 0 || endpoint == null
+                || endpoint.getAddress() != 0x82 || endpoint.getDirection() != 128 || endpoint.getType() != 2
+                || endpoint.getMaxPacketSize() != 64 && endpoint.getMaxPacketSize() != 512
+                || limits == null || limits.readApi != Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096
+                || runId == null || !runId.matches("[A-Za-z0-9_-]{1,100}")) {
+            throw new IOException("Owned terrestrial IN82 and consumed exact native diagnostic limits required");
+        }
+        consent.requireCurrent(); this.connection = connection;
+        File target = new File(directory, "phase31-native-urb-" + runId + ".jsonl");
+        if (!target.createNewFile()) throw new IOException("Native audit already exists; diagnostic cannot be retried");
+        stream = new FileOutputStream(target);
+        audit = new OutputStreamWriter(stream, StandardCharsets.UTF_8);
+        try {
+            receiver = new NativeUsbfsUrb(connection.getFileDescriptor(), Math.min(limits.maxReads, limits.maxBytes / 4096),
+                    limits.durationMillis, runId, consent::requireCurrent, audit);
+        } catch (IOException | RuntimeException | Error error) {
+            try { audit.close(); } catch (IOException close) { error.addSuppressed(close); }
+            throw error;
+        }
+        // Retain both Java connection and native buffers before the first submit, not only on failure.
+        synchronized (QUARANTINE) { QUARANTINE.add(this); }
+    }
+    @Override public int read(byte[] bytes, int length, int timeout) throws IOException { return receiver.read(bytes, length, timeout); }
+    @Override public int errno() { return (int) receiver.snapshot()[7]; }
+    long[] snapshot() { return receiver.snapshot(); }
+    boolean quarantined() { return receiver.isQuarantined(); }
+    @Override public void close() throws IOException {
+        try { receiver.close(); }
+        finally {
+            if (!auditClosed) {
+                try { audit.flush(); stream.getFD().sync(); }
+                finally { auditClosed = true; audit.close(); }
+            }
+            if (!receiver.isQuarantined()) synchronized (QUARANTINE) { QUARANTINE.remove(this); }
+        }
+    }
+}

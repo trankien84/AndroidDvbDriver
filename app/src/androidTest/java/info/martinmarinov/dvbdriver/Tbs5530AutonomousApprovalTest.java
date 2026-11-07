@@ -44,6 +44,22 @@ public class Tbs5530AutonomousApprovalTest {
         assertThrows(IOException.class, () -> queue.consume(limits, 1)); assertEquals(1, store.used.size());
         store.permit.put("explicit_queued_reception", false); assertThrows(IOException.class, queue::requireCurrent);
     }
+    @Test public void nativeUrbCannotUseSyncOrJavaQueuePermission() throws Exception {
+        Storage store = new Storage();
+        Tbs5530TsSmoke.Limits limits = new Tbs5530TsSmoke.Limits(65536, 16, 5000, 500, 4096, false,
+                Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096);
+        Tbs5530OperationalApproval nativeUrb = new Tbs5530OperationalApproval(store, () -> 1000, null, limits, 1);
+        store.authorize(); store.permit.put("explicit_queued_reception", true); nativeUrb.rfIn(true);
+        assertFalse(nativeUrb.eligible()); assertFalse(nativeUrb.nativeUrbReceptionApproved());
+        assertTrue(store.permit.getString("transcript").startsWith("TBS5530-TS-SMOKE/v6|"));
+        assertTrue(store.permit.getString("transcript").contains("errorPayload=METADATA_ONLY"));
+        store.permit.put("explicit_native_urb_reception", true);
+        assertTrue(nativeUrb.eligible()); assertTrue(nativeUrb.nativeUrbReceptionApproved());
+        assertFalse(nativeUrb.queuedReceptionApproved()); nativeUrb.consume(limits, 1);
+        assertThrows(IOException.class, () -> nativeUrb.consume(limits, 1));
+        store.permit.put("explicit_native_urb_reception", false);
+        assertThrows(IOException.class, nativeUrb::requireCurrent);
+    }
     @Test public void synchronousLegacyTranscriptAndConstructorsRemainUnchanged() throws Exception {
         Storage store = new Storage(); Tbs5530TsSmoke.Limits limits = new Tbs5530TsSmoke.Limits(65536, 16, 5000, 500, 4096, false);
         Tbs5530OperationalApproval sync = new Tbs5530OperationalApproval(store, () -> 1000, null, limits, 1);
@@ -81,6 +97,27 @@ public class Tbs5530AutonomousApprovalTest {
         assertEquals("IOException", report.getString("error_class"));
         assertTrue(report.isNull("last_errno"));
         assertFalse(report.toString().contains(owner));
+        session.policy.stop();
+    }
+    @Test public void insufficientUploadBudgetDoesNotConsumeAttachmentHistory() throws Exception {
+        android.content.Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        java.io.File history = new java.io.File(context.getFilesDir(), "autonomous-v1-attachments.txt");
+        String before = history.exists() ? Tbs5530AutonomousSession.read(history, 1024 * 1024) : null;
+        Map<String, ?> marker = new HashMap<>(context.getSharedPreferences("autonomous-v1-history", 0).getAll());
+        Tbs5530AutonomousSession session = new Tbs5530AutonomousSession(context, "SYNC_NATIVE_ERRNO", "GM1900", 30, 1);
+        session.policy.foreground(true);
+        JSONObject grant = new JSONObject(Tbs5530AutonomousSession.read(new java.io.File(context.getFilesDir(), "autonomous-v1-challenge.json"), 16384));
+        grant.put("profile", "AUTO_VERIFIED").put("bounded_user_authorization", true).put("rf_in_confirmed", true)
+                .put("expires_elapsed_ms", session.policy.created() + 10000);
+        session.write("grant.json", grant.toString());
+        session.write("heartbeat.json", new JSONObject().put("session", session.id).put("elapsed_ms", android.os.SystemClock.elapsedRealtime()).put("stop", false).toString());
+        session.acceptGrant();
+        session.policy.observe("SYNTHETIC_TEST_FIXTURE", 1, true,
+                info.martinmarinov.drivers.usb.tbs5530.Tbs5530OperationalProfile.Kind.FX2_DEFAULT);
+        assertThrows(IOException.class, () -> session.consumeFirmwareAttachment("SYNTHETIC_TEST_FIXTURE"));
+        assertEquals(before, history.exists() ? Tbs5530AutonomousSession.read(history, 1024 * 1024) : null);
+        assertEquals(marker, context.getSharedPreferences("autonomous-v1-history", 0).getAll());
+        assertTrue(session.preNativeRefusal); assertEquals("UPLOAD_PREFLIGHT_REFUSED", session.stopReason);
         session.policy.stop();
     }
     @Test public void standingHeartbeatCanPredateProgramButNotSessionAndStillExpiresAtTwoSeconds() throws Exception {

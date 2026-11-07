@@ -415,10 +415,15 @@ public final class Tbs5530AndroidUsbFacade implements Tbs5530UsbBinding.Facade {
         }
 
         private UsbDevice resolve(Device expected) throws IOException {
-            for (UsbDevice candidate : usb().getDeviceList().values()) {
+            return resolvePresentDevice(expected, usb().getDeviceList().values());
+        }
+
+        static UsbDevice resolvePresentDevice(Device expected, Iterable<UsbDevice> devices) throws IOException {
+            for (UsbDevice candidate : devices) {
                 if (expected.equals(identity(candidate))) return candidate;
             }
-            throw new IOException("USB attachment is no longer present");
+            // Re-enumeration can race the binding's preceding presence check.
+            throw new Tbs5530UsbBinding.AttachmentChangedException();
         }
 
         @Override public List<Device> devices() throws IOException {

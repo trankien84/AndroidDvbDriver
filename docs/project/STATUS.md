@@ -1,5 +1,47 @@
 # Port TBS5530 sang Android — trạng thái hiện tại
 
+## Phase 3.1 — Đóng gói checkpoint tablet và chỉnh khoảng trắng docs theo yêu cầu — 2026-11-08
+
+Người dùng yêu cầu commit toàn bộ thay đổi hiện tại và push lên `origin/chore/modernize-android-build`. Checkpoint đóng gói gồm native URB diagnostic, permission/preflight, bảo vệ host/attachment, lỗi typed attachment lookup đã kiểm và sáu hồ sơ đã sửa khoảng trắng. Source vẫn khớp fingerprint `127e7f550d7db79cd1ea25cd3f763b49c03a2706c407f05722be30e6c7e4f911`; không chạy lại build hoặc hardware chỉ để xuất bản Git. Các dòng HEAD cũ và câu “chưa commit/push” bên dưới là trạng thái lịch sử trước commit chứa mục này.
+
+Kết quả phần cứng vẫn **BLOCKED_WITH_EVIDENCE tại EOVERFLOW/0 byte TS**, chưa TS_SMOKE_PASS hoặc ROOT_CAUSE_CONFIRMED. Không đưa APK, firmware, capture, grant/ledger hoặc log riêng vào Git. SHA commit và kết quả push chỉ được công nhận sau khi lệnh thực thi thành công và SHA remote được đối chiếu.
+
+## Phase 3.1 — Đã đối chứng trên tablet: khóa K36 nhưng native USB vẫn EOVERFLOW, chưa có TS — 2026-11-08
+
+**Đã vượt blocker kết nối tablet và thực hiện phép nhận thật.** Galaxy Tab S10 Ultra SM-X926B/API 36 nhận TBS5530, đo `USBDEVFS_GET_SPEED=3` (High-Speed), qua probe/init/AUTO K36 và gate khóa sóng. Hai fresh-owner run `ce9579b7-c40a-4aa8-a9c7-59c433402b53` và `fd30da8e-e8f3-42b4-9955-7ec0acbb5749` đều submit/reap đủ 8 URB × 4096 byte; cả 8 completion mỗi run có `urb.status=-75`, `actual_length=0`, trong khi syscall return/errno đều 0. Đã drain đủ 8/8, outstanding 0, không quarantine. **Chưa có Android TS, không TS_SMOKE_PASS hoặc ROOT_CAUSE_CONFIRMED.**
+
+**Đối chứng nguồn và host:** người dùng mô tả dây USB chữ Y: Type-B vào tuner, một Type-A dữ liệu qua đầu chuyển Type-C vào tablet, Type-A còn lại vào sạc điện thoại; không cấp nguồn qua cổng DC 12 V trong sơ đồ này. Đây là điều kiện mới do người dùng cung cấp, chưa đo điện áp/dòng. Việc nhận USB tốt hơn không chứng minh nguồn đã chữa lỗi TS. OnePlus trước đó có 3 completion -75 và 5 completion -71; Samsung nay đều -75. Kết quả không ủng hộ kết luận lỗi chỉ có trên OnePlus; vẫn cần phân biệt firmware/setup/thiết bị/cáp hoặc phần chung của đường nhận Android.
+
+**Sửa phần mềm có kiểm chứng:** `AndroidManager.resolve` có thể mất thiết bị giữa kiểm presence và kiểm permission nhưng ném IOException chung, làm mất thông tin bàn giao sau final release. Đã tái hiện test BEFORE 1 FAIL/25, sửa sang `AttachmentChangedException` hiện có; AFTER drivers 420 + app 68 JVM PASS, guard 28 + library 43 instrumentation PASS trên tablet. Các guard, điều kiện đủ 132 native/full-length và yêu cầu permission/owner mới giữ nguyên. Terminal upload đầu vẫn UNCERTAIN dù native đủ 132; sau người dùng phục hồi vật lý, upload mới sạch 132/132 trong 2891 ms, rồi dừng do attach-confirm quá thời hạn UI. Hai phép nhận tiếp theo dùng owner mới, không upload lại.
+
+**Giới hạn trace:** Perfetto v51.2 bật/tắt phiên bình thường nhưng FtraceStats của cả hai trace ghi ba event xHCI là unknown, không có ftrace bundle; không thu được controller completion code. Sysfs speed/config/alt và tracefs event format bị từ chối. Không suy file trace hoặc CLI exit 0 là capture USB PASS. Hộp thoại USB đã được agent kiểm ảnh và bấm OK, không chọn Luôn cho phép; helper chưa tự xử lý headless được secure UI này.
+
+HEAD vẫn `1202c8abd49a48c3099e718bead13a21a9176660` trên `chore/modernize-android-build`, chưa commit/push. Source fingerprint mới `127e7f550d7db79cd1ea25cd3f763b49c03a2706c407f05722be30e6c7e4f911`, APK hardware SHA `1c51ddf79bb1f3c08dc5b62a219d142e06252d851e0d963c68471dbfd36523a3`. Build debug/release, lint và static PASS có phạm vi; hai UI test FAIL lịch sử chưa được tuyên bố sửa. **Bước phân biệt tiếp theo:** cần đối chiếu firmware/setup Windows từ lúc khởi động tuner, vì trace Windows cũ thiếu giai đoạn này; không tự đổi register, quét buffer hoặc chuyển tuner/ownership. Báo cáo chi tiết `D:\TSDuck\reports\phase31-tablet-ab-20261108-ce9579b7.md` và log gốc trong `D:\TSDuck\logs\phase31-tablet-live-20261107-230448-7cb5c880`.
+
+## Phase 3.1 — Tablet đã nhận TBS5530 tạm thời, nhưng kết nối USB chưa ổn định — 2026-11-07, 22:34 +07
+
+Người dùng báo đèn POWER đã sáng và xác nhận dây dữ liệu nối vào tablet. Kiểm mới qua ADB trên SM-X926B/API 36 thấy lịch sử USB nhận đúng VID:PID 734c:5530 lúc 22:24:38.839 +07, rồi tháo thiết bị khỏi hệ thống lúc 22:24:55.207 +07, cách nhau 16,368 giây. Đây là bằng chứng tablet đã từng nhận diện tuner, khác lần kiểm trước chưa thấy thiết bị. Tuy nhiên snapshot hiện tại và lần kiểm lại sau 5 giây đều không có tuner trong danh sách thiết bị đang kết nối; sysfs chỉ còn root hubs, cổng trở lại vai trò host. Chưa xác định nguyên nhân ngắt kết nối; đèn sáng không chứng minh nguồn hoặc đường dữ liệu ổn định.
+
+Chưa nạp firmware, tune hoặc nhận TS trên tablet trong lượt này. Cần kết nối USB được giữ ổn định trước khi xác minh descriptor, permission và thử DVB-T2. Không suy việc xuất hiện trong lịch sử là thiết bị hiện vẫn kết nối hoặc đã có tín hiệu truyền hình. Bằng chứng riêng tại `D:\TSDuck\logs\tablet-power-on-recheck-20261107-221543-93025e04`.
+
+## Phase 3.1 — Kiểm lại tablet sau thay adapter: vẫn chưa nhận USB — 2026-11-07, 21:50 +07
+
+Đã kiểm mới Galaxy Tab S10 Ultra SM-X926B/API 36 qua ADB, trước và sau khi người dùng cắm lại riêng cáp USB. `dumpsys usb` không liệt kê TBS5530, `num_connects=0`; sysfs chỉ có hai root hub. Tablet đang ở `data_role=host`, `usb_data_status=enabled`; các cờ chặn USB do quản trị/khóa màn hình đều false. Người dùng xác nhận đèn POWER của tuner không sáng với adapter mới; thông số và cực tính adapter mới chưa được xác minh. Không suy từ đó rằng tuner hỏng hoặc nguồn chắc chắn là nguyên nhân.
+
+Đây là kiểm tra kết nối USB, chưa thể đo tín hiệu DVB-T2 hoặc MPEG-TS. Không cài APK, cấp grant phiên, nạp firmware, gửi vendor/I²C hoặc mở luồng URB trong lượt này. Giữ Phase 3.1 và blocker trước bước nhận diện USB. Phép đối chứng tiếp theo có giá trị là kiểm tuner trên Windows với kết nối đã biết hoạt động, hoặc kiểm đường nguồn/cáp bằng thiết bị và bộ cấp nguồn đúng chuẩn; không thử adapter ngẫu nhiên. Bằng chứng mới nằm dưới `D:\TSDuck\logs\tablet-adapter-recheck-20261107-215018-04c39602`.
+
+## Phase 3.1 — CONTINUATION / EOVERFLOW DIAGNOSIS: đã đo native URB; A/B tablet bị chặn nguồn — 2026-11-07
+
+**Kết luận mới: lỗi đã được quan sát trực tiếp ở completion USB, chưa có Android TS và chưa xác định nguyên nhân vật lý.** Run `d902837a-99e0-469d-9d3a-4a916a905cb3` trên OnePlus GM1900/API 30 submit 8 × 4096 thành công, reap 8/8 thành công với syscall errno 0; ba URB status -75/EOVERFLOW và năm URB status -71/EPROTO, tất cả actual_length = 0. Peak outstanding 8, cuối 0, không resubmit, cleanup DRAIN_CONFIRMED/quarantine false. Firmware trước đó 132/132 sạch, chip/init/AUTO K36/lock đã qua trước stream-select. Đây là `URB_DIAGNOSTIC_VALIDATED`, không phải `ROOT_CAUSE_CONFIRMED` hoặc `TS_SMOKE_PASS`.
+
+**Đối chứng tablet:** Người dùng chuyển cùng dây sang Galaxy Tab S10 Ultra SM-X926B/API 36/kernel 6.1.145. Tablet báo “Thiết bị USB công suất cao đã kết nối. Không thể truy cập thiết bị này. Thiết bị đã kết nối cần nguồn điện bên ngoài.” USB host role có, nhưng chưa enumerate 734c:5530; chưa gửi firmware/control/URB trên tablet. Người dùng thử nguồn khác 12 V DC/1 A, báo tuner không lên đèn; cực tính/dòng yêu cầu chưa xác minh và đang tìm nguồn phù hợp. Dừng phần cứng, không khuyến nghị thử adapter chỉ dựa vào điện áp/đầu tròn. Chưa có A/B cùng điều kiện nên không kết luận lỗi riêng OnePlus.
+
+**Phần mềm:** thêm native diagnostic debug-only, exact USB attach filter, permission state/token/generation và preflight 60 giây không I/O trước grant 5 phút; heartbeat gộp giảm số round-trip; tách `ts_smoke_pass` khỏi cấu trúc PAT/PMT. Đã sửa budget preflight trước consume history; giữ mọi record đã consume/uncertain. Lifecycle attach-prompt và token relaunch được sửa sau hardware; allowlist chỉ GM1900/API 30 và SM-X926B/API 36, history tablet riêng. Final source fingerprint `9adfdc4fe371f77c0d2a633eee8d99e9c851632c4e51fbd0f82a284fab3c2477`; final debug SHA `ea6a48ac85e653faf2c6e4112784d32e8bf31e4f2a931cbc41384b1fc7b38ae0` không phải APK đã đo URB (`c2a9cb7c6e61bb9060319137ff4e0aee03f857577a6dad4f60aa12e156b4c9f5`).
+
+**Kiểm chứng cuối:** 511 JVM PASS, native C fault-injection/canary và MSVC AddressSanitizer PASS; debug/release build và lint PASS (0 errors, debug 18/release 10 warnings). OnePlus trước patch lifecycle cuối: 119 app + 43 library instrumentation PASS; tablet final: 118/120 app PASS, 2 UI test FAIL do focus NotificationShade/challenge không tạo, targeted retest vẫn FAIL; library 43 PASS. Không gọi tablet full instrumentation PASS. API 21/16 KiB runtime và hardware trên final APK NOT RUN. Các package test phiên tạo đã gỡ; OnePlus owner/URB đã drain trước chuyển host, helper/Perfetto đã kết thúc.
+
+**Git / bước tiếp:** HEAD `1202c8abd49a48c3099e718bead13a21a9176660`, nhánh `chore/modernize-android-build`, thay đổi chưa commit/push. Sau khi có nguồn đúng chuẩn TBS và tuner enumerate trên tablet, kiểm lại nguồn/USB/ADB, cùng APK/profile rồi chạy một native A/B hữu hạn; không tự nạp lại firmware trên attachment bất định. Báo cáo đầy đủ ngoài Git `D:\TSDuck\reports\phase31-continuation-closeout-20261107.md`; xem ADR-029 và các entry mới trong [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md).
+
 ## Phase 3.1 — Đóng gói checkpoint để commit/push theo yêu cầu — 2026-11-07
 
 Người dùng yêu cầu commit toàn bộ thay đổi đã kiểm và push lên `origin/chore/modernize-android-build`. Commit chứa checkpoint này là mốc đóng gói source; SHA `1ad3b251` và các câu “chưa commit/push” ở dưới là trạng thái lịch sử trước đóng gói, không phải HEAD sau commit. Không thay đổi code hoặc chạy thêm USB hardware trong bước xuất bản Git.
@@ -10,9 +52,9 @@ Kết quả vẫn **`BLOCKED_WITH_EVIDENCE` tại EOVERFLOW/0 byte TS Android**,
 
 **Kết luận hiện tại: `BLOCKED_WITH_EVIDENCE`, chưa `TS_SMOKE_PASS`, không mở phase mới.** Sau handoff/heartbeat/epoch fixes đã kiểm, pipeline tự chạy đúng firmware khi FX2_DEFAULT → permission operational mới → fresh owner → probe/init/AUTO K36/status → stream-select → Bulk. Lượt firmware phục hồi có 132/132 native full-length, image 8192/payload 8196, transition sạch 4706 ms; không hỏi Approve từng ordinal hoặc plan. Terminal UNCERTAIN đầu giữ nguyên lịch sử, không rearm ledger.
 
-**Đã đo lại Android:** GET_SPEED trên fd hiện hữu trả enum 3 (High-Speed) cả default/operational, descriptor IN82/IN81 maxpacket 512. Baseline native 4096/500 ms vẫn `-1 / errno75`, 0 byte; một queued variant 8×4096 trả 0, errno không có, 0 byte, đã drain/release hết. Sau người dùng tự bật “Lưu trữ OTG”, UI switch được đọc `CHECKED`; một fresh-owner synchronous retest không upload firmware vẫn errno75/0 byte. Không kết luận bật OTG đã chữa, thiếu RF, sai PLP hoặc timeout. Không có OTG/cáp/Android host khác để đối chứng trong môi trường hiện tại.
+**Đã đo lại Android:** GET_SPEED trên fd hiện hữu trả enum 3 (High-Speed) cả default/operational, descriptor IN 82/IN 81 maxpacket 512. Baseline native 4096/500 ms vẫn `-1 / errno75`, 0 byte; một queued variant 8×4096 trả 0, errno không có, 0 byte, đã drain/release hết. Sau người dùng tự bật “Lưu trữ OTG”, UI switch được đọc `CHECKED`; một fresh-owner synchronous retest không upload firmware vẫn errno 75/0 byte. Không kết luận bật OTG đã chữa, thiếu RF, sai PLP hoặc timeout. Không có OTG/cáp/Android host khác để đối chứng trong môi trường hiện tại.
 
-**Phần mềm đã được kiểm:** APK chạy hardware SHA-256 `9ecb806b6f6a04ea1ec121a6330a012b4a0ebfe8b2928d4fe67186c999afe11b`, 429 JVM, 97 app + 43 library instrumentation PASS. Sau quan sát queue completion 0, thêm fail-stop không resubmit slot đó; final **430 JVM + 97 app + 43 library PASS**, debug/release/lint/static bốn ABI/16 KiB/major52/isolation PASS có phạm vi. Final debug SHA `6d04f7dee03a44cd34a92931a08d689020c9d6ed40617b3d68c58483afd21311` đã cài đè và kiểm SHA, chưa chạy lại USB hardware trên patch cuối. API 21/16 KiB runtime mới và parser trên broadcast Android NOT RUN. Sáu legacy preferences giữ nguyên; ba firmware-history keys là khóa chống tái sử dụng, không phải ba uploads. Test packages phiên tạo đã dọn, không giữ helper hoặc owner.
+**Phần mềm đã được kiểm:** APK chạy hardware SHA-256 `9ecb806b6f6a04ea1ec121a6330a012b4a0ebfe8b2928d4fe67186c999afe11b`, 429 JVM, 97 app + 43 library instrumentation PASS. Sau quan sát queue completion 0, thêm fail-stop không resubmit slot đó; final **430 JVM + 97 app + 43 library PASS**, debug/release/lint/static bốn ABI/16 KiB/major 52/isolation PASS có phạm vi. Final debug SHA `6d04f7dee03a44cd34a92931a08d689020c9d6ed40617b3d68c58483afd21311` đã cài đè và kiểm SHA, chưa chạy lại USB hardware trên patch cuối. API 21/16 KiB runtime mới và parser trên broadcast Android NOT RUN. Sáu legacy preferences giữ nguyên; ba firmware-history keys là khóa chống tái sử dụng, không phải ba uploads. Test packages phiên tạo đã dọn, không giữ helper hoặc owner.
 
 **Bước thực tế tiếp theo:** cần đối chứng cùng APK/profile trên host Android hoặc bộ OTG khác đã biết tốt, hoặc trace USB/kernel phù hợp theo một phạm vi được duyệt riêng. Không tự đổi register/driver/mode/reset hoặc lặp lại cùng điều kiện lỗi. Báo cáo tổng hợp và terminal JSON dưới `D:\TSDuck\reports`, run OTG cuối `phase31-android-user-otg-sync-20261107-163301-6dedd387`; chi tiết tại [TEST-MATRIX.md](TEST-MATRIX.md), [RESEARCH.md](RESEARCH.md), [WORKLOG.md](WORKLOG.md) và ADR-028. Git vẫn HEAD `1ad3b251f19779450a2c5d9cffc9f37f9c9a5470`, thay đổi chưa commit/push.
 
@@ -123,7 +165,7 @@ Firmware, I²C, frontend lock và TS mới đều `NOT RUN`. Không thay đổi 
 
 **Kết quả thực:** Transaction độc lập thứ ba được người dùng duyệt riêng đã truyền đúng một chuỗi 132 A0 OUT, native started/completed/full-length đều 132, image 8192/8192 byte, payload 8196 byte; hai CPU release trả full-length. Firmware SHA-256 `b97cf208bb586f706b26aa5450de6bb97375a3e3eabe833cddb0ae3a4f69d0dc`, plan `TBS_SOURCE_DUAL_RESET` không đổi, không retry/fallback/corrective hoặc recovery nguồn. Hai GUID trước chỉ tiêu thụ ở host và có 0 native firmware writes; không được reuse.
 
-Sau release có attachment event; observation tự động dừng trước lease mới, snapshot terminal giữ UNCERTAIN/JAVA_IO_EXCEPTION và UPLOAD_COMPLETE_OPERATIONAL_UNVERIFIED. Không sửa lịch sử này. Người dùng duyệt riêng permission +raw read, rồi duyệt thêm update APK giữ data/một raw read để lưu binary và kiểm classifier; mọi lần quan sát đều 0 claim/release/transfer. Raw cuối 00:32:55 +07: 50 byte/COMPLETE_RETURNED_TREE, config 1/interface 0/alt 0, bulk IN 0x82 và 0x81, packet 512, hash `22e2f1df9f66c58dbb6c554e400b6b8abcb78ee4f277e03679bc0fac7a25add5`, binary đã lưu ngoài Git và kiểm hash/length. Owner raw open/read/close 1/1/1, pending/cleanup false, OPERATIONAL_CANDIDATE.
+Sau release có attachment event; observation tự động dừng trước lease mới, snapshot terminal giữ UNCERTAIN/JAVA_IO_EXCEPTION và UPLOAD_COMPLETE_OPERATIONAL_UNVERIFIED. Không sửa lịch sử này. Người dùng duyệt riêng permission + raw read, rồi duyệt thêm update APK giữ data/một raw read để lưu binary và kiểm classifier; mọi lần quan sát đều 0 claim/release/transfer. Raw cuối 00:32:55 +07: 50 byte/COMPLETE_RETURNED_TREE, config 1/interface 0/alt 0, bulk IN 0x82 và 0x81, packet 512, hash `22e2f1df9f66c58dbb6c554e400b6b8abcb78ee4f277e03679bc0fac7a25add5`, binary đã lưu ngoài Git và kiểm hash/length. Owner raw open/read/close 1/1/1, pending/cleanup false, OPERATIONAL_CANDIDATE.
 
 Classifier debug được sửa đúng một điều kiện bInterval của bulk IN: giá trị 1 không phải polling gate cho bulk IN theo tài liệu USB, không thay descriptor hoặc protocol. Unit repro FAIL trước sửa → PASS; vẫn kiểm complete tree/address/direction/type/packet/config/interface/alt, không nới main operational guard. Cả legacy và current-attempt consumed stores giữ true nguyên nội dung; canonical ledger 275 records giữ terminal cũ và không bị sửa theo observation riêng.
 
@@ -131,7 +173,7 @@ Classifier debug được sửa đúng một điều kiện bInterval của bulk
 
 **Regression mã cuối:** JVM 259 methods PASS, app 47/library 37 rerun PASS, service 2 trước đó không đổi nguồn; debug/release/lint PASS 0 errors/10 warnings, Java 8 major 52/minSdk 21/target 37/127 TBS classes, debug-only isolation/fw-not-bundled/zipalign đạt. Production debug APK cuối hash `12a97e1745c031ec5c80565c6816d00f2e53b50d92aef3a47957b4011f57526e`, cập nhật tại chỗ theo approval read-only, giữ data. Chi tiết lệnh/FAIL/limits tại [WORKLOG.md](WORKLOG.md), [TEST-MATRIX.md](TEST-MATRIX.md) và bảng trước–sau [RESEARCH.md](RESEARCH.md), ADR-023 tại [DECISIONS.md](DECISIONS.md).
 
-**Ranh giới kết luận:** Phase 2.9 đạt mục tiêu firmware upload +operational descriptor trên board/OnePlus đã kiểm. Chỉ OPERATIONAL_CANDIDATE, không READY, không I²C/frontend/tuning/PLP/DVB lock/MPEG-TS hoặc EEPROM/flash PASS. Không tự chuyển Phase 3.0, chạy vendor init hoặc upload nữa. UI diagnostic đã đóng, lease/worker cleanup hoàn tất; không có helper/capture chạy nền. HEAD 92a25b4 và 30 file thay đổi (24 nguồn/test/tools +6 hồ sơ) vẫn working tree, không stage/commit/push. Các checkpoint “awaiting/blocker” dưới đây là lịch sử, không thay kết quả mới này.
+**Ranh giới kết luận:** Phase 2.9 đạt mục tiêu firmware upload + operational descriptor trên board/OnePlus đã kiểm. Chỉ OPERATIONAL_CANDIDATE, không READY, không I²C/frontend/tuning/PLP/DVB lock/MPEG-TS hoặc EEPROM/flash PASS. Không tự chuyển Phase 3.0, chạy vendor init hoặc upload nữa. UI diagnostic đã đóng, lease/worker cleanup hoàn tất; không có helper/capture chạy nền. HEAD 92a25b4 và 30 file thay đổi (24 nguồn/test/tools + 6 hồ sơ) vẫn working tree, không stage/commit/push. Các checkpoint “awaiting/blocker” dưới đây là lịch sử, không thay kết quả mới này.
 
 ## Phase 2.9 — SOFTWARE_READY_AWAITING_HARDWARE_APPROVAL sau UID split/no-clamp
 
@@ -159,7 +201,7 @@ Giữ cả hai NEW_APPROVAL_CONSUMED/failure ở ledger, hiện 8 records (enrol
 
 ## Phase 2.9 — SOFTWARE_READY_AWAITING_HARDWARE_APPROVAL sau sửa legacy-frame, 2026-11-05
 
-**Chưa có firmware upload mới hoặc operational descriptor.** Transaction đã duyệt bên dưới tiêu thụ GUID ở host rồi dừng trước native; không được dùng lại approval/ID đó. Lỗi stale-frame đã sửa và kiểm lại trong cùng Phase 2.9: helper lọc prior challenge/run trước fields bắt buộc, current malformed vẫn deny trước reservation/grant; fixture dùng đúng old request/permit/RAW report. Mock PASS 45 negative checks/7 production cases/132 loops. Thêm fix giữ AUDIT_FAILED suppressed ở final full-length release+detach để không tiếp observation sai.
+**Chưa có firmware upload mới hoặc operational descriptor.** Transaction đã duyệt bên dưới tiêu thụ GUID ở host rồi dừng trước native; không được dùng lại approval/ID đó. Lỗi stale-frame đã sửa và kiểm lại trong cùng Phase 2.9: helper lọc prior challenge/run trước fields bắt buộc, current malformed vẫn deny trước reservation/grant; fixture dùng đúng old request/permit/RAW report. Mock PASS 45 negative checks/7 production cases/132 loops. Thêm fix giữ AUDIT_FAILED suppressed ở final full-length release + detach để không tiếp observation sai.
 
 **Mã cuối được kiểm mới:** JVM 257 methods PASS, app/library instrumentation 46/37 rerun PASS, service 2 PASS trước đó không đổi; debug/release/lint PASS 0 errors/10 warnings. Baseline fake mới ACK p50/p95/p99/max 364/452/472/474 ms; ba lượt mã cuối liên tiếp 132/132 PASS: 363/436/451/457, 367/453/461/468, 364/447/464/466 ms. Tổng Android 54.124/54.714/51.845 ms; max request-start→dispatch 494,749 ms. Mỗi lượt fake/full-length 132, audit 264, raw files/reads 2/2, USB thật 0; không gộp với FAIL hoặc benchmark trước. Giữ ACK 1500/heartbeat 2000/USB 2000/TTL 300000 ms, không nới deadline.
 
@@ -169,7 +211,7 @@ Giữ cả hai NEW_APPROVAL_CONSUMED/failure ở ledger, hiện 8 records (enrol
 
 **Phê duyệt đã được cấp riêng và đã bị tiêu thụ ở host; không có firmware write mới.** Người dùng chọn `approve_one` và xác nhận điều kiện vật lý hiện tại; tiếp đó xác nhận sẵn sàng tự bấm UI trên OnePlus. Debug APK được cập nhật tại chỗ, preferences production so trước/sau vẫn giữ nguyên legacy `consumed=true`. Không uninstall/clear production, không đổi nguồn/OTG hoặc host.
 
-**Fresh preflight đã quan sát:** OnePlus GM1900/API30/boot đã pin, pin 100% lúc bắt đầu; quyền USB được cấp mới. Raw mới dài 189 byte, COMPLETE_RETURNED_TREE, MATCH/BOOTSTRAP_CANDIDATE/FX2_DEFAULT, hash `e2887bad8b5a0e8dcaaa69bd636a01a2d11e53fe4b532b5b14828a2d3df952de`, open/read/close 1/1/1, claim/release/transfer 0/0/0. File SAF local đúng 8.192 byte và hash khóa; metadata source/entry được kiểm lại sau tránh IME sửa chữ, không coi UI nhập sai ban đầu là ảnh hợp lệ.
+**Fresh preflight đã quan sát:** OnePlus GM1900/API 30/boot đã pin, pin 100% lúc bắt đầu; quyền USB được cấp mới. Raw mới dài 189 byte, COMPLETE_RETURNED_TREE, MATCH/BOOTSTRAP_CANDIDATE/FX2_DEFAULT, hash `e2887bad8b5a0e8dcaaa69bd636a01a2d11e53fe4b532b5b14828a2d3df952de`, open/read/close 1/1/1, claim/release/transfer 0/0/0. File SAF local đúng 8.192 byte và hash khóa; metadata source/entry được kiểm lại sau tránh IME sửa chữ, không coi UI nhập sai ban đầu là ảnh hợp lệ.
 
 **Blocker tái hiện:** Sau challenge v2 mới và GUID mới được cấp sau approval, helper đã append `NEW_APPROVAL_CONSUMED` rồi dừng ở StrictMode khi gặp request legacy còn trên app chỉ có `challenge,ordinal`, thiếu `approval_protocol/run_epoch`. Initial permit chưa được thay bằng grant mới; ACK/observation 0/0. Report vẫn là fresh raw READ_AND_CLOSED, không bootstrap report; app có 0 per-attempt preferences mới, 0 native audit/raw files theo run epoch mới. Host helper không có USB API; không có native hardware write mới hoặc CPU release.
 
@@ -240,7 +282,7 @@ profile 0x82 vẫn chỉ OPERATIONAL_CANDIDATE, không READY.
 
 **Trạng thái: `AWAITING_EXPLICIT_NEW_HARDWARE_APPROVAL`.** Không upload mới,
 không release/reset CPU, vendor/I²C/frontend/TS hoặc recovery nguồn.
-Tuner được liệt kê trên OnePlus/API30; raw default thiếu82 vẫn là recovery lịch sử,
+Tuner được liệt kê trên OnePlus/API 30; raw default thiếu 82 vẫn là recovery lịch sử,
 không phải phép đọc raw mới hoặc firmware thành công ngày 05-11.
 HEAD vẫn `d76bbfb63dd21d55af6ce27fdff0543eb500db72`; mọi sửa đổi chưa commit/push.
 
@@ -248,7 +290,7 @@ HEAD vẫn `d76bbfb63dd21d55af6ce27fdff0543eb500db72`; mọi sửa đổi chưa 
 
 Nếu muốn thử tiếp, cần duyệt riêng **một transaction mới** và cập nhật debug APK tại chỗ
 bằng cơ chế giữ app data, kiểm consumed trước/sau; không uninstall/clear hoặc chạy UTP
-vào app production. Preflight lại đúng TCP OnePlus GM1900/API30, boot/attachment epoch,
+vào app production. Preflight lại đúng TCP OnePlus GM1900/API 30, boot/attachment epoch,
 owner/pending/cleanup, permission, fingerprint raw mới và ảnh local.
 Nguồn phải được người dùng xác nhận lại: OnePlus USB Host qua OTG, không nguồn phụ/backfeed,
 không app khác giữ tuner. Không suy nguồn hiện tại từ xác nhận ngày 04-11.
@@ -284,18 +326,18 @@ FX2_DEFAULT, FIRMWARE_UPLOAD_INCOMPLETE và OPERATIONAL_CANDIDATE; không READY.
 Approval tests được tách storage/clock, không xóa attempt production.
 
 **Chứng cứ mới có phạm vi:** full JVM snapshot 249 methods PASS; build debug/release/lint
-exit 0, release DEX isolation/Java8/min21 đạt static. Injected library PortTest lượt đầu
+exit 0, release DEX isolation/Java 8/min 21 đạt static. Injected library PortTest lượt đầu
 5 tests PASS trên OnePlus nhưng không chạm USB. App tests dùng applicationId suffix riêng:
 lượt đầu 1/27 FAIL do assertion namespace, tiếp tục sửa trong phase.
 Benchmark Android app_process fake suite 13 PASS; lượt live đầu dừng trước handshake
 vì wrapper/helper chưa đồng bộ parameter. Đây không phải benchmark hoặc firmware PASS.
 Kết quả rerun cuối được bổ sung riêng sau kiểm chứng.
 
-**Phần cứng:** tuner được liệt kê trên đúng OnePlus GM1900/API30/USB Host qua Wireless ADB.
+**Phần cứng:** tuner được liệt kê trên đúng OnePlus GM1900/API 30/USB Host qua Wireless ADB.
 Production consumed=true đã kiểm chỉ đọc và không đổi sau instrumentation cách ly.
-Raw default thiếu82 là bằng chứng recovery ngày 04-11, chưa đọc raw mới ngày 05-11.
+Raw default thiếu 82 là bằng chứng recovery ngày 04-11, chưa đọc raw mới ngày 05-11.
 Không firmware/vendor/I²C/CPU/reset/nguồn/capture mới hoặc tái dùng approval cũ.
-Nguyên nhân sâu ACK24 vẫn UNVERIFIED; đã chứng minh lỗi phân loại/counters/test-store từ source.
+Nguyên nhân sâu ACK 24 vẫn UNVERIFIED; đã chứng minh lỗi phân loại/counters/test-store từ source.
 Timeline và readiness side-effect matrix: [RESEARCH.md](RESEARCH.md).
 
 **Gate:** hoàn tất phép đo live không USB và rerun phần mềm trước đề nghị hardware mới.
@@ -388,7 +430,7 @@ Quyết định và giới hạn: [ADR-020](DECISIONS.md); xác nhận chip mớ
 Trace được duyệt riêng có 3028 packets trên đúng tuner; hai lượt dual-reset do BDA tự phát,
 264/264 A0 completions SUCCESS, hai ảnh DATA đều đúng 8192 byte/hash khóa.
 7F92 không STALL trong điều kiện quan sát, nhưng chưa chứng minh nó là alias CPUCS.
-Descriptor Windows frame 6 thiếu82; frame 298 sau lượt đầu có IN82/81 ở alt0.
+Descriptor Windows frame 6 thiếu 82; frame 298 sau lượt đầu có IN 82/81 ở alt 0.
 Không có lệnh vendor/I²C từ agent; Windows tự khởi tạo và tự nạp hai lượt, không phải Android retry.
 
 Lượt trace 30 giây đầu rỗng vì reconnect muộn; chỉ sau phê duyệt mới mới đo 180 giây.
@@ -435,7 +477,7 @@ hoặc sửa references. Kết quả lịch sử 218 JVM/49 instrumentation khô
   Java 8/major 52 và release isolation đạt; runtime API 21/USB 16 KiB chưa chạy mới.
 - **Hardware NOT RUN:** không A0 IN/OUT, CPU reset/release, I²C, mode/configuration/alternate,
   EEPROM, frontend hoặc TS; không claim/open raw cycle mới. Wireless ADB được giám sát đúng OnePlus,
-  không pair lại hoặc dùng emulator. Firmware/descriptor sau nạp/IN82/readiness đều chưa có bằng chứng mới.
+  không pair lại hoặc dùng emulator. Firmware/descriptor sau nạp/IN 82/readiness đều chưa có bằng chứng mới.
 
 **Checkpoint sau đó:** người dùng đã duyệt và tự chuyển tuner sang cổng USB 2.0 Windows,
 không có nguồn phụ. Một lần mất TCP ADB đã dừng ngay; chỉ tiếp tục sau xác nhận nối lại.
@@ -475,24 +517,24 @@ Các mục Phase 2.7 bên dưới giữ nguyên như lịch sử, kể cả depe
 
 ## Phase 2.6 — Đã đọc raw descriptors; firmware/USB mode vẫn chưa xác minh, 2026-11-04 00:06 +07
 
-**Diagnostic chỉ đọc đã hoạt động trên OnePlus 7; blocker không phải chỉ do Android biểu diễn alternate. Chưa cho phép firmware/bridge bring-up.** Nhánh `chore/modernize-android-build`, HEAD và remote-tracking `df076d28dd8100d5caa363f1d866a274e3f2b636` (checkpoint Phase2.5 đã push); thay đổi Phase2.6 chưa stage/commit/push, không reset/merge. Ba references giữ đúng SHA khóa và sạch.
+**Diagnostic chỉ đọc đã hoạt động trên OnePlus 7; blocker không phải chỉ do Android biểu diễn alternate. Chưa cho phép firmware/bridge bring-up.** Nhánh `chore/modernize-android-build`, HEAD và remote-tracking `df076d28dd8100d5caa363f1d866a274e3f2b636` (checkpoint Phase 2.5 đã push); thay đổi Phase 2.6 chưa stage/commit/push, không reset/merge. Ba references giữ đúng SHA khóa và sạch.
 
 - **Wireless ADB:** GM1900/API 30/state=device, dùng một serial TCP mới tra, không chọn alias mDNS hoặc emulator. Đã dừng một lần khi serial cũ mất; chỉ tiếp tục sau xác nhận, kiểm lại USB Host, attachment, permission và tạo owner mới. Kiểm kết nối mỗi 10 giây trong build/tests dài; không ghim IP/port vào Git.
 - **Permission thật:** người dùng tự Allow; thao tác 1/generation 1 nhận callback đúng một lần, correlation=true. Trạng thái trước cleanup là PERMISSION_GRANTED, sau là CLOSED, không open/claim. Đây là bằng chứng mới so với callback chưa chứng minh ở Phase 2.5.
 - **Raw cycle được duyệt một lần:** thao tác 2/generation 2, openDevice/getRawDescriptors/close đúng một lần, 13 ms trên worker, không claim/transfer, permission và identity hợp lệ, không pending/cleanup. Trả 189 bytes, SHA-256 `e2887bad8b5a0e8dcaaa69bd636a01a2d11e53fe4b532b5b14828a2d3df952de`; parser đọc đủ tree, không lỗi. Không lưu raw bytes/serial/path vào Git.
-- **Descriptor mới:** bcdUSB=0200, bcdDevice=0001, EP0 packet=64, device class=FF; configuration value=1, wTotalLength=171, bNumInterfaces=1, công suất khai báo 100 mA; interface ID 0 có alternate 0–3. Alternate 0 rỗng; alternate 1 có Bulk 01/81/02/04/86/88; alternate 2/3 giống metadata lịch sử. Cả 18 endpoint đều khớp giữa raw và metadata, không có IN82. Không suy alternate đang active, tốc độ thực, cold/warm hoặc 88=TS.
-- **Nguồn và mode:** official/C/Go đều chọn TS82, load firmware ở probe/open; official “cold” là bảng ID, không đo firmware OnePlus. ZIP ChangeMode chính hãng chỉ có EXE; kiểm tra tĩnh thấy nhãn DVB-S/S2, DVB-T/T2 và BDA, không chứng minh đổi USB descriptors/firmware hoặc cơ chế khôi phục. Không chạy tool. Chi tiết ở [RESEARCH.md](RESEARCH.md).
+- **Descriptor mới:** bcdUSB=0200, bcdDevice=0001, EP0 packet=64, device class=FF; configuration value=1, wTotalLength=171, bNumInterfaces=1, công suất khai báo 100 mA; interface ID 0 có alternate 0–3. Alternate 0 rỗng; alternate 1 có Bulk 01/81/02/04/86/88; alternate 2/3 giống metadata lịch sử. Cả 18 endpoint đều khớp giữa raw và metadata, không có IN 82. Không suy alternate đang active, tốc độ thực, cold/warm hoặc 88=TS.
+- **Nguồn và mode:** official/C/Go đều chọn TS 82, load firmware ở probe/open; official “cold” là bảng ID, không đo firmware OnePlus. ZIP ChangeMode chính hãng chỉ có EXE; kiểm tra tĩnh thấy nhãn DVB-S/S2, DVB-T/T2 và BDA, không chứng minh đổi USB descriptors/firmware hoặc cơ chế khôi phục. Không chạy tool. Chi tiết ở [RESEARCH.md](RESEARCH.md).
 - **Phần mềm:** ba class raw mới chỉ trong `drivers/src/debug`, hai suites JVM debug; controller/activity/report thêm nút raw và cơ chế giữ quyền thao tác độc quyền. Không sửa production Session/Binding/Coordinator/Facade/Descriptors/registry. [ADR-017](DECISIONS.md) chốt capability riêng, không claim/transfer.
-- **PASS mới:** 199 JVM methods (TBS 168), 47 instrumentation tests (17+28+2) trên OnePlus/API 30, không failure/error/skipped. Debug/release build, lint 0 errors/9 warnings, Java 8/bytecode 52, native smoke/XML; release không chứa sáu class diagnostic. Regression cuối sau raw mất 2m2s/419 tasks; không dùng số 180/44 lịch sử thay kết quả mới. Xem [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md).
+- **PASS mới:** 199 JVM methods (TBS 168), 47 instrumentation tests (17 + 28 + 2) trên OnePlus/API 30, không failure/error/skipped. Debug/release build, lint 0 errors/9 warnings, Java 8/bytecode 52, native smoke/XML; release không chứa sáu class diagnostic. Regression cuối sau raw mất 2 m 2 s/419 tasks; không dùng số 180/44 lịch sử thay kết quả mới. Xem [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md).
 - **Cuối phiên:** UTP cài/gỡ app; đã cài lại debug APK và khởi động lạnh chỉ đọc metadata, generation 0/DETECTED, không pending/cleanup hoặc open/claim, permission=false. Không xin lại và không chạy raw lần hai. Bằng chứng raw trước đó được giữ trong hồ sơ và báo cáo session đã lọc.
 
-**BLOCKED/NOT RUN:** khả năng streaming, alternate đang active, firmware cold/warm và USB mode, hash/giấy phép/address map firmware thật, vendor/I²C/chip ID/tuner/TS, chạy ChangeMode/reset hoặc ghi configuration/alternate. Kế tiếp chỉ chuẩn bị tài liệu TBS về mode và cơ chế khôi phục, xác minh firmware và kế hoạch trước/sau trên cùng board được duyệt riêng. Giữ production IN82; không tự bước sang phase tiếp theo.
+**BLOCKED/NOT RUN:** khả năng streaming, alternate đang active, firmware cold/warm và USB mode, hash/giấy phép/address map firmware thật, vendor/I²C/chip ID/tuner/TS, chạy ChangeMode/reset hoặc ghi configuration/alternate. Kế tiếp chỉ chuẩn bị tài liệu TBS về mode và cơ chế khôi phục, xác minh firmware và kế hoạch trước/sau trên cùng board được duyệt riêng. Giữ production IN 82; không tự bước sang phase tiếp theo.
 
 ## Checkpoint phát hành Phase 2.5 — 2026-11-03 22:43 +07
 
 - Người dùng yêu cầu commit và push 14 file còn lại: 8 file mã nguồn/tests Phase 2.5 và 6 hồ sơ đã biên tập. Nhánh `chore/modernize-android-build`; preflight xác nhận local và origin cùng `dc50e7304941a7d01aa1d490c13fcf09683a01c9`, stage trống. Wireless ADB đã xác minh đúng GM1900/API 30, không thao tác USB.
 - Message: `feat: add permission-only USB preflight and private diagnostic reports`. Hash và kết quả push được xác minh từ Git sau thao tác; các mục “chưa commit/push” bên dưới là lịch sử trước checkpoint.
-- Không chạy lại build/tests trong tác vụ Git. Bằng chứng gần nhất vẫn là 180 unit methods, 44 instrumentation tests trên OnePlus/API 30, debug/release build và lint 0 errors/11 warnings. Connection cycle thật vẫn BLOCKED bởi profile thiếu IN82; không firmware hoặc vendor requests.
+- Không chạy lại build/tests trong tác vụ Git. Bằng chứng gần nhất vẫn là 180 unit methods, 44 instrumentation tests trên OnePlus/API 30, debug/release build và lint 0 errors/11 warnings. Connection cycle thật vẫn BLOCKED bởi profile thiếu IN 82; không firmware hoặc vendor requests.
 
 ## Checkpoint biên tập tài liệu — 2026-11-03 22:26 +07
 
@@ -507,7 +549,7 @@ Chỉ rà soát và sửa cách diễn đạt trong STATUS, ENVIRONMENT, DECISIO
 - **Quyền truy cập USB:** hộp thoại hệ thống thật đã hiện, người dùng tự chọn OK. Khi đọc lại, lượt đầu đã hết thời hạn 30 giây và receiver đã được dọn; callback count=0, open/claim=0. Sau khi làm mới, hasPermission=true; lượt chỉ yêu cầu quyền mới xác nhận quyền đã có sẵn và trạng thái PERMISSION_GRANTED trước khi dọn tài nguyên. Không tuyên bố callback cấp/từ chối quyền thật PASS. Sau UTP cài/gỡ kiểm thử, APK cuối được cài lại và metadata hiện permission=false; không tự yêu cầu lại hộp thoại.
 - **An toàn khi nhận connection và claim interface:** công cụ chẩn đoán chỉ bật chu kỳ khi metadata khớp profile (bộ điều kiện kiểm tra) mặc định; profile OnePlus hiện bị BLOCKED trước open. Nút chỉ yêu cầu quyền dùng cùng binding/coordinator và bảo đảm việc cấp quyền không dẫn đến nhận connection hoặc claim interface. Không gọi setInterface, setConfiguration, getRawDescriptors, controlTransfer, I²C, bulk, firmware hoặc reset.
 - **Báo cáo:** JSON chỉ có trong debug, tại `files/tbs5530-diagnostic.json`, đọc qua run-as; có timestamp/operation/generation, model/API, đầy đủ descriptors, permission/correlation count, state trước cleanup, counters/thread/duration/events và lý do chặn. Đây là các trường về thời điểm, thao tác, phiên, mô tả thiết bị, quyền, trạng thái và bộ đếm chẩn đoán. Không ghi path/device ID/serial/credentials. API 30 được kiểm thật, không nhầm compile 37.2 thành runtime 37.
-- **PASS mới:** **180 phương thức unit test** (drivers 166/usbxfer 1/dvbservice 13); **44 instrumentation tests** trên GM1900/API 30 (app 14 + drivers 28 + dvbservice 2), 0 failure/error/skipped. Debug/release APK và lint PASS: 0 errors/0 fatal/11 warnings; Java 8, bytecode 52; manifest/DEX của release không chứa công cụ chẩn đoán. Lượt cuối 4m32s/418 tasks: 36 executed, 382 up-to-date, với việc kiểm tra kết nối xuyên suốt.
+- **PASS mới:** **180 phương thức unit test** (drivers 166/usbxfer 1/dvbservice 13); **44 instrumentation tests** trên GM1900/API 30 (app 14 + drivers 28 + dvbservice 2), 0 failure/error/skipped. Debug/release APK và lint PASS: 0 errors/0 fatal/11 warnings; Java 8, bytecode 52; manifest/DEX của release không chứa công cụ chẩn đoán. Lượt cuối 4 m 32 s/418 tasks: 36 executed, 382 up-to-date, với việc kiểm tra kết nối xuyên suốt.
 
 **BLOCKED/NOT RUN:** open/claim(false)/release/close thật, rút thiết bị thật, đọc raw descriptors, vendor/firmware/frontend/lock/TS. Không ép claim alternate 1 hoặc nhận 88 là TS; cần nghiên cứu descriptor/trạng thái firmware và được duyệt phạm vi tiếp theo. [ADR-016](DECISIONS.md) ghi quyết định tách việc xin quyền khỏi nhận connection/claim interface và giới hạn bằng chứng.
 
@@ -550,7 +592,7 @@ Tác vụ biên tập sáu hồ sơ dự án nhằm tách các từ bị dính v
 - **Transport (lớp truyền dữ liệu):** Tbs5530ControlTransport chỉ được coordinator/binding cấp sau khi connection hiện tại đã được nhận và claim. Handle gắn với generation, tức số phiên hiện hành; không mở connection thứ hai hoặc đưa UsbDeviceConnection cho bên gọi. Mỗi lần gọi đều kiểm owner/token/claim/state trước và sau. Truyền thiếu dữ liệu, kết quả âm và lỗi không được tự thử lại, không công bố dữ liệu IN. Không tự READY, thăm dò, reset hoặc nạp firmware.
 - **Lifecycle (vòng đời phiên):** tái sử dụng Session.transaction, giữ nguyên tính liên tục của cặp I²C 0x90/0x91. Detach, timeout logic và close vô hiệu hóa session ngay; release/close chờ giao dịch đang chạy trả về. Chặn main thread trước khi lấy khóa; không cưỡng bức đóng hoặc giả định UsbRequest.cancel hủy được lời gọi đồng bộ.
 - **Descriptors (mô tả thiết bị):** metadata bất biến, chọn Bulk IN 0x82 theo interface ID 0/alternate/direction/type; từ chối trường hợp thiếu, trùng hoặc mâu thuẫn. Packet size 64/512 là giới hạn phần mềm của profile, không chứng minh tốc độ USB. Không chọn 0x81 chỉ vì đứng trước, không có TS reader hoặc tự gọi setInterface.
-- **PASS thực:** **177 phương thức kiểm thử đơn vị** (drivers 163/usbxfer 1/dvbservice 13), 0 failure/error; **30 instrumentation tests** (28 facade/control + 2 native/registry) trên AVD API 37/x86_64, 0 failure/error/skipped. APK debug PASS; lint 0 Error/0 Fatal/11 Warning. Lượt tổng hợp exit 0/8m8s/241 tasks: 50 executed, 191 up-to-date. Core Java 8/bytecode 52 và 5 lượt × 24 transport/concurrency tests đều PASS.
+- **PASS thực:** **177 phương thức kiểm thử đơn vị** (drivers 163/usbxfer 1/dvbservice 13), 0 failure/error; **30 instrumentation tests** (28 facade/control + 2 native/registry) trên AVD API 37/x86_64, 0 failure/error/skipped. APK debug PASS; lint 0 Error/0 Fatal/11 Warning. Lượt tổng hợp exit 0/8 m 8 s/241 tasks: 50 executed, 191 up-to-date. Core Java 8/bytecode 52 và 5 lượt × 24 transport/concurrency tests đều PASS.
 - **Giữ nguyên:** toolchain, dependencies, min 21/source-target 8, EP0 bytes/Bridge/FirmwarePlan, native/JNI, driver cũ, service/registry/XML/TCP. Ba repository tham khảo giữ SHA khóa và sạch. Instrumentation dùng fake Manager/RawConnection; wrapper gọi UsbDeviceConnection.controlTransfer **chưa được kích hoạt trên phần cứng**.
 
 **Kế hoạch 2.4B:** [RESEARCH.md](RESEARCH.md) có danh sách kiểm tra môi trường/nguồn/OTG → nhận diện thiết bị → quyền do người dùng cấp → open/claim(false) → release/close, bảng bằng chứng và điều kiện dừng. Cần chọn Android Host cụ thể và phê duyệt riêng từng phạm vi. Chưa tạo hoặc chạy điểm vào chẩn đoán cho USB thật. [ADR-014](DECISIONS.md) ghi thiết kế quyền sở hữu và bên sở hữu trong tương lai.
@@ -591,7 +633,7 @@ Tác vụ biên tập sáu hồ sơ dự án nhằm tách các từ bị dính v
 - **Nguy cơ tái hiện trước khi sửa:** hai kiểm thử fake blocked transfer + detach/cancel đều FAIL trên baseline vì Bridge giữ session monitor. Sau khi sửa, việc vô hiệu hóa lifecycle không phải đợi giao dịch vật lý hoàn tất; cleanup không đóng connection còn được transaction sử dụng.
 - **Kiến trúc:** Session có khóa giao dịch riêng và state lock ngắn; cặp 0x90/0x91 vẫn atomic (không bị giao dịch khác xen ngang). Close/cancel/detach vô hiệu hóa ngay, chặn giao dịch mới, hoãn cleanup tới giao dịch cuối đang chạy và thực hiện ngoài cả hai khóa. `isCleanupPending`/`getCleanupFailure` phân biệt việc vô hiệu hóa với cleanup hoàn tất. Không cưỡng bức hủy synchronous I/O.
 - **Coordinator mới:** các cổng chỉ dùng JVM cho permission/open/claim; request gắn generation + attachment identity, không chỉ VID/PID. Callback trùng/sai/cũ không acquire. Lease thuộc coordinator cho tới khi Session nhận; trường hợp acquire bị từ chối hoặc mới hoàn tất một phần được cleanup riêng đúng một lần. Không có Android framework binding/permission dialog/USB transport, không tự READY.
-- **PASS thực:** **126 phương thức kiểm thử đơn vị** (drivers 112/usbxfer 1/dvbservice 13), 0 failures/errors; APK debug PASS; lint 0 errors/0 fatal/11 warnings. Lượt Gradle cuối: 2m23s/177 tasks, 41 executed, 136 up-to-date. 10 phương thức kiểm thử đồng thời chạy độc lập 5 lượt, cả 5 PASS, gồm 200 vòng detach/cancel có điều phối bằng latch. Core/tests compile `javac --release 8`, bytecode 52. Xem [TEST-MATRIX.md](TEST-MATRIX.md) và [WORKLOG.md](WORKLOG.md).
+- **PASS thực:** **126 phương thức kiểm thử đơn vị** (drivers 112/usbxfer 1/dvbservice 13), 0 failures/errors; APK debug PASS; lint 0 errors/0 fatal/11 warnings. Lượt Gradle cuối: 2 m 23 s/177 tasks, 41 executed, 136 up-to-date. 10 phương thức kiểm thử đồng thời chạy độc lập 5 lượt, cả 5 PASS, gồm 200 vòng detach/cancel có điều phối bằng latch. Core/tests compile `javac --release 8`, bytecode 52. Xem [TEST-MATRIX.md](TEST-MATRIX.md) và [WORKLOG.md](WORKLOG.md).
 - **Các mức sẵn sàng riêng biệt:** permission, connection, claim, firmware-upload event, bridge ready, frontend-initialized event, signal lock và streaming không tự thay thế nhau. Chưa có firmware executor/probe/frontend production; các event là fake/caller input.
 - **Không đổi:** protocol bytes, FirmwarePlan, JNI/native, driver cũ, registry/XML, TCP ordinals, toolchain/dependencies; ba repository tham khảo giữ SHA khóa/sạch. Instrumentation **NOT RUN** vì chỉ sửa JVM core chưa được nối vào Android runtime; PASS Phase 2.1 là bằng chứng lịch sử, không phải lần chạy mới này.
 
@@ -611,7 +653,7 @@ Tác vụ biên tập sáu hồ sơ dự án nhằm tách các từ bị dính v
 **Đã hoàn tất phạm vi offline, chưa hỗ trợ phần cứng TBS5530.** Nhánh `feat/tbs5530-offline-protocol`, HEAD nền `8588ee7661003052b7d1a0353e23bb3a3dcef8b5`. Nhánh được tạo từ checkpoint Phase 2.0 sạch; modernization giữ nguyên `4cf1b64`. Có tám file Java mới và năm hồ sơ cập nhật, **chưa stage/commit/push**.
 
 - **Đã triển khai:** `Tbs5530ControlIo` là giao diện thay thế được bằng fake; `Tbs5530Bridge` mã hóa EP0/I²C và chọn descriptor Bulk IN 0x82; `Tbs5530FirmwarePlan` kiểm dữ liệu giả và tạo kế hoạch bất biến; `Tbs5530Session` quản lý trạng thái, generation và quyền sở hữu tài nguyên. Không có implementation gọi Android USB/JNI, uploader hoặc registry entry.
-- **PASS thực:** 52 phương thức kiểm thử mới (Bridge 17/Firmware 19/Session 16), tổng **83 phương thức** trong drivers 69/usbxfer 1/dvbservice 13, không có failure/error; APK debug và lintDebug **0 errors, 11 warnings**. Lượt Gradle cuối exit 0, 1m45s, 177 tasks: 41 executed/136 up-to-date. Bốn core class compile riêng bằng `javac --release 8`, class version 52; không cần Android SDK/JNI trên classpath. Chi tiết lệnh và kết quả ở [WORKLOG.md](WORKLOG.md), [TEST-MATRIX.md](TEST-MATRIX.md).
+- **PASS thực:** 52 phương thức kiểm thử mới (Bridge 17/Firmware 19/Session 16), tổng **83 phương thức** trong drivers 69/usbxfer 1/dvbservice 13, không có failure/error; APK debug và lintDebug **0 errors, 11 warnings**. Lượt Gradle cuối exit 0, 1 m 45 s, 177 tasks: 41 executed/136 up-to-date. Bốn core class compile riêng bằng `javac --release 8`, class version 52; không cần Android SDK/JNI trên classpath. Chi tiết lệnh và kết quả ở [WORKLOG.md](WORKLOG.md), [TEST-MATRIX.md](TEST-MATRIX.md).
 - **An toàn đã kiểm bằng fake:** không tự thử lại khi lỗi/timeout/truyền thiếu dữ liệu; session lỗi chặn I/O tiếp, cặp 0x90/0x91 không bị xen ngang, detach trong callback không gửi nửa read còn lại; lỗi firmware tại từng bước không dẫn đến READY; cleanup theo cancel → release → close đúng phần tài nguyên đã sở hữu, chỉ một lần.
 - **Nguồn giữ nguyên, working tree sạch khi kiểm lại:** TBS `2ce787de9f6e81b4294692a45de15596ae2e1322`; C `c5fa27eecbe80633cbb365cc44656daea1c0e2e3`; Go `11228b05fb1626bf41c4e1879ace10cd0a8d575c`. Không sửa references/toolchain/dependencies/driver cũ/API TCP.
 - **Giới hạn:** permission và READY là sự kiện do bên gọi cung cấp, chưa có adapter quyền Android hoặc bước thăm dò mức sẵn sàng; cancellation không cưỡng bức ngắt giao dịch đồng bộ đang chạy. Chip/PLP chỉ là dữ liệu kiểm thử chính sách, chưa có lập trình thanh ghi. Firmware thật, reconnect Android, USB transfer/native cancellation, lock và TS đều **NOT RUN**; nguồn gốc/quyền phân phối firmware và bản đồ địa chỉ thật vẫn chưa duyệt.
@@ -697,7 +739,7 @@ Nguồn khóa SHA, sơ đồ, phương án phục hồi, danh sách file và ti�
 - **PASS thực instrumentation:** `:dvbservice:connectedDebugAndroidTest` không filter, XML **2 tests/0 fail/0 error**: registry/XML equivalence và native library smoke. `UsbHiSpeedBulk.IS_PLATFORM_SUPPORTED=true`, gọi trực tiếp `System.loadLibrary("UsbXfer")` thành công trên x86_64; không tạo USB requests hoặc ioctl. Runtime 16 KiB/arm64/USB thật chưa thử.
 - **Lỗi giao diện phát hiện và đã sửa:** target 37 vẽ dưới system bars, che hàng tune/status text và đặt Close sát gesture bar. Helper `SystemBarInsets` áp dụng insets systemBars/displayCutout cho 3 Activity, chỉ API 35+; có screenshot + UI bounds trước/sau. Không đổi tuner/service/protocol, không tắt edge-to-edge bằng biện pháp né targetSdk.
 - **Vấn đề môi trường:** lần khởi động đầu có ANR `com.android.systemui` (không phải app); chọn Wait qua UI và lớp phủ biến mất. App exit-history chỉ có PACKAGE UPDATED do cài APK đã sửa; chưa chứng minh emulator không có lỗi SystemUI trên mọi lần khởi động.
-- **Build/lint/hồi quy:** build APK debug + test PASS; assembleDebug/lintDebug sau khi sửa PASS, lint 0 error/11 warnings; xác minh unit task PASS/32s, 39 UP-TO-DATE (không gọi là chạy lại 31 test). Toolchain giữ Gradle 9.8.2/AGP 9.4.1/JDK 25/compile 37.2/target 37/min 21/NDK 30/CMake 4.1.2/BT 37.
+- **Build/lint/hồi quy:** build APK debug + test PASS; assembleDebug/lintDebug sau khi sửa PASS, lint 0 error/11 warnings; xác minh unit task PASS/32 s, 39 UP-TO-DATE (không gọi là chạy lại 31 test). Toolchain giữ Gradle 9.8.2/AGP 9.4.1/JDK 25/compile 37.2/target 37/min 21/NDK 30/CMake 4.1.2/BT 37.
 - **Workspace/instructions:** ngoại lệ `!TBS5530.code-workspace` và file workspace đã có local trước Phase 1.1, giữ nguyên byte/hash; 4 root dùng đường dẫn tương đối đều phân giải đúng, file untracked được phép add (chưa stage). Cập nhật 2 file hướng dẫn bằng tiếng Anh để bỏ snapshot toolchain cũ; giữ chính sách Windows/WSL/usbipd/MCP.
 - **Kiểm lại reference chỉ đọc:** SHA TBS 2ce787de9f6e81b4294692a45de15596ae2e1322, C c5fa27eecbe80633cbb365cc44656daea1c0e2e3, Go 11228b05fb1626bf41c4e1879ace10cd0a8d575c không đổi. TBS vẫn thiếu index/81399 D và thiếu 3 file source bắt buộc; C/Go sạch. Không sync/reset/restore hoặc chạy lệnh phần cứng.
 
@@ -709,7 +751,7 @@ Nguồn khóa SHA, sơ đồ, phương án phục hồi, danh sách file và ti�
 
 - Người dùng yêu cầu tạo commit cho các thay đổi nâng build và bộ hồ sơ/công cụ TBS5530. Message chọn: `chore: prepare TBS5530 development with JDK 25`.
 - Nhánh `chore/modernize-android-build`; origin hiện trỏ fork `trankien84/AndroidDvbDriver` qua SSH, upstream giữ `signalwareltd/AndroidDvbDriver`. Khác origin lúc audit đầu vì cấu hình đã đổi ngoài tác vụ này; không tự sửa remotes.
-- Kiểm trước commit: lệnh build unit/debug exit 0/59s, 107 tasks (8 executed/99 UP-TO-DATE); unit tasks dùng kết quả còn hợp lệ, không gọi là chạy lại toàn bộ phương thức kiểm thử. Báo cáo 31 methods, 0 fail và lint 0 errors/11 warnings từ migration vẫn là bằng chứng gần nhất.
+- Kiểm trước commit: lệnh build unit/debug exit 0/59 s, 107 tasks (8 executed/99 UP-TO-DATE); unit tasks dùng kết quả còn hợp lệ, không gọi là chạy lại toàn bộ phương thức kiểm thử. Báo cáo 31 methods, 0 fail và lint 0 errors/11 warnings từ migration vẫn là bằng chứng gần nhất.
 - Chỉ đóng gói source/build configs/tests, quy tắc ignore firmware/captures, hướng dẫn/skills, tasks, scripts và 6 hồ sơ dự án; không có binaries build/caches/firmware/TS/logs hay reference repos. Workspace `.code-workspace` vẫn bị ignore, không force-add.
 - Không push trong tác vụ commit; dùng `git log -1` để lấy hash thực tế sau khi hoàn tất. Các snapshot “chưa commit” bên dưới là lịch sử trước checkpoint. Hành động kế tiếp vẫn kiểm thử Android runtime không tuner; không tự thay hardware.
 

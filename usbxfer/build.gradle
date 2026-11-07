@@ -38,7 +38,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            externalNativeBuild.cmake.arguments '-DTBS5530_USBFS_DIAGNOSTIC=ON'
+        }
         release {
+            externalNativeBuild.cmake.arguments '-DTBS5530_USBFS_DIAGNOSTIC=OFF'
             minifyEnabled = false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }

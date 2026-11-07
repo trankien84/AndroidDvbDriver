@@ -28,6 +28,12 @@ try {
     & $path -Serial 'offline-fixture' -ExpectedModel GM1900 -ExpectedApi 30 -ExpectedBootCount 1 -GrantBoundedSession -ProofOfGuardPassed -AdbPath (Join-Path $PSScriptRoot 'no-such-adb.exe')
     throw 'Expected missing ADB refusal.'
 } catch { if ($_.Exception.Message -cne 'Không tìm thấy ADB đã chọn.') { throw } }
+foreach ($api in @('QUEUED_USB_REQUEST_8X4096', 'NATIVE_USBFS_URB_8X4096')) {
+    try {
+        & $path -Serial 'offline-fixture' -ExpectedModel GM1900 -ExpectedApi 30 -ExpectedBootCount 1 -GrantBoundedSession -ProofOfGuardPassed -ReadApi $api
+        throw 'Expected experimental-profile refusal.'
+    } catch { if ($_.Exception.Message -cne 'BLOCKED: diagnostic receive chỉ thuộc EXPERIMENTAL_DIAGNOSTIC.') { throw } }
+}
 foreach ($case in @(
     @{ PhysicalRecoveryEpoch = '11111111-1111-4111-8111-111111111111'; Expected = '^BLOCKED: physical recovery epoch' },
     @{ PhysicalRecoveryEpoch = 'malformed'; PhysicalRecoveryConfirmed = $true; Expected = '^BLOCKED: physical recovery epoch' },
@@ -40,14 +46,16 @@ foreach ($case in @(
         throw 'Expected physical recovery refusal.'
     } catch { if ($_.Exception.Message -notmatch $expected) { throw } }
 }
-if ($text -match 'NewGuid' -or -not $text.Contains('$grant.physical_recovery_epoch = $PhysicalRecoveryEpoch')) {
-    throw 'Recovery epoch must come from the operator, not a generated per-attempt nonce.'
+$guidLines = @($text -split "`n" | Where-Object { $_ -match 'NewGuid' })
+if (@($guidLines | Where-Object { $_.Trim() -cne '$preflightToken = [guid]::NewGuid().ToString()' }).Count -ne 0 -or
+    -not $text.Contains('$grant.physical_recovery_epoch = $PhysicalRecoveryEpoch')) {
+    throw 'Only permission correlation may generate a nonce; recovery epoch must come from the operator.'
 }
 $exitFunction = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Get-TBS5530AutonomousExitCode' }, $true)
 if ($null -eq $exitFunction) { throw 'Missing terminal exit classifier.' }
 Invoke-Expression $exitFunction.Extent.Text
 foreach ($case in @(
-    @{ result = 'STRUCTURE_CONFIRMED'; cleanup = 'DRAIN_CONFIRMED'; state = 'REPORT'; structure_confirmed = $true; expected = 0 },
+    @{ result = 'STRUCTURE_CONFIRMED'; cleanup = 'DRAIN_CONFIRMED'; state = 'REPORT'; structure_confirmed = $true; ts_smoke_pass = $true; expected = 0 },
     @{ result = 'STRUCTURE_CONFIRMED'; cleanup = 'DRAIN_NOT_CERTIFIED'; state = 'REPORT'; structure_confirmed = $true; expected = 1 },
     @{ result = 'STRUCTURE_CONFIRMED'; cleanup = 'DRAIN_CONFIRMED'; state = 'ERROR_UNCERTAIN'; structure_confirmed = $true; expected = 1 },
     @{ result = 'STRUCTURE_CONFIRMED'; cleanup = 'DRAIN_CONFIRMED'; state = 'REPORT'; structure_confirmed = $false; expected = 1 },
@@ -63,5 +71,7 @@ foreach ($case in @(
 if ((Get-TBS5530AutonomousExitCode $null) -ne 1 -or (Get-TBS5530AutonomousExitCode ([pscustomobject]@{})) -ne 1) {
     throw 'Missing report must not indicate success.'
 }
+$structureOnly = [pscustomobject]@{ result='STRUCTURE_CONFIRMED'; cleanup='DRAIN_CONFIRMED'; state='REPORT'; structure_confirmed=$true; ts_smoke_pass=$false }
+if ((Get-TBS5530AutonomousExitCode $structureOnly) -ne 1) { throw 'Structure alone must not pass the quality gate.' }
 if (-not $text.Contains('exit $exitCode') -or -not $text.Contains('if ($null -eq $terminalReport)')) { throw 'Missing explicit terminal/deadline exit gate.' }
 'PASS: cú pháp, pin serial, bounded grant/proof, physical recovery epoch, terminal exit codes, private namespace, heartbeat STOP và negative preflight; không chạy ADB.'

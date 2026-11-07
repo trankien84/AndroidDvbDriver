@@ -129,10 +129,13 @@ public final class Tbs5530AutonomousPolicy {
             throw new IOException("Invalid, duplicate or insufficient-budget attempt");
         ledger.append("ATTEMPT_CONSUMED", attempt, plan); attempts.add(attempt);
     }
-    public synchronized void beginUpload(String attempt) throws IOException {
+    public synchronized void requireUploadStartBudget() throws IOException {
         requireSession();
         if (state != State.FX2_DEFAULT || !permission || owner != null || uploads.contains(attachment)
                 || expires - time() < 285000) throw new IOException("Upload forbidden or insufficient start budget");
+    }
+    public synchronized void beginUpload(String attempt) throws IOException {
+        requireUploadStartBudget();
         ledger.append("FIRMWARE_CONSUMED", attempt, Tbs5530FirmwareValidation.SHA256);
         uploads.add(attachment); uploading = true; dispatchOrdinal = nativeOrdinal = 0; state = State.FIRMWARE_BOOTSTRAP;
     }
