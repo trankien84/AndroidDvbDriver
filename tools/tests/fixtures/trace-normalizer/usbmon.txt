@@ -1,0 +1,5 @@
+# Synthetic usbmon only. No device trace or firmware.
+a 100 S Bi:1:2:2 -115 4096 <
+a 101 C Bi:1:2:2 -75 0
+b 102 S Co:1:2:0 s 40 8a 0000 0000 0002 2 = 0a00
+b 103 C Co:1:2:0 0 2

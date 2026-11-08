@@ -3,8 +3,8 @@
 ## Scope and project identity
 
 - **Editable repository:** this `AndroidDvbDriver/` fork only. Maintain unrooted stock-Android USB DVB support; prioritize TBS5530 DVB-T2 without regressing current drivers. Do not assume DVB-C/S/S2/S2X is implemented merely because expansion is planned.
-- **Read-only sibling references:** `../references/tbs-linux_media` (official TBS Linux), `../references/cxd28xx` (community C) and `../references/coax` (Go userspace). Never edit, stage, commit, or format reference trees. Display labels are not filesystem permissions.
-- `TBS5530.code-workspace` and `tools/` belong to this Git repository. The workspace must resolve all four roots using relative paths. Preserve `!TBS5530.code-workspace` in `.gitignore`.
+- **Read-only sibling references:** `../references/tbs-linux_media` (official TBS Linux), `../references/cxd28xx` (community C), `../references/coax` (Go userspace), and `../references/coreelec-linux-amlogic` (CoreELEC/Amlogic Linux kernel TBS5530/CXD2878 implementation). Never edit, stage, commit, or format reference trees. Display labels are not filesystem permissions.
+- `TBS5530.code-workspace` and `tools/` belong to this Git repository. The workspace must resolve all five roots using relative paths. Preserve `!TBS5530.code-workspace` in `.gitignore`.
 - Respect global user instructions for MCP Proxy discovery, AgentMemory, GitNexus, PowerShell/Git Bash and security. Do not create per-project direct MCP connections or store credentials.
 
 ## Source of truth and toolchain freshness
@@ -25,6 +25,7 @@
 - Use ADB MCP via the existing MCP Proxy for emulator/device interaction when appropriate. Always inspect tool discovery results and the device serial. Emulator UI and native-library smoke tests do NOT prove the TBS5530 hardware driver.
 - **Wireshark and USBPcap are already installed on the Windows development machine (user-confirmed).** Detect executable paths, versions, capture interfaces, permissions and USBPcap driver health at runtime. Do not reinstall, update or reconfigure them automatically. USB capture and any USB ownership/driver changes need task-specific consent; see `.github/instructions/usb-capture-windows.instructions.md`.
 - **TSDuck is already installed on Windows.** For Windows DVB-T2/BDA tuner discovery, bounded MPEG-TS capture, service/PID/TEI/continuity/PCR analysis, or Windows-versus-Android streaming diagnostics, prefer TSDuck CLI (`tslsdvb`, `tsp`, `tsanalyze`, `tsbitrate`) and read `.github/instructions/tsduck-windows.instructions.md` before running it. Keep all TSDuck logs, TS captures, analysis reports and relevant traces under `D:\TSDuck`, outside Git; verify the installed tool/version and do not reinstall or change the BDA driver automatically.
+- **CoreELEC is a read-only source reference, not a replacement for the stock Android USB Host runtime.** For TBS5530 FX2/firmware, I2C, Sony CXD2878/CXD6802, DVB-T2 PLP, frontend TS output, FIFO/stream selection or Bulk IN `0x82` investigations, compare CoreELEC's Linux implementation with TBS official, community C, Go, and the current Android port. Read `.github/instructions/coreelec-driver-research.instructions.md` and use `.github/skills/tbs-research/SKILL.md` for the repeatable evidence workflow. Existence of source support is not proof of a successful CoreELEC hardware run.
 
 ## Language and records
 
@@ -36,10 +37,10 @@
 
 ## Hardware and repository safety
 
-- TBS5530 VID:PID `734c:5530`; device enumeration and WSL/PyUSB interface claim were historically observed. Firmware, I²C, DVB lock and TS reception on Android are NOT verified without new tests.
+- TBS5530 VID:PID `734c:5530`; device enumeration and WSL/PyUSB interface claim were historically observed. Firmware, I²C, DVB lock and TS reception on Android are NOT verified without new tests. **Use newest dated records for actual hardware achievements**; do not let stale summaries override later firmware, K36 lock or URB failure evidence.
 - Hardware changes require an explicit plan and approval. A user-approved, bounded development session may authorize the exact verified TBS5530 RAM/bootstrap, terrestrial init/K36 AUTO/status/stream-select and receive-only operations as a group; follow `.github/instructions/autonomous-debug.instructions.md`, prove the guards before live execution, and do not ask again for every ordinal or exact-plan attempt inside that unchanged grant. This is not standing permission for future sessions, arbitrary writes, power-cycle, LNB, driver changes, USB ownership changes or WSL reset. Resolve the current BUSID using `usbipd list` before any separately approved ownership change; never hardcode the historical `6-2`. See `.github/instructions/usbipd-wsl.instructions.md`.
-- Official TBS driver is first hardware-protocol reference; compare community C and Go userspace implementations with SHA/file/function provenance, never assume newest community code is correct.
-- Keep TBS source synchronization opt-in, outside active debugging. `tools/Sync-TBS5530-Repositories.ps1 -CheckOnly` may fetch; treat it as a network operation, not read-only. Do not auto-reset, rebase, merge or push repositories. Preserve six TBS sparse-checkout paths and review Git index health before repair.
+- Official TBS driver is first hardware-protocol reference. Add CoreELEC as an **independent Linux integration/differential reference**, not as proof the device works on all Amlogic boxes or as a substitute for runtime traces. Compare community C and Go userspace implementations with SHA/file/function provenance; never assume newest community code is correct. Pay special attention to USB initialization versus demod lock and TS output/FIFO/URB scheduling, keeping source facts separate from runtime evidence.
+- Keep reference synchronization opt-in and outside active debugging. The sync script accepts only direct invocation or `-CheckOnly`; check-only may fetch healthy repositories and is not offline. Direct invocation automatically clones, repairs eligible empty sparse clones with backup and updates clean references in one pass; no selector/recovery/watch flags are required. Do not automatically run the script as a side effect of coding, reset/rebase/push, overwrite local edits or change active project branches. Preserve six TBS sparse directories and CoreELEC file-scoped sparse patterns. See `.github/instructions/repository-sync.instructions.md`.
 - License/copyright and firmware redistributability require independent review. Keep secret-bearing files, APKs, captured TS, raw logs, local SDK and firmware blobs out of Git.
 
 ## Scoped instructions and reusable skills
@@ -47,4 +48,5 @@
 - Existing: `android-build`, `usb-hardware`, `usbipd-wsl`, `adb-mcp`, `repository-sync`, `project-records` under `.github/instructions/`.
 - New: `.github/instructions/toolchain-lifecycle.instructions.md`, `.github/skills/toolchain-audit/SKILL.md`.
 - Additional scoped tool guidance: `.github/instructions/tsduck-windows.instructions.md` for Windows BDA tuner operations and MPEG-TS analysis; use it whenever the task involves TSDuck, including command-line-only tasks not covered by a file glob.
+- CoreELEC differential research guidance: `.github/instructions/coreelec-driver-research.instructions.md`; use it for source comparisons even if no `applyTo` glob is active. Reusable workflow: `.github/skills/tbs-research/SKILL.md`.
 - Existing: `.github/skills/tbs-research/SKILL.md` and `project-handoff/SKILL.md`. Preserve all global Copilot customization.

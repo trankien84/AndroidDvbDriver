@@ -1,5 +1,45 @@
 # Architecture decision record (ADR)
 
+## ADR-031 — Phase 3.1: đối chứng Linux operational-only, không bootstrap thiết bị đã chạy
+
+**Date:** 2026-11-09
+
+**Status:** Đã triển khai, kiểm offline và chạy hai lượt runtime hữu hạn theo quyền continuation lúc 00:41 +07. Chưa có TS Linux hoặc root-cause proof; không snapshot hoặc mặc định PASS.
+
+**Context:** Thiết bị đang operational sau Windows, descriptor đã kiểm trong guest. Diagnostic cũ luôn yêu cầu bootstrap nên chưa giải quyết cold/handoff/replay. Nạp lại RAM chỉ để chạy Linux sẽ thêm rủi ro và một biến không cần thiết.
+
+**Decision:** Thêm mode operational-only tách khỏi bootstrap: không A0/request_firmware, exact VID:PID/HS/descriptor/config/alt/endpoint/bus/dev từ quan sát mới. Một lần probe tiêu thụ cùng host/guest ledger chống reload/rebind, fail-stop mọi control sau short/error, chỉ known bridge/I²C và terrestrial stream. Lease heartbeat/consent/deadline, giới hạn nhận và process-context drain; không resubmit sau lỗi/zero/budget. Giữ queue 8×65536, Sony bytes và K36/8 MHz/PLP0 để không gộp buffer/register/PLP experiments.
+
+**Execution bounds:** Trace trước probe trên đúng bus, session module tối đa 120 giây, receive 10 giây/32 MiB; receiver riêng chờ lock 10 giây, receive 10 giây/16 MiB, watchdog 28 giây và outer guest 85 giây. Chỉ unload sau telemetry drain xác nhận; uncertain thì giữ ledger/quarantine và không retry/reset. Module params không thay quyền runtime; scope mới của người dùng cùng thông báo/ready khi handoff được ghi riêng.
+
+**Limits / rollback:** Descriptor profile không chứng minh RAM firmware hash hoặc trạng thái điện. Không satellite/LNB/DC, binding Windows, kernel/media stack hoặc snapshot. Nếu profile/owner đổi, dừng; không tự bootstrap để cứu. Chỉ unload modules do phiên tạo khi drain sạch, thu evidence và bàn giao owner sau thông báo. Mọi kết luận Linux/Android cần raw trace/TS, không suy từ build.
+
+**Kết quả runtime 01:19–01:44 +07:** đã chạy strict rồi một đối chứng có đúng một empty-success credit trên epoch vật lý mới, không sửa ledger cũ. Cả hai khóa K36 nhưng không TS; strict dừng sau 82/0 byte, credit1 resubmit thật và chờ đủ 10 giây vẫn không có byte TS. Lỗi -61/-110 là policy terminal của diagnostic, không phải HCD báo -75/-71. Vì thế chưa xác nhận nguyên nhân; không tăng credit/buffer hoặc replay. Tuner đã trả Windows/PnP OK/Shared, guest modules/usbmon sạch, no-snapshot giữ nguyên.
+
+**Thay đổi policy có giới hạn:** `empty_success_credit=0` giữ mặc định strict; param chỉ nhận 0 hoặc 1 toàn phiên, không theo slot, không deliver zero, negative/unknown luôn terminal. First-RX/empty telemetry và 54 exact extracted completion checks bảo vệ hành vi; không dùng nó để nới lỗi USB âm. Đối chứng này đã hoàn tất, không tự tiếp tục mức credit cao hơn.
+
+**Bước mở lại:** readback/mapping 96–97 phải có exact plan; TBS chỉ xác nhận nhóm TS drive, chưa pin được bit 0 theo chân. Không xem broad consent là quyền phát vendor/register chưa hiểu, không sửa 54→55 hoặc 8A0400/0401 khi chưa đủ nguồn/rollback. Kết luận giữ ROOT_CAUSE_UNRESOLVED_WITH_NARROWED_SCOPE.
+
+## ADR-030 — Phase 3.1: đối chứng cold-start, requested length có provenance và Linux guest không snapshot
+
+**Date:** 2026-11-08
+
+**Status:** Đã thu bằng chứng Windows và kiểm offline; Linux guest build đang có phạm vi riêng được duyệt. ROOT_CAUSE_UNRESOLVED_WITH_NARROWED_SCOPE, chưa TS_SMOKE_PASS Android. HEAD `69090a0bcf00b4c6342ec075d90a74964b25ecc9`.
+
+**Context:** Trace Windows cũ bắt giữa phiên, thiếu setup và requested length. Android hai host có completion -75/-71, actual 0 nhưng syscall thành công; không đủ căn cứ sửa buffer hoặc quy lỗi RF/host. WSL có build symlink nhưng thiếu bộ Kbuild thật. Người dùng bổ sung VirtualBox/Ubuntu guest và SSH trong cùng phiên.
+
+**Decision:** Giữ Phase 3.1; dùng cold2 USBPcap từ trước attachment tới receive/cleanup và một lượt ETW USBPORT targeted riêng. Mọi field thiếu vẫn null; không ghép clock/epoch hoặc gán requested 8192 của ETW vào pcap khác. Linux official/CoreELEC 8 × 4096 vẫn là source fact, không phải Linux runtime PASS. Reg96–97 Windows `55` so Android source `54` là candidate A/B nhỏ, chưa patch; không replay IN B7/IN81/8A `0400/0401` chưa hiểu hoặc gộp PLP/drive/buffer vào một run.
+
+**Validation:** Normalizer và fixtures mới 67/67 trên mỗi PowerShell 7/5.1, ba native trace và cold2 đã chuyển đổi có provenance. JVM fresh 513/513, C fault injection GCC/MSVC ASan, build debug/release/lint PASS có phạm vi. Windows có TS thật nhưng mẫu dài có TEI/CC; không gọi quality PASS. Linux/VM/Android hardware mới chưa được suy từ tests này.
+
+**VM rollback decision:** Live snapshot được duyệt trước đó làm VM treo và thất bại `RPC_S_CALL_FAILED/0x800706be`. Người dùng yêu cầu không tạo snapshot VirtualBox nữa, tự phục hồi và cho phép tiếp tục cài dependency/build riêng mà không snapshot. Giữ nguyên lỗi và các file còn lại; không retry/restore/delete snapshot, xóa VDI, reset VM hoặc đổi kernel để chữa mù. Package inventory trước/sau và scratch build chỉ kiểm soát thay đổi nhỏ, không thay backup toàn VM. Cài/load module hoặc thay media stack phải có exact file plan/rollback riêng.
+
+**Alternatives / reopen trigger:** Không ép sửa kernel WSL thiếu headers trên diện rộng; dùng guest generic có headers trước. Workstation không cần cài thêm vì VirtualBox đã được người dùng triển khai. Chỉ xem xét analyzer USB 2.0 High-Speed khi Linux/VM và software traces không còn phân biệt được giả thuyết. Android fix cần phép thử đối ứng, tái lập và negative/recovery trước ROOT_CAUSE_CONFIRMED.
+
+**Bổ sung qua 09-11 — Linux diagnostic được duyệt, chưa runtime:** Official TBS/Beta minimum closure fail vendor API trên stock core; community C build nguyên trạng PASS nhưng default probe có M88/firmware vệ tinh, OUT B7/8A và không chứng minh LNB/DC tắt. Người dùng chọn chuẩn bị một biến thể diagnostic chỉ DVB-T2: opt-in fail-closed, exact VID:PID, kiểm firmware 8192 byte/SHA đã pin trước mọi write, không satellite path/B7/8A0801/LNB, giữ frontend terrestrial và queue tham chiếu. Chỉ được kiểm offline/build/ABI trong scratch; không sửa references, không load/attach/firmware và không gọi đây là original Linux driver runtime. Permission runtime phải là gate riêng sau review.
+
+**Kiểm chứng preparation cuối:** diagnostic đã build 3 module/MODPOST/108 CRC khớp, 281 fake-plan cases và 25 source checks trên PS7/PS5.1 PASS; fresh prepare/WhatIf có hash guard, không sửa reference. Chỉ cho PLP0, giữ Sony bytes và queue 8×65536, không đổi Android. Cold/operational state, re-enumeration/replay, I²C fail-stop và nhận hữu hạn vẫn chặn runtime; không coi hai opt-in params là consent hoặc build PASS là an toàn điện.
+
 ## ADR-029 — Phase 3.1: native URB đo lỗi trực tiếp và permission trước quyền phiên
 
 **Date:** 2026-11-07

@@ -1,14 +1,21 @@
 ---
 name: TBS reference repository synchronization
-description: Use when fetching, cloning, updating, repairing or documenting official/community TBS5530 source references or the repo sync PowerShell script.
-applyTo: "tools/**/*.ps1"
+description: Use when fetching, cloning, updating, repairing or documenting official/community/CoreELEC TBS5530 source references or the repo sync PowerShell script.
+applyTo: "tools/**/*.ps1,TBS5530.code-workspace,.github/instructions/repository-sync.instructions.md"
 ---
 # Repository sync policy
-- Script is tracked inside the main repo: `tools/Sync-TBS5530-Repositories.ps1` (previous standalone tools script at workspace root is legacy).
-- Windows host workspace parent: `D:\API\TBS5530-DVB-Android`; sibling references are `../references/tbs-linux_media`, `../references/cxd28xx`, and `../references/coax`.
-- Use `.\tools\Sync-TBS5530-Repositories.ps1 -CheckOnly` for review: it fetches, but must not merge/rebase/checkout/clone. Full sync runs only with explicit user approval and outside active research/testing.
-- Main `AndroidDvbDriver` repo: fetch only (do not merge, reset, rebase or checkout branch automatically). Three reference repos: only clean, tracking, linear fast-forward updates; skip dirty, detached, divergent or unexpected remote states.
-- TBS Linux should preserve cone sparse-checkout for `drivers/media/usb/dvb-usb`, `drivers/media/dvb-frontends`, `drivers/media/dvb-core`, `drivers/media/tuners`, `include/media`, `include/uapi/linux/dvb`.
-- Check any missing file with `git ls-tree` and index diagnostics before recovery. No `reset --hard`, forced clean, force push, destructive reclone or mutation of reference code.
-- Before relying on upstream driver details, record reference SHAs with `git rev-parse HEAD`, and compare upstream changes rather than silently assuming latest is correct.
-- Store logs in workspace-level `../logs`; do not commit logs or proprietary firmware.
+
+- The script is tracked at `tools/Sync-TBS5530-Repositories.ps1`; do not create another standalone sync script at the workspace parent.
+- Workspace parent: `D:\API\TBS5530-DVB-Android` (verify actual paths before use). The editable repo is `AndroidDvbDriver/`; reference siblings are `../references/tbs-linux_media`, `../references/cxd28xx`, `../references/coax`, and **`../references/coreelec-linux-amlogic`**.
+- Reference trees are strictly read-only for coding agents: never edit, format, stage or commit their files, even if the VS Code workspace shows them as folders. Do not change their sparse-checkout configuration by hand while Copilot is running a hardware test.
+- The public interface has only two forms: `.\tools\Sync-TBS5530-Repositories.ps1` and the optional `-CheckOnly`. Do not add repository selectors, recovery flags, root paths, polling or watcher parameters.
+- Direct invocation performs one complete foreground pass over all repositories: clone missing checkouts, recover eligible incomplete sparse clones with a verified backup, download selected missing blobs and fast-forward clean tracking reference branches. It never forces local edits, staged deletions, locks, unsafe paths or branch divergence away.
+- `-CheckOnly` **fetches healthy repositories over the network** for comparison but never clones, repairs, downloads missing sparse blobs, merges or changes sparse settings. Broken checkouts are diagnosed without repair. Full sync requires user approval outside active hardware experiments; do not run it merely to test a script change.
+- Main `AndroidDvbDriver`: fetch only, never merge, reset, rebase or checkout active work. Reference repos: verify remote origin, branch/tracking, clean worktree and ahead/behind; only fast-forward behind-only branches. Skip dirty, detached, divergent, unexpected origin or missing paths. No `reset --hard`, `clean -fd`, force push, destructive reclone or automatic branch migration.
+- Preserve the six existing TBS Linux **cone sparse** directories: `drivers/media/usb/dvb-usb`, `drivers/media/dvb-frontends`, `drivers/media/dvb-core`, `drivers/media/tuners`, `include/media`, `include/uapi/linux/dvb`. Do not switch the official TBS reference to a smaller subset accidentally.
+- The **CoreELEC kernel is enormous**. Clone kernel references using shallow/single-branch partial checkout (`--filter=blob:none --depth 1 --no-checkout`), then validate the complete Windows-safe selected manifest before materializing. CoreELEC uses **non-cone file-scoped sparse-checkout** for TBS5530, CXD2878, M88RS6060, supporting dvb-usb/dvb-core headers and Kconfig/Makefile declarations. Discover related new source names in the committed tree; a scope change must pass the same path/data-preservation checks before application. Do not run an unfiltered full clone or `git sparse-checkout disable`.
+- Automatically recover a missing index only when the working tree is empty outside `.git`, origin/branch/manifest match, no Git operation is active and metadata remains stable. Back up and hash-verify `.git` outside the checkout before downloading missing selected OIDs or rebuilding index/files. Never treat an existing index with staged/worktree deletions as disposable. Only validated checkout operations may use command-scoped `-c core.protectNTFS=false`; never persist this override. Success requires all selected files and filtered hashes, not only directory/pattern existence.
+- CoreELEC upstream: `https://github.com/CoreELEC/linux-amlogic.git`, currently default branch `5.15.196_20260306` at time of instruction creation. **Do not pin correctness to this moving name**: record actual SHA and detect upstream default-branch changes; a branch migration requires separate review, not automatic checkout.
+- When upstream changes, record `old HEAD`, `new HEAD`, changed relevant paths, and `git diff` in `docs/project/RESEARCH.md`. Never assume a new commit changes TBS5530 merely because it changes unrelated kernel files.
+- For missing files, check `git ls-tree -r HEAD -- <path>` and sparse configuration, then inspect index health. Do not force-restore if a file does not exist in the selected CoreELEC branch; distinguish truly absent optional dependencies from missing essential files.
+- Logs belong in workspace-level `../logs/repository-sync.log`. Never commit logs, captures, firmware, private device details or other hardware artifacts.

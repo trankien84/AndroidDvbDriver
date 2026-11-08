@@ -1,0 +1,4 @@
+[
+  {"_source":{"layers":{"frame.number":["1"],"frame.time_epoch":["1700000000.123456789"],"frame.interface_id":["0"],"frame.len":["27"],"frame.cap_len":["27"],"usb.irp_id":["0x00000001"],"usb.irp_info":["0x00"],"usb.transfer_type":["0x03"],"usb.endpoint_address":["0x82"],"usb.bus_id":["1"],"usb.device_address":["2"],"usb.data_len":["0"]}}},
+  {"_source":{"layers":{"frame.number":["2"],"frame.time_epoch":["1700000000.123456999"],"frame.interface_id":["0"],"usb.irp_id":["0x00000001"],"usb.irp_info":["0x01"],"usb.transfer_type":["0x03"],"usb.endpoint_address":["0x82"],"usb.bus_id":["1"],"usb.device_address":["2"],"usb.usbd_status":["0x00000000"],"usb.data_len":["8192"]}}}
+]

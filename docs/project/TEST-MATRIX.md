@@ -1,5 +1,119 @@
 # TBS5530 test matrix
 
+## 2026-11-09 — Phase 3.1: Linux operational-only đã chạy, chưa có TS
+
+HEAD không đổi `69090a0bcf00b4c6342ec075d90a74964b25ecc9`. Bundle `D:\TSDuck\reports\phase31-linux-runtime-20261109-004247-91506f8c`; raw trong sibling logs/traces/captures. Người dùng cho continuation tự động, handoff có thông báo/ready; không snapshot hoặc firmware upload Linux.
+
+| Gate | Kết quả | Bằng chứng / giới hạn |
+| --- | --- | --- |
+| Operational module proof/build | PASS có phạm vi | 281+1522+21 fake tests; 25+27 source checks PS7/PS5.1, MODPOST/122 CRC khớp; final board SHA `be006fdadf5b3c4cf6e519204d06eeb809ff4fb6f01830e16012fcaf40286b0d` |
+| Runner offline | PASS | Ledger 19 checks mỗi PS7/PS5.1, plan 26 WhatIf/negative, receiver policy+5 mocked flows; không device I/O ở các tests |
+| SSH preflight đầu | FAIL trước hardware | Multiline command có CRLF, exit 2; ledger chưa consume và chưa load. Chuẩn hóa LF, giữ execution cũ và dùng execution-lf; không retry USB attempt |
+| Guest handoff/admission | PASS runtime | Fresh operational descriptor 50 byte SHA `22e2f1df9f66c58dbb6c554e400b6b8abcb78ee4f277e03679bc0fac7a25add5`, HS 480/config 1/interface 0/alt 0, probe 5 controls đủ 12 bytes |
+| Module probe / K36 | PASS runtime | CXD6802 detected; frontend registered, receiver báo FE_HAS_LOCK/status 31; PLP0/K36/8 MHz, không AUTO hoặc LNB/DC |
+| I²C/control | PASS transport length | 324 controls/requested 1122/actual 1122, first_failed_control 0; sau zero-stop có 7 suppressed controls, không phát tiếp lên USB |
+| Bulk IN82 | RUNTIME-OBSERVED, chưa TS | 9 submit requested 65536; first complete 82/status 0, next 0/status 0; guard tự latch -61, 7 cancel -2. Không -75/-71 trong lượt này; last_status cancel không phải lỗi đầu |
+| Capture trace | PASS có truncation giới hạn | 678 events, pcap 55.561 byte SHA `ed7e1861303977af76de61590dcf8f4c8047b37d98e6dd1d05240750da45e8ca`, tcpdump kernel dropped 0. First 82 chỉ capture 64 byte prefix, không bịa 18 byte còn thiếu |
+| Firmware/vendor exclusion | PASS quan sát trace | Có requests 80/90/91/8A và standard 6; không A0/B7. Descriptor không chứng minh RAM firmware hash |
+| MPEG-TS | FAIL nhận TS | File 0 byte, actual USB 82 byte chưa đủ một packet 188. Không chạy tsanalyze trên file rỗng hoặc gọi lock/bytes là TS_SMOKE_PASS |
+| Cleanup / replay | PASS số đo | Submitted/reaped 9, outstanding 0/drained 1/quarantine 0, dependencies/board do phiên load đã unload; host/guest ledger consumed và terminal BLOCKED, không rearm |
+| Hardware A/B fix/recovery | NOT_RUN | Giữ queue 64 KiB và Sony bytes, không reg 96/97 patch hoặc replay vendor. Không suy nguyên nhân từ VM khác Android |
+
+**Giới hạn quan trọng của lượt đầu:** zero-length completion có status0 bị chính sách diagnostic dừng ngay. Không dùng lượt này để kết luận original Linux driver cũng không có TS. Đối chứng mới dưới đây đã cho một ZLP tiếp tục; vẫn không phải original Linux driver hoặc Linux native.
+
+### 01:40 +07 — Đối chứng một empty-success credit trên epoch mới
+
+Run `phase31-linux-runtime-20261109-013202-4ecedf9c`; người dùng xác nhận rút USB ≥5 giây/tuner tắt đèn rồi cắm cùng điều kiện. Windows cold capture mới trước VM có hai upload 132 A0 đúng hash và mẫu TS 7.999.964 byte/42.553 packets/14 services/46 PIDs, TEI 0/sync 0; không gọi toàn quality PASS chỉ từ hai chỉ số.
+
+| Gate | Kết quả thực | Giới hạn |
+| --- | --- | --- |
+| Offline candidate credit 1 | PASS | Giữ 281+1522+21 tests, thêm 54 exact extracted completion checks; source 25+30, MODPOST/122 CRC. Board SHA `07d812a13d511231d8dfc084ab02675e7345a8e1602e8205e8b8d7c0a2612a47`, queue/Sony bytes không đổi |
+| Fresh admission / K36 | PASS runtime | Guest bus 2/dev 3, operational hash 50 byte khớp, probe sạch và FE status 31 |
+| Control transport | PASS full-length | 635 calls, requested/actual 2070, first_failed 0; không A0/B7, không suppressed controls trước terminal |
+| Empty credit | PASS hoạt động thật | First RX status 0/length 0, used 1/resubmits 1; tám URB còn pending tới deadline, không stop ngay ở zero |
+| TS receive | FAIL / 0 byte | Receive window khoảng 10 s, actual 0, guard fault -110; không -75/-71 và không HCD timeout completion để quy nguyên nhân |
+| URB cleanup | PASS | 9 submit/reap, tám cancel -2, outstanding 0/drained 1/quarantine 0; không force-unload |
+| Trace / normalizer | PASS | Pcap 106.205 byte/1300 events/SHA `2ef4dbf135755edbdd8ff26e682c8f497355e2008103b48e15b4b5f53bb9d903`, dropped 0. Text 1300 records đều paired, requested 65536; clock guest unmapped |
+| Normalizer regression | PASS 77/77 mỗi runtime | Sửa OUT callback data tag `>` theo Linux docs; giữ requested/actual/null. Lượt lỗi/cleanup cũ không đổi thành PASS |
+| Host plan / ledger / receiver | PASS offline | Plan 28 WhatIf/negative, ledger 19 mỗi PS7/PS5.1, receiver 5 mock flows; terminal 3 cases phân biệt BLOCKED với process exit 0 |
+| Return to Windows | PASS quan sát mới | Sau user ready, usbdetach; PnP OK/TBS BDA, usbipd Shared, guest không tuner/module. Usbmon cũng unload khi refcount 0 |
+
+**Kết luận đối chứng:** dừng ngay ở zero không phải blocker duy nhất trong điều kiện VM run thứ hai. Vì có epoch/power-cycle/Windows init mới và nhiều khác biệt với Android, chưa ROOT_CAUSE_CONFIRMED. Không thử credit/buffer cao hơn hoặc reload hai attachment đã consumed.
+
+## 2026-11-08 → 2026-11-09 — Phase 3.1: cold-start Windows, ETW requested length và pipeline offline mới
+
+Baseline HEAD `69090a0bcf00b4c6342ec075d90a74964b25ecc9`, branch `chore/modernize-android-build`; không sửa runtime Android hoặc toolchain. Evidence root `D:\TSDuck\reports\phase31-fullstack-20261108-172615-404b3ba8`, raw sibling logs/traces/captures. Các gate ở đây là lượt mới, không đổi PASS/FAIL/UNCERTAIN lịch sử.
+
+| Gate / phép thử | Kết quả thực | Phạm vi / giới hạn |
+| --- | --- | --- |
+| Inventory tài sản / sidecar | PASS | 420 file đầu phiên; native OnePlus, tablet report/folder có thật; sidecar manifest Gate A khớp SHA |
+| Normalizer synthetic | PASS 67/67 mỗi runtime | PS 7.6.9 và Windows PS 5.1.19041.7802, exit 0; missing length, reuse, control pairing, epochs, canceled, native status/errno, malformed, atomic output và privacy. Parent final gặp file lock ở cleanup/exit 1; chuyển công bố PASS ra sau cleanup, chạy lại hai runtime 67/67/exit 0. Fault injection cleanup lỗi xác minh child nonzero, không PASS report/line; không suy tác nhân giữ lock |
+| Native trace conversion | PASS offline | Ba file, mỗi file 24 records; OnePlus 3×-75/5×-71, hai tablet mỗi file 8×-75; không gọi là hardware retest |
+| Cold2 normalization | PASS có cảnh báo rõ | 21.136 frame nguồn, 21.134 normalized, loại hai pseudo transfer 0xfe; tất cả paired, 8 incomplete_setup_fields giữ null, payload mặc định bỏ |
+| Windows cold1 | INCOMPLETE | Recorder có firmware nhưng helper lỗi biến Matches trước TS; giữ raw/log, sửa parser bằng 5/5 cases, không biến exit helper 0 thành capture PASS |
+| Windows cold2 timeline | PASS receive/capture | Trước attachment → hai chuỗi firmware → init/K36 → 3.816 submit/complete IN82 → stop. Pcap 32.202.128 byte/SHA `70fced47614ff8ec17c9e78f79fca16408c23e6bcadcfb6ad25a4c69cd7f9ded`, không truncated tail |
+| Firmware mỗi upload | PASS provenance | 132 submits/lần, mỗi byte image được ghi một lần mỗi upload; cả hai SHA `b97cf208bb586f706b26aa5450de6bb97375a3e3eabe833cddb0ae3a4f69d0dc`; không bundling blob |
+| Windows cold2 TS | PASS bytes/structure, không quality PASS | 30.897.800 byte/164.350 packets, 14 services/47 PIDs; 3.054 TEI, sync 0, CC/PES errors. PCR bitrate khoảng 134 Mb/s không dùng làm thiết kế |
+| Cold2 ETW toàn cửa sổ | FAIL coverage | Đạt cap 64 MiB trước attachment, BuffersLost 9; không có target dispatch để suy requested, session tự dừng |
+| Targeted ETW requested | PASS số đo trực tiếp | 1.440 Dispatch requested 8192, peak 8; không orphan/duplicate, pending cuối 0. Complete 1.432×8192/status 0 và tám cancel status 0xC0010000; EventsLost/BuffersLost 0, stop exit 0 |
+| Targeted Windows TS | PASS receive, không quality certification | 4.999.860 byte/26.595 packets, 14 services/46 PIDs; TEI/sync 0, vẫn có discontinuity báo trước |
+| CoreELEC differential | PASS source/offline | Pin năm SHA, 76 file hash; 13 checks nguồn và 6 checks cold2 PASS; không CoreELEC runtime hoặc root-cause proof |
+| Android debug/release/lint | PASS | Gradle Wrapper exit 0, 336 tasks/47 executed ở lượt build; giữ Java 8/minSdk 21. Lint có 0 errors, debug 18/release 10 warnings |
+| Static ABI/page-size | PASS có phạm vi | Debug có 4 ABI/4 diagnostic libs; release có 4 ABI/0 diagnostic libs. Zipalign 16 KiB của hai APK và ELF64 LOAD alignment đạt; 316 driver classes có major 52. Không thay cho runtime API 21/16 KiB smoke |
+| JVM fresh toàn bộ | PASS 513 | `--rerun-tasks`, 81/81 tasks executed, exit 0; drivers 420/app 68/usbxfer 12/dvbservice 13, failures/errors/skipped 0 |
+| Native C fault injection | PASS | GCC 16.2 `-Wall -Wextra -Werror`, MSVC 2019 AddressSanitizer; real core/canary bounds, binaries tạm đã dọn |
+| WSL compiler/Kbuild admission | Compiler PASS; Kbuild BLOCKED | C syntax exit 0; make exit 2 thiếu Makefile/Kbuild/generated headers/Module.symvers; chưa compile driver |
+| VirtualBox/guest/SSH | PASS inventory | Người dùng triển khai; VBox 7.2.22, guest 24.04.5/kernel 6.8.0-149-generic, strict hostkey và headers thực |
+| Live snapshot | FAIL, không retry | RPC_S_CALL_FAILED/0x800706be exit 1; người dùng xác nhận treo, tự phục hồi và yêu cầu không tạo snapshot nữa |
+| Guest dependency | PASS sau recovery | Apt simulation không upgrade/remove; install build-essential/libelf-dev exit 0, GCC 13.3/Make 4.3; chưa tự thay kernel/media stack |
+| Official TBS / Beta minimum closure | FAIL compile, exit 2 | Frontend dùng API vendor ngoài stock DVB core; không port rộng hoặc thay core. Beta audit guest đủ 331 entries, extract chọn lọc; không chạy wrapper |
+| Official board-only ABI probe | PASS một phần, NOT_LOAD_READY | `.ko` board có modpost/vermagic và 32 CRC khớp, nhưng thiếu hai frontend; không lấy phép so CRC rỗng làm PASS |
+| Community C nguyên trạng | PASS build/ABI, BLOCKED_PROTOCOL_REVIEW | 5 `.ko`, MODPOST PASS, 226 CRC khớp; queue 8×65536 khác primary. Probe tự khởi tạo M88/firmware vệ tinh và B7/8A, chưa chứng minh no-LNB nên không load |
+| Diagnostic Linux chỉ DVB-T2 | BUILD_OFFLINE_PASS; RUNTIME_NOT_AUTHORIZED | 3 `.ko`, MODPOST/108 CRC khớp; 281 fake-plan cases, 25 source checks mỗi PS7/PS5.1 và fresh prepare/WhatIf PASS. Bỏ đúng unused cleanup label sau review. Final board SHA `4fe9a866a45e6381f14f6039e6dff95517848162f2ba34ac056fa82107eb21b9`; Sony bytes/8×65536 giữ nguyên, PLP0-only. Cold/handoff/replay/I²C/receive runtime gate chưa đủ |
+| Linux/VM module load/usbmon/TS | NOT_RUN | Chưa nạp/cài driver, chuyển tuner hoặc ghi firmware Linux; build PASS không thay hardware test |
+| Android instrumentation / hardware retest | NOT_RUN | ADB MCP list_devices hiện không có thiết bị; không reconnect/failover hoặc tự boot emulator. Không dùng build làm bằng chứng tuner; giữ hai FAIL UI lịch sử, chưa TS_SMOKE_PASS |
+
+Nguồn chi tiết: [RESEARCH.md](RESEARCH.md), ADR-030 trong [DECISIONS.md](DECISIONS.md) và báo cáo riêng trong evidence root. Không upload raw USB/TS/ETL hoặc identifiers vào Git.
+
+## 2026-11-08 — Validation thay đổi script đồng bộ so với HEAD
+
+Đối chiếu baseline `69090a0bcf00b4c6342ec075d90a74964b25ecc9` với working tree hiện tại. Git 2.56.0.windows.4; PowerShell 7.6.9 và Windows PowerShell 5.1.19041.7802. Ghi kết quả của bản cuối cùng; không tách các lần thiết kế giao diện chưa commit thành những checkpoint độc lập.
+
+| Gate | Kết quả đã kiểm / giới hạn |
+|---|---|
+| Cách gọi / help | PASS: gọi trực tiếp hoặc `-CheckOnly`, workspace tự suy; help có đúng hai ví dụ |
+| Parser | PASS trên PS7/PS5.1, 0 syntax errors; yêu cầu PowerShell 5.1 còn hiệu lực |
+| TBS thật, chỉ đọc | PASS: SHA 2ce787de, index có/status sạch, đủ 1.357 selected files và hash |
+| CoreELEC thật, chỉ đọc | BLOCKED: SHA 072f8e99, thiếu index, 74.109 staged deletions, 27 selected blobs chưa local |
+| Chẩn đoán CoreELEC bằng helper CheckOnly | PASS an toàn: báo missing index; fingerprint metadata trước/sau không đổi, không fetch/repair |
+| Regression bản cuối trên PowerShell 7.6.9 | **PASS 74/74, exit 0**, gồm lượt kiểm lại sau khi pin SHA đích cho sparse merge |
+| Regression bản cuối trên Windows PowerShell 5.1.19041.7802 | **PASS 74/74, exit 0**, không bypass ExecutionPolicy |
+| Clone/sparse NTFS | PASS trong fixtures: manifest Windows-safe trước checkout, AUX ngoài scope không materialize, TBS cone và CoreELEC file scope đúng |
+| Tự phục hồi / selected blob download | PASS trong fixtures: backup đúng trước tải, HEAD/ref giữ nguyên ở bước recovery, không FETCH_HEAD mới, after.json PASS |
+| Bảo toàn local work | PASS: dirty/staged deletions/untracked data, locks, path không an toàn và hash mismatch không bị force-fix |
+| Runner đủ năm repositories / chạy lại | PASS bằng remote local: main fetch-only, clone/repair/update references và kiểm manifest/hash; chạy lại không mất dữ liệu |
+| CheckOnly | PASS trong fixtures: không clone/repair/merge hoặc tải missing sparse blobs; fetch repo khỏe chỉ để so sánh |
+| Cleanup | PASS: 0 fixture còn lại, không mạng ngoài hoặc references thật bị sửa |
+| Full sync/recovery/CheckOnly network trên references thật | NOT RUN trong tác vụ viết code |
+| Android build/tests và USB hardware mới | NOT RUN, không thuộc validation PowerShell |
+
+### Bổ sung lỗi thực tế và regression partial/shallow thật
+
+| Gate bổ sung | Kết quả / giới hạn |
+|---|---|
+| Lần người dùng chạy lúc 16:32 | TBS/C PASS, coax fast-forward; CoreELEC FAIL ở fetch OID sau backup, chưa materialize |
+| OID gây lỗi | Blob `drivers/media/usb/dvb-usb/dvb-usb.h` còn thiếu, không phải ref nhánh; HEAD CoreELEC vẫn 072f8e99 |
+| Repro partial/shallow thật trước sửa | FAIL: `bad revision`/necessary objects với remote file local, `--depth 1 --filter=blob:none --no-checkout` và promisor packs thật |
+| Thêm filter nhưng giữ default negotiation | FAIL cùng lỗi, không phải do thiếu filter riêng |
+| Exact-object fetch với negotiation=noop | PASS đối chứng local; selected blob có sau tải, không cần đổi protection hoặc retry nhiều lần |
+| Regression sau sửa trên PowerShell 7 | **PASS 76/76, exit 0**, NOT RUN 0 |
+| Regression sau sửa trên Windows PowerShell 5.1 | **PASS 76/76, exit 0**, NOT RUN 0, không bypass policy |
+| Hai cases promisor/shallow mới | PASS: selected blobs được tải; HEAD/refs/FETCH_HEAD giữ nguyên; không tải blob ngoài manifest hoặc lưu negotiation config |
+| Cleanup sau bản sửa | PASS, không còn fixtures regression hoặc fixture đối chứng riêng |
+| Agent chạy lại recovery trên CoreELEC thật | NOT RUN, không fetch hoặc ghi reference thật sau sửa |
+
+Test script là [Test-TBS5530-RepositorySync.ps1](../../tools/Test-TBS5530-RepositorySync.ps1). Đã thêm hai cases partial/shallow thật để tránh lặp khoảng trống của fixtures clone thường bị xóa loose blobs. Kết quả sau bản sửa negotiation là 76/76 trên cả hai runtime như bảng bổ sung, không dùng 74 PASS cũ thay cho code mới. Chi tiết ở [RESEARCH.md](RESEARCH.md) và [WORKLOG.md](WORKLOG.md).
+
 ## 2026-11-08 — Tablet A/B thực tế: firmware, K36 lock và lỗi native -75
 
 Phiên bắt đầu ngày 07-11 lúc 23:01 +07. HEAD `1202c8abd49a48c3099e718bead13a21a9176660`, source fingerprint sau sửa `127e7f550d7db79cd1ea25cd3f763b49c03a2706c407f05722be30e6c7e4f911`. Debug hardware SHA `1c51ddf79bb1f3c08dc5b62a219d142e06252d851e0d963c68471dbfd36523a3`; release SHA `0027dd13f4b75e4cdbd93cd51225ec2d1a5b7a918f07f0a472ccaa7e6bd5ef53`.
