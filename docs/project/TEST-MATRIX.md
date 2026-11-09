@@ -1,5 +1,34 @@
 # TBS5530 test matrix
 
+## 2026-11-09, phiên 19:18 +07 — Phase 3.1: EP0 mirror và Samsung 4096/8192
+
+Branch/HEAD trước và sau `chore/modernize-android-build` / `48b53d788db5e023123afbc0a65f77a16ae084ef`. Giữ edits instructions đầu phiên, không stage/commit/push/sync. Không đổi historical PASS/FAIL. Báo cáo/logs mới dưới `D:\TSDuck\reports\phase31-continuation-20261109-192232-71163e13` và sibling logs; module core/firmware proof có bundles riêng được dẫn trong báo cáo tổng.
+
+| Gate / phép thử mới | Kết quả | Bằng chứng / giới hạn |
+| --- | --- | --- |
+| Artifact cũ / Linux raw | PASS, FOUND_VERIFIED | Inventory 1964 file; tám hash trọng yếu khớp manifest gốc, gồm cả strict/credit1 text/pcap. Không chạy lại VM hoặc bịa 18 byte thiếu của actual 82 |
+| FX2 proof offline | PASS 64/64, exit 0 | Hai epoch A0 riêng đủ 132/8192/hash; 255 độ dài opcode khớp Keil. Không device I/O |
+| Mirror JVM | PASS 8/8 | OUT trước delegate, IN chỉ returned slice, zero/negative/oversized/exception, sequence/bounds/no overwrite/drain; không thêm call hoặc đổi timeout, không disk I/O trong transfer |
+| Fresh JVM tổng | PASS 530/530 | Drivers 431/app 68/usbxfer 31, failures/errors/skipped 0; wrapper prelive --rerun-tasks, 173 tasks executed |
+| Native GCC/MSVC ASan | PASS 4096/8192, exit 0 | Capacity/pointer/actual bounds, cap/depth, no post-error resubmit, cancel/drain/quarantine; fake kernel, không tuner |
+| NDK core/JNI bốn ABI | PASS syntax-only | NDK 30.0.16248370/clang 21/API 21; link/runtime được kiểm riêng qua APK và live, không suy từ syntax |
+| App fake/permit tablet | Ban đầu 3/4 PASS, sau sửa 4/4 PASS | Test mới kỳ vọng ledger rỗng sai vì SESSION_GRANTED hợp lệ; sửa assertion, không bỏ guard. Kiểm exact 8192 permit khác 4096, scope mirror và default OFF |
+| Library fake tablet | PASS 2/2 | Mirror qua Handoff không thêm control; full fake manual/AUTO giữ count 187/188, không tuner I/O |
+| Debug/release/lint | PASS | Wrapper assembleDebug/test APK, assembleRelease/lintDebug/lintRelease; JDK 25.0.5.0.3/AGP 9.5.0/Gradle 9.8.2 giữ nguyên |
+| Helper PS7 / PS5.1 | PASS | Fake-only/negative/terminal/hash parser; giữ BOM sau lỗi PS5.1 parse. Không đổi policy hoặc gọi ADB trong tests |
+| Preflight UI / task reuse | FAIL trước hardware ở hai lượt đầu | Permission 60 s hết hạn, token mới không được task cũ tiếp nhận; đóng màn terminal rồi tạo instance mới, không force-stop/clear data hoặc consume firmware |
+| Firmware A | PASS full-length; phiên chưa TS | c347d3b9-ee2c-4580-b296-dedc955f33d4: 132/132, ảnh 8192/payload 8196, 3073 ms; probe 5 controls ID 01/97. Budget từ chối trước init; giữ ERROR_UNCERTAIN, drain sạch |
+| Firmware B | PASS full-length; handoff UI timeout | 239293f8-de3a-4629-8d13-e63417ad8625: 132/132, 3155 ms; 132 mirror records. Attach-confirm vượt 10 s, dừng WAIT_REENUMERATION, không init/Bulk |
+| Samsung A 8×4096 | FAIL nhận TS; diagnostic valid | 9a531e91-0366-4f71-bc67-2caba9846083: K36 AUTO lock, 190 EP0, 8 submit/reap; 8×-75/actual 0, syscall 0/errno 0, TS file 0; REPORT/drain/outstanding 0/quarantine false |
+| Samsung B 8×8192 | FAIL nhận TS; candidate U không sửa lỗi | 4fc265e0-2377-4997-9a26-0d4afc3a99c8: cùng 190 EP0, 8 submit/reap requested/capacity 8192, 8×-75/actual 0, TS 0; cleanup như A |
+| Android raw EP0/native | NEWLY_COLLECTED, hash khớp | 16 files readback bằng exec-out binary-safe, SHA Android/host khớp. EP0 A 63761bdc…/B bb68d798…; native A 370f0ffd…/B b30d7b12…; full hash ở RESEARCH/manifest |
+| Export hash lần đầu | FAIL parser, không mismatch raw | Host/device cùng hash 0859647e…; sửa command-mode -split bằng parser 64-hex có fake test PS7/PS5.1. Không chạy lại tuner để kiểm |
+| Nhãn chooser debug | PASS build/lint; NOT RUN cài/UI cuối | Query xác minh app chính có AutonomousDiagnosticActivity + legacy UsbDelegate; nhãn debug riêng. Đã gỡ app cách ly theo user; ADB offline sau thu bền nên không cài APK nhãn mới |
+| PA7 / TS drive / selected PLP A/B mới | BLOCKED_FOR_SAFETY / NOT RUN | Static latch không chứng minh wiring/mức điện; chưa mapping drive đúng chip/effective readback. Không vendor mới, không mở rộng hai attachment đã duyệt |
+| Android TS_SMOKE_PASS | BLOCKED, false | Cả A/B file 0; không PAT/PMT/CRC/sample ≥ 32768, không gọi lock/build/Windows TS là Android PASS |
+
+Hai firmware sessions chỉ chuyển sang operational mới sau full 132/cleanup và bằng chứng không có partial init; không reset/rearm ledger hoặc A0 lần hai. Native A/B đều đã drain trước ADB Wi-Fi offline; không auto reconnect/reset hoặc suy owner cuối còn live. Không thử lại phần cứng trên APK nhãn debug mới. Kết luận: ROOT_CAUSE_UNRESOLVED_WITH_NARROWED_SCOPE.
+
 ## 2026-11-09 — Phase 3.1: Linux operational-only đã chạy, chưa có TS
 
 HEAD không đổi `69090a0bcf00b4c6342ec075d90a74964b25ecc9`. Bundle `D:\TSDuck\reports\phase31-linux-runtime-20261109-004247-91506f8c`; raw trong sibling logs/traces/captures. Người dùng cho continuation tự động, handoff có thông báo/ready; không snapshot hoặc firmware upload Linux.

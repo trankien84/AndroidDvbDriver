@@ -19,6 +19,7 @@ public final class NativeUsbfsUrb implements AutoCloseable {
     private final Clock clock;
     private final Writer audit;
     private final String runId;
+    private final int chunkBytes;
     private final long worker = Thread.currentThread().getId();
     private final long durationNanos;
     private long started = -1;
@@ -28,23 +29,38 @@ public final class NativeUsbfsUrb implements AutoCloseable {
 
     public NativeUsbfsUrb(int ownedFd, int maxSubmissions, int durationMillis, String runId,
                           Consent consent, Writer audit) throws IOException {
-        this(bindings(ownedFd, maxSubmissions, durationMillis, runId, consent, audit), durationMillis, runId, consent, audit, new Clock() {
+        this(ownedFd, maxSubmissions, durationMillis, 4096, runId, consent, audit);
+    }
+    /** 8192 changes only the diagnostic slot size; it is not an EOVERFLOW fix. */
+    public NativeUsbfsUrb(int ownedFd, int maxSubmissions, int durationMillis, int chunkBytes, String runId,
+                          Consent consent, Writer audit) throws IOException {
+        this(bindings(ownedFd, maxSubmissions, durationMillis, chunkBytes, runId, consent, audit), durationMillis, chunkBytes, runId, consent, audit, new Clock() {
             public long nanos() { return System.nanoTime(); }
             public void pause() throws InterruptedException { Thread.sleep(10); }
         });
     }
-    private static Port bindings(int fd, int budget, int duration, String runId, Consent consent, Writer audit) throws IOException {
-        if (duration < 1 || duration > 10000 || runId == null || !runId.matches("[A-Za-z0-9_-]{1,100}")
+    private static Port bindings(int fd, int budget, int duration, int chunkBytes, String runId, Consent consent, Writer audit) throws IOException {
+        requireChunkBytes(chunkBytes);
+        if (fd < 0 || budget < 8 || budget > 256 || budget > 1024 * 1024 / chunkBytes
+                || duration < 1 || duration > 10000
+                || runId == null || !runId.matches("[A-Za-z0-9_-]{1,100}")
                 || consent == null || audit == null) throw new IllegalArgumentException("Invalid native diagnostic arguments");
-        return new Bindings(fd, budget);
+        return new Bindings(fd, budget, chunkBytes);
+    }
+    private static void requireChunkBytes(int chunkBytes) {
+        if (chunkBytes != 4096 && chunkBytes != 8192) throw new IllegalArgumentException("Native slots must be 4096 or 8192 bytes");
     }
     NativeUsbfsUrb(Port port, int durationMillis, String runId, Consent consent, Writer audit, Clock clock) {
+        this(port, durationMillis, 4096, runId, consent, audit, clock);
+    }
+    NativeUsbfsUrb(Port port, int durationMillis, int chunkBytes, String runId, Consent consent, Writer audit, Clock clock) {
+        requireChunkBytes(chunkBytes);
         if (durationMillis < 1 || durationMillis > 10000 || runId == null || !runId.matches("[A-Za-z0-9_-]{1,100}")) {
             throw new IllegalArgumentException("Invalid native diagnostic bounds or run ID");
         }
         this.port = Objects.requireNonNull(port); this.consent = Objects.requireNonNull(consent);
         this.audit = Objects.requireNonNull(audit); this.clock = Objects.requireNonNull(clock);
-        this.runId = runId; durationNanos = durationMillis * 1_000_000L;
+        this.runId = runId; this.chunkBytes = chunkBytes; durationNanos = durationMillis * 1_000_000L;
         publishedSnapshot = port.snapshot();
     }
     private void worker() throws IOException {
@@ -64,8 +80,8 @@ public final class NativeUsbfsUrb implements AutoCloseable {
     public int read(byte[] destination, int length, int timeoutMillis) throws IOException {
         worker();
         if (closed || stopped) throw new IOException("Native receive stopped; no retry");
-        if (destination == null || length != 4096 || destination.length < length || timeoutMillis < 1 || timeoutMillis > 2000) {
-            throw new IllegalArgumentException("Native receive requires bounded 4096-byte slots");
+        if (destination == null || length != chunkBytes || destination.length < length || timeoutMillis < 1 || timeoutMillis > 2000) {
+            throw new IllegalArgumentException("Native receive requires the exact approved slot size");
         }
         long begin = clock.nanos();
         if (started == -1) started = begin;
@@ -113,7 +129,7 @@ public final class NativeUsbfsUrb implements AutoCloseable {
                 String[] operations = {"UNKNOWN", "SUBMIT", "REAP", "DISCARD", "GUARD", "COPY"};
                 int kind = (int) values[i];
                 String operation = kind > 0 && kind < operations.length ? operations[kind] : "UNKNOWN";
-                audit.write("{\"run_id\":\"" + runId + "\",\"read_api\":\"NATIVE_USBFS_URB_8X4096\",\"worker\":" + worker
+                audit.write("{\"run_id\":\"" + runId + "\",\"read_api\":\"NATIVE_USBFS_URB_8X" + chunkBytes + "\",\"worker\":" + worker
                         + ",\"event\":" + eventSequence + ",\"operation\":\"" + operation + "\",\"slot\":" + values[i + 1]
                         + ",\"syscall_return\":" + values[i + 2] + ",\"syscall_errno\":" + values[i + 3]
                         + ",\"urb_status\":" + (values[i + 4] == Integer.MIN_VALUE ? "null" : values[i + 4])
@@ -172,9 +188,8 @@ public final class NativeUsbfsUrb implements AutoCloseable {
     private static final class Bindings implements Port {
         static { System.loadLibrary("Tbs5530UsbfsDiagnostic"); }
         private final long handle;
-        Bindings(int fd, int budget) throws IOException {
-            if (fd < 0 || budget < 8 || budget > 256) throw new IllegalArgumentException("Invalid owned fd or submission budget");
-            handle = create(fd, budget);
+        Bindings(int fd, int budget, int chunkBytes) throws IOException {
+            handle = create(fd, budget, chunkBytes);
             if (handle == 0) throw new IOException("Native diagnostic allocation failed before submit");
         }
         public int fill() { return NativeUsbfsUrb.fill(handle); }
@@ -186,7 +201,7 @@ public final class NativeUsbfsUrb implements AutoCloseable {
         public long[] snapshot() { return NativeUsbfsUrb.snapshot(handle); }
         public boolean destroy() { return NativeUsbfsUrb.destroy(handle); }
     }
-    private static native long create(int fd, int budget);
+    private static native long create(int fd, int budget, int chunkBytes);
     private static native int fill(long handle);
     private static native int poll(long handle);
     private static native int take(long handle, byte[] bytes);

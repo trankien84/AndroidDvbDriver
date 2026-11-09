@@ -30,7 +30,7 @@ final class Tbs5530NativeUsbfsBackend implements Tbs5530AndroidUsbFacade.Receive
         if (connection == null || connection.getFileDescriptor() < 0 || endpoint == null
                 || endpoint.getAddress() != 0x82 || endpoint.getDirection() != 128 || endpoint.getType() != 2
                 || endpoint.getMaxPacketSize() != 64 && endpoint.getMaxPacketSize() != 512
-                || limits == null || limits.readApi != Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096
+                || limits == null || !limits.readApi.isNativeUrb()
                 || runId == null || !runId.matches("[A-Za-z0-9_-]{1,100}")) {
             throw new IOException("Owned terrestrial IN82 and consumed exact native diagnostic limits required");
         }
@@ -40,8 +40,8 @@ final class Tbs5530NativeUsbfsBackend implements Tbs5530AndroidUsbFacade.Receive
         stream = new FileOutputStream(target);
         audit = new OutputStreamWriter(stream, StandardCharsets.UTF_8);
         try {
-            receiver = new NativeUsbfsUrb(connection.getFileDescriptor(), Math.min(limits.maxReads, limits.maxBytes / 4096),
-                    limits.durationMillis, runId, consent::requireCurrent, audit);
+            receiver = new NativeUsbfsUrb(connection.getFileDescriptor(), Math.min(limits.maxReads, limits.maxBytes / limits.readChunkBytes),
+                    limits.durationMillis, limits.readChunkBytes, runId, consent::requireCurrent, audit);
         } catch (IOException | RuntimeException | Error error) {
             try { audit.close(); } catch (IOException close) { error.addSuppressed(close); }
             throw error;

@@ -60,6 +60,47 @@ public class Tbs5530AutonomousApprovalTest {
         store.permit.put("explicit_native_urb_reception", false);
         assertThrows(IOException.class, nativeUrb::requireCurrent);
     }
+    @Test public void native8192NeedsDistinctExactPlanAndCannotReuse4096Permit() throws Exception {
+        Storage smallStore = new Storage(), largeStore = new Storage();
+        Tbs5530TsSmoke.Limits small = new Tbs5530TsSmoke.Limits(65536, 16, 5000, 500, 4096, false,
+                Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096);
+        Tbs5530TsSmoke.Limits large = new Tbs5530TsSmoke.Limits(65536, 16, 5000, 500, 8192, false,
+                Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X8192);
+        Tbs5530OperationalApproval a = new Tbs5530OperationalApproval(smallStore, () -> 1000, null, small, 1);
+        Tbs5530OperationalApproval b = new Tbs5530OperationalApproval(largeStore, () -> 1000, null, large, 1);
+        smallStore.authorize(); smallStore.permit.put("explicit_native_urb_reception", true); a.rfIn(true);
+        largeStore.authorize(); b.rfIn(true);
+        assertFalse(b.eligible()); largeStore.permit.put("explicit_native_urb_reception", true); assertTrue(b.eligible());
+        JSONObject smallChallenge = new JSONObject(smallStore.files.get("phase31-challenge.json"));
+        JSONObject largeChallenge = new JSONObject(largeStore.files.get("phase31-challenge.json"));
+        assertNotEquals(smallChallenge.getString("plan_sha256"), largeChallenge.getString("plan_sha256"));
+        assertTrue(largeChallenge.getString("transcript").contains("USBDEVFS_URB_8X8192"));
+        assertThrows(IOException.class, () -> a.consume(large, 1));
+        assertThrows(IOException.class, () -> b.consume(small, 1));
+        b.consume(large, 1); assertThrows(IOException.class, () -> b.consume(large, 1));
+    }
+    @Test public void controlMirrorIsOffByDefaultAndMustMatchImmutableGrantBeforeAnyUsb() throws Exception {
+        android.content.Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        Tbs5530AutonomousSession off = new Tbs5530AutonomousSession(context, "SYNC_NATIVE_ERRNO", "SM-X926B", 36, 46);
+        assertFalse(off.controlMirrorEnabled); assertNull(off.controlMirror);
+        Tbs5530AutonomousSession on = new Tbs5530AutonomousSession(context, "NATIVE_USBFS_URB_8X8192", "SM-X926B", 36, 46, true);
+        JSONObject grant = new JSONObject(Tbs5530AutonomousSession.read(new java.io.File(context.getFilesDir(), "autonomous-v1-challenge.json"), 16384));
+        grant.put("control_mirror", false).put("profile", "EXPERIMENTAL_DIAGNOSTIC")
+                .put("bounded_user_authorization", true).put("rf_in_confirmed", true)
+                .put("expires_elapsed_ms", on.policy.created() + 300000);
+        on.write("grant.json", grant.toString());
+        assertThrows(IOException.class, on::acceptGrant); assertNull(on.controlMirror);
+        grant.put("control_mirror", true).put("physical_recovery_epoch", "22222222-2222-4222-8222-222222222222")
+                .put("physical_recovery_confirmed", true);
+        on.write("grant.json", grant.toString());
+        on.write("heartbeat.json", new JSONObject().put("session", on.id).put("elapsed_ms", android.os.SystemClock.elapsedRealtime()).put("stop", false).toString());
+        on.policy.foreground(true); on.acceptGrant(); assertNotNull(on.controlMirror);
+        assertEquals(0, on.controlMirror.count()); on.controlMirror.finish(); assertTrue(on.controlMirror.durable());
+        String ledger = Tbs5530AutonomousSession.read(new java.io.File(on.directory, "ledger.jsonl"), 1024);
+        assertEquals(1, ledger.trim().split("\\n").length);
+        assertEquals("SESSION_GRANTED", new JSONObject(ledger).getString("event"));
+        assertFalse(ledger.contains("ATTEMPT_CONSUMED")); assertFalse(ledger.contains("FIRMWARE_CONSUMED"));
+    }
     @Test public void synchronousLegacyTranscriptAndConstructorsRemainUnchanged() throws Exception {
         Storage store = new Storage(); Tbs5530TsSmoke.Limits limits = new Tbs5530TsSmoke.Limits(65536, 16, 5000, 500, 4096, false);
         Tbs5530OperationalApproval sync = new Tbs5530OperationalApproval(store, () -> 1000, null, limits, 1);

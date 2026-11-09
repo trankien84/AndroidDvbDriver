@@ -1,5 +1,25 @@
 # Architecture decision record (ADR)
 
+## ADR-032 — Phase 3.1: mirror EP0 và đối chứng native 8192 riêng, không replay GPIO
+
+**Date:** 2026-11-09
+
+**Status:** Đã triển khai và kiểm offline; đã chạy Samsung A/B theo hai attachment người dùng xác nhận. Cả 4096/8192 vẫn -75/0 byte, chưa root cause hoặc Android TS_SMOKE_PASS. HEAD `48b53d788db5e023123afbc0a65f77a16ae084ef`; không commit/push hoặc mở phase mới.
+
+**Context:** Linux raw usbmon đã có và hash khớp, không cần lặp VM. Android cũ chỉ có source plan, metadata bootstrap và native URB; thiếu EP0 init byte-exact. Windows ETW riêng đã đo requested 8192 nhưng không chứng minh đó là cách sửa. Proof firmware chỉ ra selector 04 ghi latch IOA.7; chưa biết pinmux/wiring/mức điện bo nên không thể tự thêm GPIO.
+
+**Decision:** Thêm mirror chỉ debug, feature flag mặc định OFF và ràng vào grant bất biến; dùng bộ nhớ hữu hạn 4096 records, payload nhỏ tối đa 64 byte, bỏ firmware payload, không phát thêm USB request, không disk I/O trong transfer. Giữ tham số/timeout/buffer slice và Java return nguyên trạng; errno không có thì null. Chỉ flush/fsync/publish file mới sau drain; hash file Android/host phải khớp. Lớp bằng chứng là ANDROID_APP_OBSERVED, clock ANDROID_ELAPSED_REALTIME_NS; không gọi là usbmon/wire hoặc tự căn clock native.
+
+**Transport decision:** Giữ default native 8×4096. Variant `NATIVE_USBFS_URB_8X8192` chỉ debug/EXPERIMENTAL_DIAGNOSTIC, exact chunk/plan/permit/hash khác, không dùng lại permit 4096. Giữ queue depth 8, tổng requested 65536, duration 5000 ms/timeout 500 ms/maxReads 16, stream ID 0, stop-on-error/no resubmit, owned fd, drain 1000 ms/quarantine và không CLEAR_HALT/SET_INTERFACE/reset. Backend 8192 còn giới hạn tám submissions theo trần byte, không tăng cap để làm đẹp kết quả.
+
+**Runtime evidence:** Người dùng xác nhận hai lần ngắt nguồn ≥5 giây/đèn tắt, cùng Samsung/RF IN/cáp/nguồn. Firmware mỗi attachment đủ 132/132, UI/budget dừng trước init/Bulk; dùng grant/owner operational mới sau full-length/cleanup đã chứng minh, không upload lại hoặc rearm history. A `9a531e91-0366-4f71-bc67-2caba9846083` và B `4fc265e0-2377-4997-9a26-0d4afc3a99c8` đều K36 AUTO lock, 190 EP0, tám -75/actual 0 và TS 0; REPORT/outstanding 0/quarantine false. OUT bytes giống nhau, poll đầu 02/03 rồi cùng 26; không chứng minh đã cô lập toàn bộ timing/vật lý giữa hai attachment.
+
+**Validation:** Fresh JVM 530, native GCC/MSVC ASan cả hai kích thước, core/JNI syntax bốn ABI, tablet fake/permit 6 tests và build debug/release/lint PASS có phạm vi. Test ledger ban đầu sai kỳ vọng rỗng được sửa đúng SESSION_GRANTED; helper hash parser có mismatch giả được kiểm offline và sửa, không chạy lại USB để kiểm. BOM cho PowerShell 5.1 được giữ; không thay toolchain hoặc ExecutionPolicy. APK A/B SHA `8f51af4a748ee6f7253efb11da4d73e264dc3ef7fdac85fdd1c3cbf39c41c5c0`; build nhãn debug cuối chưa cài/chạy sau ADB offline.
+
+**Safety / alternatives / reopen trigger:** Không replay 0400/0401/B7, không drive 54→55, selected PLP scan, LNB/DC, EEPROM/flash, USB ownership/driver/kernel/VM/snapshot. Candidate G cần wiring/pinmux/electrical proof; S cần bit mapping đúng chip, readback và rollback được duyệt. Không tăng buffer/timeout hoặc lặp VM. Khi có nguồn đủ cho một exact A/B an toàn mới mở lại quyền riêng; source/static diff hoặc một lần có bytes chưa đủ ROOT_CAUSE_CONFIRMED. Rollback source không xóa/rearm ledger đã consumed.
+
+**Records:** Báo cáo tổng `D:\TSDuck\reports\phase31-continuation-20261109-192232-71163e13\phase31-continuation-result.md`; raw 16 file/hash Android-host khớp ở sibling logs `phase31-continuation-20261109-192232-71163e13-verified`. Sau thu bền ADB offline; lần quan sát cuối tuner ở tablet và hai runs drain sạch, không tự reconnect/handoff.
+
 ## ADR-031 — Phase 3.1: đối chứng Linux operational-only, không bootstrap thiết bị đã chạy
 
 **Date:** 2026-11-09

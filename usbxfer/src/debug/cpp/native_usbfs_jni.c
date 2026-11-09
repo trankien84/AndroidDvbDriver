@@ -10,11 +10,11 @@
 struct receiver { struct tbs_core core; int fd; };
 static void *allocate(void *opaque) { (void)opaque; return calloc(1, sizeof(struct usbdevfs_urb)); }
 static void release(void *opaque, void *request) { (void)opaque; free(request); }
-static void prepare(void *request, unsigned char *buffer, void *context) {
+static void prepare(void *request, unsigned char *buffer, int capacity, void *context) {
     struct usbdevfs_urb *urb = request;
     urb->type = USBDEVFS_URB_TYPE_BULK; urb->endpoint = 0x82;
-    urb->status = -EINPROGRESS; urb->buffer = buffer; urb->buffer_length = TBS_CHUNK;
-    urb->flags = 0; urb->number_of_packets = 0; urb->usercontext = context;
+    urb->status = -EINPROGRESS; urb->buffer = buffer; urb->buffer_length = capacity;
+    urb->flags = 0; urb->number_of_packets = 0; urb->stream_id = 0; urb->usercontext = context;
 }
 static struct tbs_syscall submit(void *opaque, void *request) {
     int rc = ioctl(((struct receiver *)opaque)->fd, USBDEVFS_SUBMITURB, request);
@@ -34,7 +34,7 @@ static struct tbs_syscall discard(void *opaque, void *request) {
 static void metadata(void *request, struct tbs_meta *m) {
     struct usbdevfs_urb *urb = request;
     *m = (struct tbs_meta){urb->status, urb->actual_length, urb->buffer_length,
-        urb->type, urb->endpoint, urb->number_of_packets, urb->flags, urb->buffer, urb->usercontext};
+        urb->type, urb->endpoint, urb->number_of_packets, urb->flags, urb->stream_id, urb->buffer, urb->usercontext};
 }
 static int64_t nanos(void *opaque) {
     (void)opaque; struct timespec t;
@@ -43,14 +43,16 @@ static int64_t nanos(void *opaque) {
 }
 static struct receiver *get(jlong handle) { return (struct receiver *)(uintptr_t)handle; }
 #define JNI(name) Java_info_martinmarinov_usbxfer_NativeUsbfsUrb_##name
-JNIEXPORT jlong JNICALL JNI(create)(JNIEnv *env, jclass cls, jint fd, jint budget) {
+JNIEXPORT jlong JNICALL JNI(create)(JNIEnv *env, jclass cls, jint fd, jint budget, jint chunk_bytes) {
     (void)env; (void)cls;
-    if (fd < 0 || budget < TBS_DEPTH || budget > TBS_MAX_REQUESTS) return 0;
+    if (fd < 0 || budget < TBS_DEPTH || budget > TBS_MAX_REQUESTS
+            || (chunk_bytes != TBS_CHUNK && chunk_bytes != TBS_MAX_CHUNK)
+            || budget > TBS_MAX_BYTES / chunk_bytes) return 0;
     struct receiver *r = calloc(1, sizeof(*r));
     if (!r) return 0;
     r->fd = fd;
     struct tbs_ops ops = {r, allocate, release, prepare, submit, reap, discard, metadata, nanos};
-    if (tbs_init(&r->core, ops, budget) != 0) { free(r); return 0; }
+    if (tbs_init_sized(&r->core, ops, budget, chunk_bytes) != 0) { free(r); return 0; }
     return (jlong)(uintptr_t)r;
 }
 JNIEXPORT jint JNICALL JNI(fill)(JNIEnv *env, jclass cls, jlong h) {
@@ -61,8 +63,8 @@ JNIEXPORT jint JNICALL JNI(poll)(JNIEnv *env, jclass cls, jlong h) {
 }
 JNIEXPORT jint JNICALL JNI(take)(JNIEnv *env, jclass cls, jlong h, jbyteArray bytes) {
     (void)cls; struct tbs_core *c = &get(h)->core;
-    if (!bytes || (*env)->GetArrayLength(env, bytes) < TBS_CHUNK) { tbs_quarantine(c); return TBS_ERROR; }
-    unsigned char copy[TBS_CHUNK];
+    if (!bytes || (*env)->GetArrayLength(env, bytes) < c->chunk_bytes) { tbs_quarantine(c); return TBS_ERROR; }
+    unsigned char copy[TBS_MAX_CHUNK];
     int count = tbs_take(c, copy, sizeof(copy));
     if (count > 0) {
         (*env)->SetByteArrayRegion(env, bytes, 0, count, (const jbyte *)copy);

@@ -9,6 +9,7 @@
     <application>
         <activity
             android:name="info.martinmarinov.dvbdriver.Tbs5530AutonomousDiagnosticActivity"
+            android:label="DVB-T Driver — TBS5530 Debug"
             android:launchMode="singleTop"
             android:exported="true">
             <intent-filter>

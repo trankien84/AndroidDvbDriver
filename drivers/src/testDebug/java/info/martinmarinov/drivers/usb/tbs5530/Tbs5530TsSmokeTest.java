@@ -144,24 +144,70 @@ public class Tbs5530TsSmokeTest {
         assertEquals(0, f.consumes); assertEquals(0, f.selects); assertEquals(0, f.reads); f.session.close();
     }
     @Test public void nativeDiagnosticNeedsItsOwnApprovalBeforeConsumeOrSelect() throws Exception {
-        Tbs5530TsSmoke.ReadApi api = Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096;
-        Tbs5530TsSmoke.Limits limits = new Tbs5530TsSmoke.Limits(65536, 16, 5000, 500, 4096, false, api);
-        assertEquals(8000, limits.maximumMillis());
-        Fixture denied = new Fixture(true, api);
-        assertThrows(IOException.class, () -> denied.smoke.run(limits));
-        assertEquals(0, denied.consumes); assertEquals(0, denied.selects); denied.session.close();
-        Fixture allowed = new Fixture(true, api); allowed.nativeApproved = true; allowed.count = -1; allowed.errno = 0;
-        Tbs5530TsSmoke.Result result = allowed.smoke.run(limits);
-        assertEquals(Tbs5530TsSmoke.Status.NO_DATA_OR_USB_FAILURE, result.status);
-        assertEquals(-1, result.lastReadResult); assertEquals(0, result.lastReadErrno);
-        assertEquals(0, result.bytes); assertEquals(1, allowed.reads); assertEquals(1, allowed.owner.closes);
+        for (Tbs5530TsSmoke.ReadApi api : nativeApis()) {
+            int chunk = nativeChunk(api);
+            Tbs5530TsSmoke.Limits limits = new Tbs5530TsSmoke.Limits(65536, 16, 5000, 500, chunk, false, api);
+            assertEquals(8000, limits.maximumMillis());
+            Fixture denied = new Fixture(true, api);
+            assertThrows(IOException.class, () -> denied.smoke.run(limits));
+            assertEquals(0, denied.consumes); assertEquals(0, denied.selects); denied.session.close();
+            Fixture allowed = new Fixture(true, api); allowed.nativeApproved = true; allowed.count = -1; allowed.errno = 0;
+            Tbs5530TsSmoke.Result result = allowed.smoke.run(limits);
+            assertEquals(Tbs5530TsSmoke.Status.NO_DATA_OR_USB_FAILURE, result.status);
+            assertEquals(-1, result.lastReadResult); assertEquals(0, result.lastReadErrno);
+            assertEquals(chunk, result.lastReadRequestedBytes);
+            assertEquals(0, result.bytes); assertEquals(1, allowed.reads); assertEquals(1, allowed.owner.closes);
+        }
+    }
+    private static Tbs5530TsSmoke.ReadApi[] nativeApis() {
+        return new Tbs5530TsSmoke.ReadApi[]{Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096,
+                Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X8192};
+    }
+    private static int nativeChunk(Tbs5530TsSmoke.ReadApi api) {
+        return api == Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X8192 ? 8192 : 4096;
     }
     @Test public void nativeDiagnosticRejectsUnboundedVariantsAndClearHalt() {
-        Tbs5530TsSmoke.ReadApi api = Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096;
-        assertThrows(IllegalArgumentException.class, () -> new Tbs5530TsSmoke.Limits(65536,16,5000,500,4096,true,api));
-        assertThrows(IllegalArgumentException.class, () -> new Tbs5530TsSmoke.Limits(65536,16,5000,500,8192,false,api));
-        assertThrows(IllegalArgumentException.class, () -> new Tbs5530TsSmoke.Limits(4096,16,5000,500,4096,false,api));
-        assertThrows(IllegalArgumentException.class, () -> new Tbs5530TsSmoke.Limits(65536,1,5000,500,4096,false,api));
+        for (Tbs5530TsSmoke.ReadApi api : nativeApis()) {
+            int chunk = nativeChunk(api), other = chunk == 4096 ? 8192 : 4096;
+            assertThrows(IllegalArgumentException.class, () -> new Tbs5530TsSmoke.Limits(65536,16,5000,500,chunk,true,api));
+            assertThrows(IllegalArgumentException.class, () -> new Tbs5530TsSmoke.Limits(65536,16,5000,500,other,false,api));
+            assertThrows(IllegalArgumentException.class, () -> new Tbs5530TsSmoke.Limits(7 * chunk,16,5000,500,chunk,false,api));
+            assertThrows(IllegalArgumentException.class, () -> new Tbs5530TsSmoke.Limits(65536,1,5000,500,chunk,false,api));
+            assertThrows(IllegalArgumentException.class, () -> new Tbs5530TsSmoke.Limits(65535,16,5000,500,chunk,false,api));
+            assertThrows(IllegalArgumentException.class, () -> new Tbs5530TsSmoke.Limits(2 * 1024 * 1024,16,5000,500,chunk,false,api));
+            assertThrows(IllegalArgumentException.class, () -> new Tbs5530TsSmoke.Limits(65536,257,5000,500,chunk,false,api));
+        }
+    }
+    @Test public void bothNativeSizesObserveTheSameBoundedBytesWithoutEndpointPreparation() throws Exception {
+        byte[] sample = fullBoundedSample();
+        for (Tbs5530TsSmoke.ReadApi api : nativeApis()) {
+            int chunk = nativeChunk(api);
+            Fixture f = new Fixture(true,api); f.nativeApproved = true; f.count = chunk;
+            java.io.ByteArrayOutputStream raw = new java.io.ByteArrayOutputStream();
+            f.observer = (bytes,length) -> raw.write(bytes,0,length);
+            f.beforeBulk = () -> f.stream = java.util.Arrays.copyOfRange(sample,f.reads * chunk,(f.reads + 1) * chunk);
+            Tbs5530TsSmoke.Result result = f.smoke.run(new Tbs5530TsSmoke.Limits(65536,16,5000,500,chunk,false,api));
+            assertEquals(Tbs5530TsSmoke.Status.STRUCTURE_CONFIRMED,result.status);
+            assertEquals(65536,result.bytes); assertEquals(65536 / chunk,result.reads);
+            assertEquals(chunk,result.lastReadRequestedBytes); assertArrayEquals(sample,raw.toByteArray());
+            assertEquals(0,f.preparations); assertEquals(1,f.selects); assertEquals(1,f.owner.closes);
+        }
+    }
+    @Test public void nativeShortCompletionsNeverCreateAnUnapprovedPartialSlot() throws Exception {
+        for (Tbs5530TsSmoke.ReadApi api : nativeApis()) {
+            int chunk = nativeChunk(api);
+            Fixture f = new Fixture(true,api); f.nativeApproved = true; f.count = chunk - 1;
+            Tbs5530TsSmoke.Result result = f.smoke.run(new Tbs5530TsSmoke.Limits(8 * chunk,16,5000,500,chunk,false,api));
+            assertEquals(8,result.reads); assertEquals(8 * (chunk - 1),result.bytes);
+            assertEquals(chunk,result.lastReadRequestedBytes); assertEquals(1,f.owner.closes);
+        }
+    }
+    @Test public void changingNativeSizeCannotReuseAnotherBackendApproval() throws Exception {
+        Fixture f = new Fixture(true,Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096); f.nativeApproved = true;
+        Tbs5530TsSmoke.Limits limits = new Tbs5530TsSmoke.Limits(65536,16,5000,500,8192,false,
+                Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X8192);
+        assertThrows(IOException.class,() -> f.smoke.run(limits));
+        assertEquals(0,f.consumes); assertEquals(0,f.selects); assertEquals(0,f.reads); f.session.close();
     }
     @Test public void endpointPreparationNeedsSeparateConsentAndRunsOnceBeforeSelect() throws Exception {
         Tbs5530TsSmoke.Limits limits = new Tbs5530TsSmoke.Limits(564, 1, 1000, 500, 4096, true);

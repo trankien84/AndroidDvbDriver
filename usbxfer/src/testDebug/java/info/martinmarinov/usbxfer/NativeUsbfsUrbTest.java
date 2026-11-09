@@ -2,12 +2,19 @@
 package info.martinmarinov.usbxfer;
 
 import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
 import java.io.IOException;
 import java.io.StringWriter;
 import java.io.Writer;
 import static org.junit.Assert.*;
 
+@RunWith(Parameterized.class)
 public class NativeUsbfsUrbTest {
+    @Parameterized.Parameters(name = "8x{0}") public static Object[][] sizes() {
+        return new Object[][]{{4096}, {8192}};
+    }
+    @Parameterized.Parameter public int chunkBytes;
     private static final class Clock implements NativeUsbfsUrb.Clock {
         long now;
         int pauses;
@@ -40,18 +47,19 @@ public class NativeUsbfsUrbTest {
             if (throwStop) throw new IllegalStateException("stop boundary fault");
         }
         public void quarantine() { uncertain = true; }
-        public long[] events() { return new long[0]; }
+        long[] nextEvents = new long[0];
+        public long[] events() { long[] result = nextEvents; nextEvents = new long[0]; return result; }
         public long[] snapshot() { return new long[]{fills,fills,8 - pending,pending,0,0,uncertain ? 1 : 0,syscallErrno,0}; }
         public boolean destroy() { assertEquals(0,pending); assertFalse(uncertain); frees++; return true; }
     }
-    private static final class Fixture {
+    private final class Fixture {
         final Port port = new Port(); final Clock clock = new Clock(); final StringWriter audit = new StringWriter();
         boolean consent = true;
         int checks;
-        final NativeUsbfsUrb receiver = new NativeUsbfsUrb(port, 5000, "test-run", () -> {
+        final NativeUsbfsUrb receiver = new NativeUsbfsUrb(port, 5000, chunkBytes, "test-run", () -> {
             checks++; if (!consent) throw new IOException("STOP/permission/heartbeat lost");
         }, audit, clock);
-        int read() throws IOException { return receiver.read(new byte[4096],4096,500); }
+        int read() throws IOException { return receiver.read(new byte[chunkBytes],chunkBytes,500); }
     }
     @Test public void positiveShortAndZeroAreDistinctAndNotReplenishedOnReturn() throws Exception {
         Fixture f = new Fixture(); assertEquals(5,f.read()); assertEquals(8,f.port.fills);
@@ -72,10 +80,10 @@ public class NativeUsbfsUrbTest {
     }
     @Test public void stopAndHeartbeatAreCheckedBetweenNonblockingPolls() throws Exception {
         Fixture f = new Fixture(); f.port.stuck = true;
-        NativeUsbfsUrb receiver = new NativeUsbfsUrb(f.port,5000,"heartbeat-test",() -> {
+        NativeUsbfsUrb receiver = new NativeUsbfsUrb(f.port,5000,chunkBytes,"heartbeat-test",() -> {
             if (f.clock.now >= 30_000_000L) throw new IOException("heartbeat lost");
         },f.audit,f.clock);
-        assertThrows(IOException.class,() -> receiver.read(new byte[4096],4096,500));
+        assertThrows(IOException.class,() -> receiver.read(new byte[chunkBytes],chunkBytes,500));
         assertTrue(f.port.polls <= 4); f.port.stuck = false; receiver.close(); assertEquals(1,f.port.frees);
     }
     @Test public void timeoutNeverResubmitsOrInventsCompletionErrno() throws Exception {
@@ -111,8 +119,8 @@ public class NativeUsbfsUrbTest {
             public void flush() { }
             public void close() { }
         };
-        NativeUsbfsUrb receiver = new NativeUsbfsUrb(f.port,5000,"audit-test",() -> { },broken,f.clock);
-        assertEquals(5,receiver.read(new byte[4096],4096,500));
+        NativeUsbfsUrb receiver = new NativeUsbfsUrb(f.port,5000,chunkBytes,"audit-test",() -> { },broken,f.clock);
+        assertEquals(5,receiver.read(new byte[chunkBytes],chunkBytes,500));
         assertThrows(IOException.class,receiver::close); assertEquals(1,f.port.frees);
         assertFalse(receiver.isQuarantined()); receiver.close(); assertEquals(1,f.port.frees);
     }
@@ -120,6 +128,38 @@ public class NativeUsbfsUrbTest {
         Fixture f = new Fixture(); assertEquals(5,f.read()); Thread.currentThread().interrupt();
         try { f.receiver.close(); assertTrue(Thread.currentThread().isInterrupted()); assertEquals(1,f.port.frees); }
         finally { Thread.interrupted(); }
+    }
+    @Test public void exactSizeAndCapacityAreCheckedBeforeAnySubmit() throws Exception {
+        Fixture f = new Fixture();
+        assertThrows(IllegalArgumentException.class, () -> f.receiver.read(null,chunkBytes,500));
+        assertThrows(IllegalArgumentException.class, () -> f.receiver.read(new byte[chunkBytes - 1],chunkBytes,500));
+        int otherSize = chunkBytes == 4096 ? 8192 : 4096;
+        assertThrows(IllegalArgumentException.class, () -> f.receiver.read(new byte[8192],otherSize,500));
+        assertEquals(0,f.port.fills); f.receiver.close(); assertEquals(1,f.port.frees);
+    }
+    @Test public void unsupportedSizeFdAndSubmissionCapsFailBeforeLoadingJni() throws Exception {
+        for (int size : new int[]{-1,0,1,2048,4095,4097,8191,8193,16384,65536}) {
+            assertThrows(IllegalArgumentException.class, () -> new NativeUsbfsUrb(1,8,5000,size,"bounds",() -> { },new StringWriter()));
+        }
+        for (int budget : new int[]{-1,0,7,1024 * 1024 / chunkBytes + 1,257,Integer.MAX_VALUE}) {
+            assertThrows(IllegalArgumentException.class, () -> new NativeUsbfsUrb(1,budget,5000,chunkBytes,"bounds",() -> { },new StringWriter()));
+        }
+        assertThrows(IllegalArgumentException.class, () -> new NativeUsbfsUrb(-1,8,5000,chunkBytes,"bounds",() -> { },new StringWriter()));
+    }
+    @Test public void auditNamesTheSelectedSizeAndDoesNotRewriteLengths() throws Exception {
+        Fixture f = new Fixture();
+        f.port.nextEvents = new long[]{1,0,0,0,Integer.MIN_VALUE,0,chunkBytes,chunkBytes,0x82,0,1,1,2,1};
+        assertEquals(5,f.read()); f.receiver.close();
+        String line = f.audit.toString().split("\\n")[0];
+        assertTrue(line.contains("\"read_api\":\"NATIVE_USBFS_URB_8X" + chunkBytes + "\""));
+        assertTrue(line.contains("\"requested_length\":" + chunkBytes));
+        assertTrue(line.contains("\"allocated_capacity\":" + chunkBytes));
+    }
+    @Test public void legacyConstructorStillRequires4096EvenWhen8192IsAvailable() throws Exception {
+        Port port = new Port();
+        NativeUsbfsUrb legacy = new NativeUsbfsUrb(port,5000,"legacy",() -> { },new StringWriter(),new Clock());
+        assertThrows(IllegalArgumentException.class, () -> legacy.read(new byte[8192],8192,500));
+        assertEquals(5,legacy.read(new byte[4096],4096,500)); legacy.close();
     }
     @Test public void otherWorkerCannotReadOrCloseOwnedNativeState() throws Exception {
         Fixture f = new Fixture(); final Throwable[] failure = new Throwable[1];

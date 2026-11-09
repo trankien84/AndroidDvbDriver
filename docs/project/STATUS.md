@@ -1,5 +1,17 @@
 # Port TBS5530 sang Android — trạng thái hiện tại
 
+## 2026-11-09, phiên 19:18 +07 — Phase 3.1: đã có EP0 Android; 8192 byte vẫn EOVERFLOW
+
+**Chưa xác nhận nguyên nhân gốc; Android chưa đạt TS_SMOKE_PASS.** Branch/HEAD trước và sau `chore/modernize-android-build` / `48b53d788db5e023123afbc0a65f77a16ae084ef`; giữ hai thay đổi instructions có trước phiên, không stage/commit/push hoặc sửa references.
+
+- **Android đã đo mới:** người dùng duyệt Samsung A/B và xác nhận hai attachment sau ngắt nguồn ≥5 giây, cùng SM-X926B/API 36/boot 46/cáp/nguồn/RF IN. Hai phiên operational có đúng 190 EP0 controls, cùng toàn bộ OUT bytes; K36 AUTO khóa, bank 00/reg 96–97 thực gửi `54/54`, C3 gửi `00`, stream `8A 0A00`. A dùng 8×4096 và B dùng 8×8192: mỗi lượt 8 submit/reap, mọi completion `-75`, actual 0, syscall return/errno 0, outstanding cuối 0, không quarantine; hai file TS rỗng. Kích thước 8192 không sửa lỗi trong điều kiện đã đo, không tăng tiếp buffer/timeout.
+- **Khoảng trống transcript đã đóng:** EP0 A SHA `63761bdcf0db5104e62e72b4027cb0977c40f29790d1d54cb539741dd794c5f2`, B SHA `bb68d798c9622406e46ed955ec6ccc5bfd67118651a599b900373d7ad3d34e97`; hash Android/host khớp. Đây là `ANDROID_APP_OBSERVED`, không usbmon hoặc packet trên dây. Linux raw strict/credit1 đều `FOUND_VERIFIED`, không chạy lại VM.
+- **Firmware static:** 64/64 tests PASS, hai Windows A0 epochs riêng đều 132 transfers/8192 byte/hash đã pin. `8A→0237→067B`: selector `04` ghi latch IOA.7, selector `0A` ghi IOA.6; IN81 đọc software bit 20.7, B7 có side effect latch IOA.2. `IFCONFIG=CB` là Slave FIFO; PA7 còn phụ thuộc PORTACFG/wiring chưa biết. **Không chứng minh physical reset hoặc cho phép replay** `0400/0401/B7`.
+- **Code/tests:** mirror debug mặc định OFF, không thêm request; native 8192 có exact limits/permit riêng, giữ default 4096, drain/quarantine và legacy/release. Fresh JVM 530/530, native GCC/MSVC ASan hai kích thước, bốn ABI syntax và tablet fake/permit 6/6 PASS; debug/release/lint PASS. Firmware A/B full-length 132/132 trong 3073/3155 ms; UI/budget dừng trước init, sau đó dùng phiên operational mới, không upload lại hoặc rearm history.
+- **Hiện trạng cuối:** raw 16 file đã thu/hash trước khi ADB Wi-Fi chuyển offline; không reconnect/reset. Lần quan sát cuối tuner ở tablet, cả A/B đã drain và helper STOP/exit 1 đúng vì không TS. Đã gỡ đúng hai package app cách ly theo người dùng cho phép; nhãn debug mới phân biệt hai entry USB trong app chính, build/lint PASS nhưng APK nhãn cuối chưa cài/chạy. APK dùng cho A/B có SHA `8f51af4a748ee6f7253efb11da4d73e264dc3ef7fdac85fdd1c3cbf39c41c5c0`.
+
+Báo cáo đầy đủ: `D:\TSDuck\reports\phase31-continuation-20261109-192232-71163e13\phase31-continuation-result.md`; raw bundle `D:\TSDuck\logs\phase31-continuation-20261109-192232-71163e13-verified`. Bước tiếp theo là review wiring/pinmux IOA.2/IOA.7 hoặc mapping TS drive đúng CXD6802 để chọn một A/B an toàn; candidate GPIO/drive vẫn `BLOCKED_FOR_SAFETY`. Không lặp cùng phép thử hoặc gọi khác biệt source/static là `ROOT_CAUSE_CONFIRMED`.
+
 ## 2026-11-09 — Phase 3.1: tiếp tục tự động, chọn Linux operational-only không nạp lại firmware
 
 Người dùng lúc 00:41 +07 yêu cầu tự hoàn thiện gate và chạy đối chứng hữu hạn, chỉ thông báo khi cần rút/cắm hoặc chuyển thiết bị. Giữ no-snapshot, no-LNB/DC, không thay kernel/media core hoặc binding Windows, không replay vendor chưa giải mã. Quyền này không tự thay các gate phần mềm bằng consent chung.

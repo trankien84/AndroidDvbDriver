@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-or-later
+﻿# SPDX-License-Identifier: GPL-2.0-or-later
 # One bounded debug session; no package changes, reconnect or USB ownership changes.
 [CmdletBinding()]
 param(
@@ -7,7 +7,7 @@ param(
     [Parameter(Mandatory)][ValidateRange(21, 99)][int]$ExpectedApi,
     [Parameter(Mandatory)][ValidateRange(0, 2147483647)][int]$ExpectedBootCount,
     [ValidateSet('AUTO_VERIFIED', 'EXPERIMENTAL_DIAGNOSTIC')][string]$Profile = 'AUTO_VERIFIED',
-    [ValidateSet('SYNC_NATIVE_ERRNO', 'QUEUED_USB_REQUEST_8X4096', 'NATIVE_USBFS_URB_8X4096')][string]$ReadApi = 'SYNC_NATIVE_ERRNO',
+    [ValidateSet('SYNC_NATIVE_ERRNO', 'QUEUED_USB_REQUEST_8X4096', 'NATIVE_USBFS_URB_8X4096', 'NATIVE_USBFS_URB_8X8192')][string]$ReadApi = 'SYNC_NATIVE_ERRNO',
     [ValidateRange(10, 300)][int]$DurationSeconds = 300,
     [string]$FirmwarePath,
     [string]$PhysicalRecoveryEpoch,
@@ -16,6 +16,7 @@ param(
     [switch]$GrantBoundedSession,
     [switch]$ProofOfGuardPassed,
     [switch]$AutoUsbPermission,
+    [switch]$ControlMirror,
     [string]$AndroidCliPath,
     [string]$OutputDirectory = 'D:\TSDuck\logs'
 )
@@ -44,7 +45,7 @@ if ($AutoUsbPermission) {
     if (-not (Test-Path -LiteralPath $AndroidCliPath -PathType Leaf)) { throw 'USER_ACTION_REQUIRED: Android CLI không khả dụng.' }
     if (-not (Test-Path -LiteralPath $OutputDirectory -PathType Container)) { throw 'Thiếu thư mục log ngoài Git.' }
 }
-function Invoke-PinnedAdb([string[]]$DeviceArguments, [string]$InputText = '') {
+function Invoke-PinnedAdb([string[]]$DeviceArguments, [string]$InputText = '', [bool]$PreserveOutput = $false) {
     $psi = [Diagnostics.ProcessStartInfo]::new()
     $psi.FileName = $AdbPath; $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
     $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
@@ -62,8 +63,14 @@ function Invoke-PinnedAdb([string[]]$DeviceArguments, [string]$InputText = '') {
         if ($InputText) { $process.StandardInput.Write($InputText) }; $process.StandardInput.Close()
         if (-not $process.WaitForExit(1500)) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue; throw 'FAIL-STOP: ADB timeout, không reconnect/fallback.' }
         if ($process.ExitCode -ne 0) { throw 'FAIL-STOP: ADB không hoàn tất trên serial đã pin.' }
-        return $output.GetAwaiter().GetResult().Trim()
+        $text = $output.GetAwaiter().GetResult()
+        if ($PreserveOutput) { return $text }
+        return $text.Trim()
     } finally { $process.Dispose() }
+}
+function Get-TBS5530Sha256Token([string]$Text) {
+    if ($Text -cmatch '^([a-f0-9]{64})(?:\s|$)') { return $Matches[1] }
+    throw 'Invalid Android SHA-256 response.'
 }
 function Get-TBS5530AutonomousExitCode([object]$Report) {
     if ($null -eq $Report) { return 1 }
@@ -192,7 +199,9 @@ if ($AutoUsbPermission) {
     Assert-Identity
 }
 $watch.Restart()
-Invoke-PinnedAdb @('shell', 'am', 'start', '-n', "$package/.Tbs5530AutonomousDiagnosticActivity", '--es', 'read_api', $ReadApi) | Out-Null
+$launch = @('shell', 'am', 'start', '-n', "$package/.Tbs5530AutonomousDiagnosticActivity", '--es', 'read_api', $ReadApi)
+if ($ControlMirror) { $launch += @('--ez', 'control_mirror', 'true') }
+Invoke-PinnedAdb $launch | Out-Null
 $challenge = $null
 while ($watch.Elapsed.TotalSeconds -lt 10) {
     try {
@@ -208,6 +217,7 @@ if ($null -eq $challenge -or -not $challenge.live_ready -or $challenge.session -
     $challenge.host_profile -cne $expectedHostProfile -or
     $challenge.vid -ne 29516 -or $challenge.pid -ne 21808 -or $challenge.firmware_sha256 -cne $firmwareSha -or
     $challenge.firmware_protocol -cne 'TBS_SOURCE_DUAL_RESET' -or $challenge.ts_variant -cne $ReadApi -or
+    $challenge.control_mirror -ne [bool]$ControlMirror -or
     $challenge.retry -ne 0 -or $challenge.max_upload_per_attachment -ne 1) { throw 'BLOCKED: challenge mới không khớp allowlist.' }
 $directory = 'files/autonomous-v1-' + $challenge.session
 if ($FirmwarePath) {
@@ -258,4 +268,20 @@ try {
     }
 }
 if ($null -eq $terminalReport) { throw 'FAIL-STOP: deadline hoặc kết thúc không có terminal report đã xác minh.' }
+if ($ControlMirror -and $terminalReport.cleanup -ceq 'DRAIN_CONFIRMED') {
+    if ($terminalReport.control_mirror -cne 'SYNCED_CLOSED') { throw 'FAIL-STOP: EP0 transcript chưa được ghi bền.' }
+    $local = Join-Path $OutputDirectory ('phase31-control-' + $challenge.session)
+    if (Test-Path -LiteralPath $local) { throw 'Không ghi đè evidence đã có.' }
+    New-Item -ItemType Directory -Path $local | Out-Null
+    $remote = $directory + '/control-ep0.jsonl'
+    $text = Invoke-PinnedAdb @('exec-out', 'run-as', $package, 'cat', $remote) '' $true
+    $trace = Join-Path $local 'control-ep0.jsonl'
+    [IO.File]::WriteAllText($trace, $text, [Text.UTF8Encoding]::new($false))
+    $sourceHash = Get-TBS5530Sha256Token (Invoke-PinnedAdb @('shell', 'run-as', $package, 'sha256sum', $remote))
+    $hash = (Get-FileHash -LiteralPath $trace -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($sourceHash -cne $hash) { throw 'FAIL-STOP: hash Android/host EP0 transcript không khớp.' }
+    @{ run_id=$challenge.session; layer='ANDROID_APP_OBSERVED'; sha256=$hash; bytes=(Get-Item -LiteralPath $trace).Length;
+        records=$terminalReport.control_mirror_records; cleanup=$terminalReport.cleanup; read_api=$ReadApi } |
+        ConvertTo-Json | Set-Content -LiteralPath (Join-Path $local 'manifest.json') -Encoding utf8
+}
 exit $exitCode

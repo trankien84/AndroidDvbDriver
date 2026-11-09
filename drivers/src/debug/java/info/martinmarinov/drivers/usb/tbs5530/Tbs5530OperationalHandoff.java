@@ -13,6 +13,7 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
     private final Tbs5530UsbBinding binding;
     private final Consent consent;
     private Tbs5530TsSmoke.ReadApi readApi = Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO;
+    private Tbs5530ControlMirror controlMirror;
     private NativeConfiguration nativeConfiguration;
     private static final class NativeConfiguration {
         final String runId;
@@ -49,7 +50,7 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
     private static Tbs5530AndroidUsbFacade.Manager manager(Context context, Tbs5530TsSmoke.ReadApi api,
                                                            Consent consent, NativeConfiguration configuration) throws IOException {
         if (api == Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO) return new Tbs5530AndroidUsbFacade.AndroidManager(context.getApplicationContext());
-        if (api == Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096) {
+        if (Tbs5530AutonomousPlans.nativeUrb(api)) {
             return new Tbs5530AndroidUsbFacade.AndroidManager(context.getApplicationContext(),
                     (connection, endpoint) -> {
                         Tbs5530NativeUsbfsBackend backend = new Tbs5530NativeUsbfsBackend(connection, endpoint, context.getFilesDir(),
@@ -72,12 +73,22 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
                              Tbs5530AndroidUsbFacade.Manager manager, Consent consent) throws IOException {
         this.consent = java.util.Objects.requireNonNull(consent);
         session = new Tbs5530Session();
-        Tbs5530UsbBinding.Facade facade = strictFacade(context, manager, consent, profile);
+        Tbs5530UsbBinding.Facade facade = strictFacade(context, manager, consent, profile, this);
         binding = new Tbs5530UsbBinding(session, facade, runtime, runtime, failure::set, 30000, 10000);
+    }
+
+    public void controlMirror(Tbs5530ControlMirror mirror) {
+        if (device != null) throw new IllegalStateException("Control mirror must be configured before acquisition");
+        controlMirror = java.util.Objects.requireNonNull(mirror);
     }
 
     static Tbs5530UsbBinding.Facade strictFacade(Context context, Tbs5530AndroidUsbFacade.Manager manager,
                                                 Consent consent, AtomicReference<Tbs5530OperationalProfile> observation) {
+        return strictFacade(context, manager, consent, observation, null);
+    }
+    private static Tbs5530UsbBinding.Facade strictFacade(Context context, Tbs5530AndroidUsbFacade.Manager manager,
+                                                Consent consent, AtomicReference<Tbs5530OperationalProfile> observation,
+                                                Tbs5530OperationalHandoff handoffOwner) {
         Tbs5530AndroidUsbFacade android = new Tbs5530AndroidUsbFacade(context, manager, 0, raw -> {
             consent.requireCurrent();
             Tbs5530OperationalProfile fresh = Tbs5530OperationalProfile.observe(raw.rawDescriptors());
@@ -118,7 +129,10 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
                                                int offset, int length, int timeout) throws IOException {
                         requireControlWorker();
                         if (request == 0xa0) throw new IOException("Firmware writes forbidden on operational owner");
-                        int result = connection.controlTransfer(type, request, value, index, bytes, offset, length, timeout);
+                        int result = handoffOwner == null || handoffOwner.controlMirror == null
+                                ? connection.controlTransfer(type, request, value, index, bytes, offset, length, timeout)
+                                : handoffOwner.controlMirror.transfer("OPERATIONAL", handoffOwner.session.getGeneration(), connection::controlTransfer,
+                                        type, request, value, index, bytes, offset, length, timeout);
                         requireControlWorker(); return result;
                     }
                     public int bulkTransfer(byte[] bytes, int length, int timeout) throws IOException {
@@ -169,7 +183,7 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
         session.requireUsable(session.getGeneration());
         long generation = session.getGeneration();
         Tbs5530TsSmoke.Permission effective = permission;
-        if (readApi == Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096) {
+        if (Tbs5530AutonomousPlans.nativeUrb(readApi)) {
             effective = new Tbs5530TsSmoke.Permission() {
                 public void consume(Tbs5530TsSmoke.Limits limits, long token) throws IOException {
                     if (nativeConfiguration.limits != null) throw new IOException("Native diagnostic already configured");

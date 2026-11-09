@@ -23,6 +23,12 @@ public final class Tbs5530AndroidBootstrap implements AutoCloseable {
     private Tbs5530UsbBinding.Cancellation watchdog;
     private final boolean externalObservation;
 
+    public void controlMirror(Tbs5530ControlMirror mirror) {
+        if (started.get()) throw new IllegalStateException("Control mirror must be configured before bootstrap");
+        port.controlMirror = java.util.Objects.requireNonNull(mirror);
+        port.mirrorSession = session;
+    }
+
     public Tbs5530AndroidBootstrap(Context context, Tbs5530AndroidRuntime runtime,
                                   Tbs5530UsbBinding.Device device, Tbs5530FirmwarePlan validated,
                                   Tbs5530OneShotBootstrap.Guard authorization,
@@ -175,6 +181,8 @@ public final class Tbs5530AndroidBootstrap implements AutoCloseable {
         private final List<String> results = new ArrayList<>();
         private volatile boolean listening;
         private volatile int ordinal;
+        private Tbs5530ControlMirror controlMirror;
+        private Tbs5530Session mirrorSession;
         private Tbs5530BootstrapTelemetry telemetry = new Tbs5530BootstrapTelemetry();
         Port(Context context, Tbs5530Fx2ProtocolPlan plan, Tbs5530OneShotBootstrap.Guard guard) {
             this(context, new Tbs5530AndroidUsbFacade.AndroidManager(context.getApplicationContext()), plan, guard);
@@ -269,7 +277,9 @@ public final class Tbs5530AndroidBootstrap implements AutoCloseable {
                         guard.requireDispatch(current);
                         ordinal = current;
                         telemetry.nativeStarted(current); nativeStarted = true;
-                        int n = raw.controlTransfer(type, request, value, index, bytes, offset, length, timeout);
+                        int n = controlMirror == null ? raw.controlTransfer(type, request, value, index, bytes, offset, length, timeout)
+                                : controlMirror.transfer("BOOTSTRAP", mirrorSession.getGeneration(), raw::controlTransfer,
+                                        type, request, value, index, bytes, offset, length, timeout);
                         nativeEnded = true;
                         synchronized (Port.this) { results.add("ordinal=" + current + " returned=" + n + " requested=" + length); }
                         Tbs5530BootstrapStop resultFailure = n != length ? new Tbs5530BootstrapStop(n < 0

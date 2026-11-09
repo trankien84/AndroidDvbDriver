@@ -31,9 +31,15 @@ public final class Tbs5530AutonomousPlans {
                 || plan.tuneParameters.bandwidthHz != 8000000
                 || plan.tuneParameters.selection.mode != Tbs5530DvbT2TuneParameters.Mode.AUTO)) throw new IOException("Only K36 AUTO allowed");
     }
+    public static boolean nativeUrb(Tbs5530TsSmoke.ReadApi api) {
+        return api == Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096 || api == Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X8192;
+    }
+    public static int chunkBytes(Tbs5530TsSmoke.ReadApi api) {
+        return api == Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X8192 ? 8192 : 4096;
+    }
     public static void requireTs(Tbs5530TsSmoke.Limits limits) throws IOException {
         if (limits == null || limits.maxBytes != 65536 || limits.maxReads != 16 || limits.durationMillis != 5000
-                || limits.readTimeoutMillis != 500 || limits.readChunkBytes != 4096 || limits.prepareEndpoint)
+                || limits.readTimeoutMillis != 500 || limits.readChunkBytes != chunkBytes(limits.readApi) || limits.prepareEndpoint)
             throw new IOException("TS limits are not allowlisted");
     }
     public static String hash(String text) {

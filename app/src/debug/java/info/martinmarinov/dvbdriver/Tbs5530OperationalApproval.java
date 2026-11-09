@@ -70,7 +70,7 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
         maximumMillis = plan == null ? limits.maximumMillis() : plan.maximumMillis;
         endpointPreparation = plan == null && limits.prepareEndpoint;
         queuedReception = plan == null && limits.readApi == Tbs5530TsSmoke.ReadApi.QUEUED_USB_REQUEST_8X4096;
-        nativeUrbReception = plan == null && limits.readApi == Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096;
+        nativeUrbReception = plan == null && info.martinmarinov.drivers.usb.tbs5530.Tbs5530AutonomousPlans.nativeUrb(limits.readApi);
         experimentalAuto = plan != null && plan.tuneParameters != null
                 && plan.tuneParameters.selection.mode == info.martinmarinov.drivers.usb.tbs5530.Tbs5530DvbT2TuneParameters.Mode.AUTO;
         this.generation = generation; created = clock.now();
@@ -83,7 +83,7 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
                 + "|OUT=40/8A/0/0/0a00|timeoutMs=2000|BulkIN=82|bytes=" + limits.maxBytes
                 + "|reads=" + limits.maxReads + "|durationMs=" + limits.durationMillis
                 + "|readTimeoutMs=" + limits.readTimeoutMillis + "|chunkBytes=" + limits.readChunkBytes
-                + (nativeUrbReception ? "|readApi=USBDEVFS_URB_8X4096|queueDepth=8|drainMaxMs=1000|bulkStreamId=0|errorPayload=METADATA_ONLY"
+                + (nativeUrbReception ? "|readApi=USBDEVFS_URB_8X" + limits.readChunkBytes + "|queueDepth=8|drainMaxMs=1000|bulkStreamId=0|errorPayload=METADATA_ONLY"
                 : queuedReception ? "|readApi=USB_REQUEST_QUEUE_8X4096_API26|queueDepth=8|drainMaxMs=1000" : "|readApi=USBDEVFS_BULK_ERRNO")
                 + (endpointPreparation ? "|prepare=USBDEVFS_CLEAR_HALT:82|prepareMaxMs=5000"
                 + "|prepareSource=tbsdtv/linux_media@2ce787de9f6e81b4294692a45de15596ae2e1322:usb-urb.c:usb_urb_init:220" : "")

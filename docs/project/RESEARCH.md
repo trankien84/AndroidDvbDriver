@@ -1,5 +1,45 @@
 # Research log (append-only)
 
+## 2026-11-09 — Phase 3.1: proof FX2 và transcript Android A/B thật
+
+**Kết luận:** Android vẫn không nhận TS; hai attachment Samsung với requested 4096/8192 đều có tám completion `-75/actual 0`, syscall thành công và drain sạch. Không xác nhận root cause. EP0 Android đã được thu byte-exact ở lớp ứng dụng, không còn chỉ suy từ source; không gọi đó là kernel usbmon hoặc physical wire.
+
+### Provenance và firmware
+
+HEAD Android `48b53d788db5e023123afbc0a65f77a16ae084ef`; nguồn chỉ đọc đã pin: TBS `2ce787de9f6e81b4294692a45de15596ae2e1322`, CoreELEC `072f8e99e0ac66d88d7278784e922e08e8253210`, C `c5fa27eecbe80633cbb365cc44656daea1c0e2e3`, Go `6aaa1899991c875ba0482fa9098adc6c83b01fd8`. Không fetch/sync hoặc sửa references. Inventory dưới bốn gốc D:\TSDuck có 1964 file lúc đầu; tám artifact trọng yếu khớp hash và manifest gốc, gồm Linux strict/credit1 raw text/pcap. Không chạy lại Linux/VM.
+
+Công cụ [Gate B](../../tools/fx2/README.md) và ba báo cáo trong `D:\TSDuck\reports\phase31-fx2-static-20261109-192208-04acedb8` kiểm ảnh 8192 byte/SHA `b97cf208bb586f706b26aa5450de6bb97375a3e3eabe833cddb0ae3a4f69d0dc`. Tái tạo riêng hai epoch A0 Windows prep2: mỗi epoch 132 transfers, coverage mỗi byte đúng một lần, hash khớp; không dump RAM tuner. 64/64 tests PASS; độ dài 255 opcode đối chiếu Keil không mismatch.
+
+| Đường / register | FIRMWARE_STATIC_CONFIRMED | Giới hạn |
+| --- | --- | --- |
+| 8A dispatch | `0237→067B`, E741 đổi nonzero thành boolean IRAM 21.1/bit 09, E740 chọn selector | Không kiểm exact wLength trong block; không replay dữ liệu chưa hiểu |
+| Selector 04 / 0A | `06C3` ghi IOA.7 latch / `06E3` ghi IOA.6 latch | Latch không phải physical pin transition hoặc board reset |
+| bRequest 81 / B7 | 81 trả software bit 20.7; B7 gọi helper ghi latch IOA.2 | Không nhầm endpoint Bulk 81 hoặc coi IN B7 không side effect |
+| IFCONFIG / PORTACFG | `CB` là Slave FIFO async; PA7 GPIO/FLAGD/SLCS# còn phụ thuộc PORTACFG.7/.6 | Chưa có runtime readback/wiring/mức điện bo; PA6 là PKTEND# trong Slave FIFO |
+| EP2CFG / FIFOCFG / AUTOIN | `E8` = quad 1024-byte FIFO; `09` = WORDWIDE/AUTOIN; length `0200` = 512 byte | Không đồng nhất FIFO nội với URB host |
+
+Nguồn IC: [Infineon FX2 TRM v2.2](https://www.infineon.com/assets/row/public/documents/30/44/infineon-ez-usb-fx2-trm-version2-2-usermanual-en.pdf), các mục 13.2–13.3 và 15.4–15.8; đối chiếu [Keil MCS51](https://www.keil.com/support/man/docs/is51/is51_opcodes.asp). Candidate G giữ `BLOCKED_FOR_SAFETY`: không phát `0400/0401/B7`, không gọi PA7 là reset. Windows cold2 raw timestamps frames 593/595/597 đo lại: 23.883 ms rồi 117.847 ms submit-to-submit; completion 0400→submit 0401 là 117.580 ms, không phải waveform điện hoặc đúng 125 ms.
+
+### Android runtime mới và đối chiếu
+
+SM-X926B/API 36/boot 46/kernel `6.1.145-android14-11-abX926BXXSBDZI2`, High-Speed enum 3; người dùng duyệt hai attachment mới, xác nhận đèn tắt ≥5 giây và giữ cáp/nguồn/RF IN. APK A/B SHA `8f51af4a748ee6f7253efb11da4d73e264dc3ef7fdac85fdd1c3cbf39c41c5c0`. Firmware hai attachment đủ 132/132 full-length trong 3073/3155 ms; UI/budget từ chối trước init/Bulk nên giữ lịch sử và dùng owner/grant operational mới, không A0 lần hai.
+
+| Chứng cứ | A: 9a531e91-0366-4f71-bc67-2caba9846083 | B: 4fc265e0-2377-4997-9a26-0d4afc3a99c8 |
+| --- | --- | --- |
+| Native request/capacity | 8×4096 | 8×8192 |
+| Completion / cleanup | 8×-75, actual 0, syscall return/errno 0; outstanding 0, quarantine false | Giống A, không sửa lỗi |
+| EP0 | 190 full-length controls; SHA `63761bdcf0db5104e62e72b4027cb0977c40f29790d1d54cb539741dd794c5f2` | 190; SHA `bb68d798c9622406e46ed955ec6ccc5bfd67118651a599b900373d7ad3d34e97` |
+| Native JSONL SHA | `370f0ffd2700cbecba4333dc1db0b113ad66fe33e3aa33b57d0d5d37b42e59d5` | `b30d7b122a80637d1d6c95ac77d402ae98f19b51363fb10c3f13ae3713937148` |
+| MPEG-TS | File 0 byte, TS_SMOKE_PASS=false | File 0 byte, TS_SMOKE_PASS=false |
+
+Hai EP0 traces có toàn bộ OUT bytes giống nhau; chỉ sequence 186 đọc bank 20/reg 10 trả `02`/`03` ở poll đầu, sequence 189 cùng `26`. Sequence 19 gửi bank 9C/reg 10=`00000000`; sequence 82/84 gửi bank 00/reg 96/97=`54/54`; AUTO gửi bank 23/AD=`00`, C3=`00`, stream 8A=`0A00` ở sequence 190. Đây là sent bytes/response thực tại `ANDROID_APP_OBSERVED`, chưa có direct readback 96/97, selected PLP ID hoặc waveform clock. Mirror giữ hai clock tách native CLOCK_MONOTONIC và Java ANDROID_ELAPSED_REALTIME_NS; không tự căn chúng với Windows/Linux.
+
+Windows runtime `55/55`/manual 0 và thêm B7/81/8A0400/0401; Linux VM `54/54`/manual 0/bỏ 9C10/clock extras. Android `54/54` nay là runtime, không chỉ SOURCE_PLAN. Sau upload đầu Windows còn B7 và một upload nữa, Android đi thẳng probe: đây là khác sequence quan sát được, **chưa là earliest causal divergence**. B7 có side effect latch theo proof tĩnh nhưng chưa biết chức năng bo. Omission 9C10 riêng Linux không giải thích Android; 8192 âm tính chỉ bác bỏ việc đổi size là cách sửa đủ trong hai điều kiện đã đo.
+
+Theo [USB error codes Linux 6.8](https://www.kernel.org/doc/html/v6.8/driver-api/usb/error-codes.html), -EOVERFLOW có thể do dữ liệu vượt maxpacket hoặc phần dư buffer; -EPROTO không phân biệt duy nhất bitstuff/no-response/unknown. Không suy RF/cáp/nguồn/kernel là nguyên nhân. Trace host-side không đo CRC/PID/babble vật lý.
+
+Raw 16 file đã thu/hash Android-host khớp ở `D:\TSDuck\logs\phase31-continuation-20261109-192232-71163e13-verified\verified-files-only.json`; báo cáo tổng và decoded CSV ở `D:\TSDuck\reports\phase31-continuation-20261109-192232-71163e13`. Trạng thái Android control: `NEWLY_COLLECTED`; Linux raw usbmon: `FOUND_VERIFIED`. Sau thu đủ, ADB chuyển offline; không reconnect/reset hoặc giả kiểm owner mới. Không có phép thử PA7/drive/PLP mới ngoài phạm vi đã duyệt.
+
 ## 2026-11-09 — Phase 3.1: Linux VM đã nhận completion 82 byte rồi zero-length, chưa có TS
 
 ### Phạm vi mới và guards

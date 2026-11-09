@@ -154,6 +154,11 @@ public class Tbs5530AutonomousPolicyTest {
         Tbs5530AutonomousPlans.requireTs(new Tbs5530TsSmoke.Limits(65536, 16, 5000, 500, 4096, false));
         assertThrows(IOException.class, () -> Tbs5530AutonomousPlans.requireTs(new Tbs5530TsSmoke.Limits(65536, 16, 5000, 500, 4096, true)));
         assertThrows(IOException.class, () -> Tbs5530AutonomousPlans.requireTs(new Tbs5530TsSmoke.Limits(65536, 16, 5000, 500, 8192)));
+        Tbs5530AutonomousPlans.requireTs(new Tbs5530TsSmoke.Limits(65536, 16, 5000, 500, 8192, false,
+                Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X8192));
+        assertEquals(8192, Tbs5530AutonomousPlans.chunkBytes(Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X8192));
+        assertTrue(Tbs5530AutonomousPlans.nativeUrb(Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X8192));
+        assertFalse(Tbs5530AutonomousPlans.nativeUrb(Tbs5530TsSmoke.ReadApi.QUEUED_USB_REQUEST_8X4096));
     }
     @Test public void attachmentConsumptionSurvivesNewSessionObjectAndNeverRearms() throws Exception {
         final String[] text = { "" };

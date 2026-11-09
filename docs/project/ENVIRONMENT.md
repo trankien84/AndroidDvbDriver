@@ -1,5 +1,18 @@
 # Kiểm kê môi trường
 
+## 2026-11-09, phiên 19:18 +07 — Samsung A/B và công cụ offline hiện hành
+
+- **Git:** branch `chore/modernize-android-build`, HEAD `48b53d788db5e023123afbc0a65f77a16ae084ef` trước/sau; có sẵn `.github/copilot-instructions.md` modified và `.github/instructions/virtualbox-ubuntu-ssh.instructions.md` untracked, giữ nguyên. Không sync, stage/commit/push hoặc sửa references.
+- **Tablet đã kiểm trực tiếp:** SM-X926B/API 36/boot 46/kernel `6.1.145-android14-11-abX926BXXSBDZI2`, ADB Wi-Fi có hai alias của cùng tablet; chọn một endpoint tường minh, không ghi endpoint/serial vào Git. Native GET_SPEED trả 3, operational EP82 maxpacket 512. Quyền OS vẫn bắt buộc; popup Samsung không luôn hiện trong hierarchy. Tracefs có thư mục nhưng event USB/usbmon không usable bằng quyền shell hiện có; ghi NOT_AVAILABLE_NONROOT, không root/SELinux change.
+- **Thiết bị/nguồn:** người dùng xác nhận tuner chưa cắm ban đầu, rồi hai lần ngắt nguồn ≥5 giây/đèn tắt, cùng tablet/cáp/nguồn/RF IN cho A/B. Không đo điện thực tế và không đổi adapter/DC/LNB. RAM mỗi attachment chỉ nạp một lần đủ 132 transfers; các phiên operational mới không A0 hoặc xóa/rearm consumed stores. Cả A/B REPORT/outstanding 0/quarantine false trước khi ADB chuyển offline; không tự reconnect hoặc chứng nhận owner live sau mất ADB.
+- **Artifact:** inventory giới hạn bốn gốc D:\TSDuck có 1964 file lúc đầu; tám raw artifact cũ khớp hash/manifest. Linux strict/credit1 text/pcap FOUND_VERIFIED, không VM/SSH/runtime Linux mới. Android mới có 137/190/132/190 EP0 records cho hai bootstrap/operational sessions, 16 file đã thu bền/hash Android-host khớp; raw/firmware/TS/grants vẫn ngoài Git.
+- **Toolchain giữ nguyên:** đọc build declarations AGP 9.5.0/wrapper 9.8.2/SDK 37.2/Build-Tools 37.0.0/Java 8/minSdk 21; Java thực 25.0.5.0.3 và JAVA_HOME tồn tại, NDK source.properties 30.0.16248370. Không cài/update SDK/JDK/dependency. TShark 4.6.9 đọc capture cũ; Python 3.12.2 có sẵn được agent Gate B dùng offline sau configure, GCC 16.2/MSVC 19.29/NDK clang 21 kiểm native. Không gọi TSDuck tuner hoặc USB capture mới.
+- **Build/test APK:** A/B dùng APK đã cài SHA `8f51af4a748ee6f7253efb11da4d73e264dc3ef7fdac85fdd1c3cbf39c41c5c0`; build debug/release/lint và JVM 530 PASS, tablet fake/permit 6 tests PASS. Sau khi thu A/B mới thêm nhãn Activity debug riêng và build/lint PASS; bản nhãn cuối chưa cài/chạy do ADB offline. Không gán kết quả hardware cho APK mới.
+- **Ứng dụng test và chooser:** theo quyền user đã gỡ `.phase29offline`/`.phase29offline.test`, không gỡ app chính hoặc clear data. Query package sau đó xác nhận app chính có hai USB entry: AutonomousDiagnosticActivity và legacy UsbDelegate; hai nhãn không phải bằng chứng có hai driver cùng sở hữu tuner. Nhãn debug được tách, legacy filter giữ nguyên.
+- **GitNexus:** CLI/MCP 1.6.12 trỏ đúng repo/index `.gitnexus`, ban đầu chậm một commit. Status CLI không trả sau thời gian chờ nên dừng đúng helper; analyze --index-only sau đó exit 0/121 s, 9000 nodes/30967 edges/788 flows, không FTS error quan sát được. Context Handoff dùng để thấy callers/tests; có cảnh báo cross-language/flow truncation. Index lúc giữa phiên không bao phủ mọi edit/docs cuối; source/diff/tests là bằng chứng chính, không chứng nhận graph cuối current.
+
+Báo cáo tổng: `D:\TSDuck\reports\phase31-continuation-20261109-192232-71163e13\phase31-continuation-result.md`. Không chạy VBoxManage/SSH hoặc snapshots trong phiên này vì raw Linux đã trả lời câu hỏi cần phân biệt.
+
 ## 2026-11-09 — Lượt Linux operational-only: handoff mới và công cụ guest
 
 - Branch/HEAD kiểm lại không đổi: `chore/modernize-android-build`/`69090a0bcf00b4c6342ec075d90a74964b25ecc9`; local edits trước đó giữ nguyên, không sync/commit/push hoặc snapshot.

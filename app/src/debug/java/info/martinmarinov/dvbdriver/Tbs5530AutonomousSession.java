@@ -22,6 +22,8 @@ final class Tbs5530AutonomousSession {
     final Tbs5530AutonomousPolicy policy;
     final Tbs5530AutonomousPlans golden;
     final Tbs5530TsSmoke.ReadApi readApi;
+    final boolean controlMirrorEnabled;
+    volatile Tbs5530ControlMirror controlMirror;
     private final JSONObject challenge = new JSONObject();
     private final File root;
     private final Context contextForLedger;
@@ -45,10 +47,17 @@ final class Tbs5530AutonomousSession {
     private Boundary boundary = () -> { };
 
     Tbs5530AutonomousSession(Context context, String requestedApi) throws IOException {
+        this(context, requestedApi, false);
+    }
+    Tbs5530AutonomousSession(Context context, String requestedApi, boolean mirror) throws IOException {
         this(context, requestedApi, Build.MODEL, Build.VERSION.SDK_INT,
-                Settings.Global.getInt(context.getContentResolver(), "boot_count", -1));
+                Settings.Global.getInt(context.getContentResolver(), "boot_count", -1), mirror);
     }
     Tbs5530AutonomousSession(Context context, String requestedApi, String model, int api, int boot) throws IOException {
+        this(context, requestedApi, model, api, boot, false);
+    }
+    Tbs5530AutonomousSession(Context context, String requestedApi, String model, int api, int boot, boolean mirror) throws IOException {
+        controlMirrorEnabled = mirror;
         readApi = requestedApi == null ? Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO : Tbs5530TsSmoke.ReadApi.valueOf(requestedApi);
         hostProfile = Tbs5530VerifiedHost.profile(model, api);
         historyPrefix = Tbs5530VerifiedHost.historyPrefix(hostProfile);
@@ -78,7 +87,7 @@ final class Tbs5530AutonomousSession {
                     .put("created_elapsed_ms", policy.created()).put("max_session_ms", 300000).put("heartbeat_ms", 2000)
                     .put("golden_sha256", Tbs5530AutonomousPlans.hash(Tbs5530AutonomousPlans.dryRun().toString()))
                     .put("live_ready", true).put("retry", 0).put("max_upload_per_attachment", 1)
-                    .put("ts_variant", readApi.name());
+                    .put("ts_variant", readApi.name()).put("control_mirror", controlMirrorEnabled);
             Tbs5530DurableFile.write(new File(root, PREFIX + "-challenge.json"), challenge.toString().getBytes(StandardCharsets.UTF_8));
         } catch (org.json.JSONException error) { throw new IOException(error); }
     }
@@ -103,6 +112,7 @@ final class Tbs5530AutonomousSession {
                     "firmware_protocol", "created_elapsed_ms", "golden_sha256", "ts_variant"}) {
                 if (!challenge.get(key).toString().equals(grant.get(key).toString())) throw new IOException("Grant scope mismatch: " + key);
             }
+            if (grant.optBoolean("control_mirror", false) != controlMirrorEnabled) throw new IOException("Control mirror scope mismatch");
             if (!grant.getBoolean("bounded_user_authorization") || !grant.getBoolean("rf_in_confirmed")
                     || grant.getInt("max_upload_per_attachment") != 1 || grant.getInt("retry") != 0)
                 throw new IOException("Missing bounded session authorization");
@@ -114,6 +124,8 @@ final class Tbs5530AutonomousSession {
             if (readApi != Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO && profile != Tbs5530AutonomousPolicy.Profile.EXPERIMENTAL_DIAGNOSTIC)
                 throw new IOException("Diagnostic receive requires experimental session profile");
             policy.grant(profile, expires, heartbeat());
+            if (controlMirrorEnabled) controlMirror = new Tbs5530ControlMirror(directory, id, recoveryEpoch,
+                    hostProfile + ":" + BuildConfig.SOURCE_GIT_SHA, SystemClock::elapsedRealtimeNanos);
             grantText = text; accepted = true;
         } catch (org.json.JSONException | IllegalArgumentException error) { throw new IOException("Malformed session grant", error); }
     }
@@ -152,7 +164,7 @@ final class Tbs5530AutonomousSession {
                     return permit.put("approval_id", attempt).put("explicit_control_approval", true).put("physical_current", true)
                             .put("explicit_experimental_auto_plp", true).put("explicit_endpoint_preparation", false)
                             .put("explicit_queued_reception", policy.experimental() && readApi == Tbs5530TsSmoke.ReadApi.QUEUED_USB_REQUEST_8X4096)
-                            .put("explicit_native_urb_reception", policy.experimental() && readApi == Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096)
+                            .put("explicit_native_urb_reception", policy.experimental() && Tbs5530AutonomousPlans.nativeUrb(readApi))
                             .put("approved_maximum_ms", maximum).put("expires_elapsed_ms", expires)
                             .put("heartbeat_elapsed_ms", heartbeat()).toString();
                 } catch (org.json.JSONException error) { throw new IOException(error); }
@@ -295,6 +307,8 @@ final class Tbs5530AutonomousSession {
                     .put("cleanup", cleanupConfirmed ? "DRAIN_CONFIRMED" : "DRAIN_NOT_CERTIFIED")
                     .put("base_git_sha", BuildConfig.SOURCE_GIT_SHA)
                     .put("ts_variant", readApi.name()).put("host_profile", hostProfile).put("retry", 0).put("redacted", true)
+                    .put("control_mirror", controlMirror == null ? "OFF" : controlMirror.durable() ? "SYNCED_CLOSED" : "NOT_CERTIFIED")
+                    .put("control_mirror_records", controlMirror == null ? 0 : controlMirror.count())
                     .put("stop_reason", stopReason).put("failure_stage", failureStage)
                     .put("physical_recovery_epoch_bound", recoveryConfirmed && !recoveryEpoch.isEmpty())
                     .put("pre_native_refusal", preNativeRefusal)

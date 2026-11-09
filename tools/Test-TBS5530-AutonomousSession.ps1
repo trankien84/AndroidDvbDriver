@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-or-later
+﻿# SPDX-License-Identifier: GPL-2.0-or-later
 # Offline only: parse/negative preflight tests never start ADB or access a device.
 [CmdletBinding()]
 param()
@@ -10,7 +10,8 @@ if ($errors.Count) { throw 'PowerShell parse failed.' }
 $text = [IO.File]::ReadAllText($path)
 foreach ($required in @('GrantBoundedSession', 'ProofOfGuardPassed', 'ExpectedBootCount', 'ExpectedModel', 'ExpectedApi',
     'EXPERIMENTAL_DIAGNOSTIC', 'max_upload_per_attachment', 'expires_elapsed_ms', '.hosttmp', 'stop = $true',
-    'WaitForExit(1500)', "@('-s', `$Serial)")) {
+    'WaitForExit(1500)', "@('-s', `$Serial)", 'ControlMirror', 'control_mirror', 'SYNCED_CLOSED',
+    'exec-out', 'sha256sum', 'Không ghi đè evidence đã có.')) {
     if (-not $text.Contains($required)) { throw ('Missing guard: ' + $required) }
 }
 foreach ($forbidden in @('adb connect', 'adb reconnect', 'pm clear', 'uninstall', 'usbipd', 'force-stop')) {
@@ -28,7 +29,7 @@ try {
     & $path -Serial 'offline-fixture' -ExpectedModel GM1900 -ExpectedApi 30 -ExpectedBootCount 1 -GrantBoundedSession -ProofOfGuardPassed -AdbPath (Join-Path $PSScriptRoot 'no-such-adb.exe')
     throw 'Expected missing ADB refusal.'
 } catch { if ($_.Exception.Message -cne 'Không tìm thấy ADB đã chọn.') { throw } }
-foreach ($api in @('QUEUED_USB_REQUEST_8X4096', 'NATIVE_USBFS_URB_8X4096')) {
+foreach ($api in @('QUEUED_USB_REQUEST_8X4096', 'NATIVE_USBFS_URB_8X4096', 'NATIVE_USBFS_URB_8X8192')) {
     try {
         & $path -Serial 'offline-fixture' -ExpectedModel GM1900 -ExpectedApi 30 -ExpectedBootCount 1 -GrantBoundedSession -ProofOfGuardPassed -ReadApi $api
         throw 'Expected experimental-profile refusal.'
@@ -51,6 +52,13 @@ if (@($guidLines | Where-Object { $_.Trim() -cne '$preflightToken = [guid]::NewG
     -not $text.Contains('$grant.physical_recovery_epoch = $PhysicalRecoveryEpoch')) {
     throw 'Only permission correlation may generate a nonce; recovery epoch must come from the operator.'
 }
+$hashFunction = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Get-TBS5530Sha256Token' }, $true)
+if ($null -eq $hashFunction) { throw 'Missing Android hash parser.' }
+Invoke-Expression $hashFunction.Extent.Text
+$expectedHash = '0859647e1aa77eb3a6f64ff40a092b7ec1b116f7497c84df08a43e44d1c02f4c'
+if ((Get-TBS5530Sha256Token ($expectedHash + '  files/run/control-ep0.jsonl' + "`n")) -cne $expectedHash) { throw 'SHA-256 token lost bytes.' }
+try { Get-TBS5530Sha256Token '0'; throw 'Expected malformed hash refusal.' }
+catch { if ($_.Exception.Message -cne 'Invalid Android SHA-256 response.') { throw } }
 $exitFunction = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Get-TBS5530AutonomousExitCode' }, $true)
 if ($null -eq $exitFunction) { throw 'Missing terminal exit classifier.' }
 Invoke-Expression $exitFunction.Extent.Text

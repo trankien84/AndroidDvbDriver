@@ -74,7 +74,8 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
             // A cold attach launch can deliver OS permission, but must never mint an autonomous session.
             stopped = true; result = "ATTACH_ONLY_NO_SESSION"; finish(); return;
         }
-        try { session = new Tbs5530AutonomousSession(this, getIntent().getStringExtra("read_api")); }
+        try { session = new Tbs5530AutonomousSession(this, getIntent().getStringExtra("read_api"),
+                getIntent().getBooleanExtra("control_mirror", false)); }
         catch (IOException | RuntimeException error) {
             if (session != null) session.failure(error);
             stopped = true; result = "DRY_RUN_OR_IDENTITY_BLOCKED"; status.setText(result);
@@ -259,6 +260,7 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
             session.consumeFirmwareAttachment(Tbs5530AutonomousPlans.hash(device.path + ":" + device.id));
             session.policy.beginUpload(session.id); uploaded = true;
         }, true);
+        if (session.controlMirror != null) bootstrap.controlMirror(session.controlMirror);
         result = "FIRMWARE_BOOTSTRAP"; bootstrap.startFromUserConfirmation();
         ui.postDelayed(this::awaitBootstrap, 50);
     }
@@ -297,6 +299,7 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
     private void operational(Tbs5530UsbBinding.Device device) throws IOException {
         requirePhysical();
         handoff = new Tbs5530OperationalHandoff(getApplicationContext(), runtime, this::requirePhysical, session.readApi, session.id);
+        if (session.controlMirror != null) handoff.controlMirror(session.controlMirror);
         handoff.start(device); result = "ACQUIRING_FRESH_OPERATIONAL_OWNER"; ui.postDelayed(this::awaitOwner, 25);
     }
     private void awaitOwner() {
@@ -328,7 +331,8 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
                 Tbs5530Frontend.Result lock = execute(probe, probe.planPollStatus(3));
                 if (lock.status == null || !lock.status.locked) throw new IOException("No confirmed lock");
                 session.policy.transition(Tbs5530AutonomousPolicy.State.LOCK_CONFIRMED);
-                Tbs5530TsSmoke.Limits limits = new Tbs5530TsSmoke.Limits(65536, 16, 5000, 500, 4096, false, session.readApi);
+                Tbs5530TsSmoke.Limits limits = new Tbs5530TsSmoke.Limits(65536, 16, 5000, 500,
+                        Tbs5530AutonomousPlans.chunkBytes(session.readApi), false, session.readApi);
                 approval = session.approval(null, limits); session.policy.transition(Tbs5530AutonomousPolicy.State.TS_CAPTURE);
                 Tbs5530TsSmoke.Result ts;
                 try (Tbs5530AutonomousCapture raw = new Tbs5530AutonomousCapture(session.directory, limits.maxBytes)) {
@@ -342,7 +346,7 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
                     if (session.capture != null) bytes = session.capture.bytes();
                 }
                 if (ts.status == Tbs5530TsSmoke.Status.NO_DATA_OR_USB_FAILURE) {
-                    boolean completedError = session.readApi == Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096
+                    boolean completedError = Tbs5530AutonomousPlans.nativeUrb(session.readApi)
                             ? completedNativeReceiveError()
                             : Tbs5530AutonomousPolicy.completedReceiveError(session.readApi == Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO,
                                     ts.reads, ts.lastReadResult, ts.lastReadErrno);
@@ -435,6 +439,7 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
                         if (session != null) {
                             if (bootstrap != null) session.bootstrapSnapshot = bootstrap.snapshot();
                             session.cleanupConfirmed = drained;
+                            if (drained && session.controlMirror != null) session.controlMirror.finish();
                             if (!drained) session.policy.failUncertain();
                             refreshPermissionReceipt();
                             session.report(drained ? result : "CLEANUP_UNCERTAIN_NO_FORCE_CLOSE", bytes, packets, errno);
