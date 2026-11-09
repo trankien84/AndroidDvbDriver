@@ -1,0 +1,93 @@
+{
+  "sourceSHA": "c5fa27eecbe80633cbb365cc44656daea1c0e2e3",
+  "classification": "SOURCE_PRESERVING_MINIMALLY_GUARDED_NOT_ORIGINAL",
+  "portabilityPatchRequired": false,
+  "files": [
+    {
+      "name": "alp.c",
+      "sha256": "55a904eb93cf7bfcd68d51397cebc4e86b6da1d1c89261273c4dbed4abdb108b",
+      "outputSHA256": "55a904eb93cf7bfcd68d51397cebc4e86b6da1d1c89261273c4dbed4abdb108b"
+    },
+    {
+      "name": "alp.h",
+      "sha256": "3a83432d6127c6f0ddb1a4e1c326099c748df23fb8e625f08db0a3aa007411e4",
+      "outputSHA256": "3a83432d6127c6f0ddb1a4e1c326099c748df23fb8e625f08db0a3aa007411e4"
+    },
+    {
+      "name": "compat.h",
+      "sha256": "9d6fd14da7448cb66572999423da18fdec3415eedb9df507f40756bdce89db5e",
+      "outputSHA256": "9d6fd14da7448cb66572999423da18fdec3415eedb9df507f40756bdce89db5e"
+    },
+    {
+      "name": "cxd2878.c",
+      "sha256": "d1a3fab87a25588cf7f9c327fba185e7fd36ef2bcf1b415a1b9f5cf197975898",
+      "outputSHA256": "cc185a74ece5d1b46055f6cdc0db2121d8ccdde2b3d633270b1110b352a37eaa"
+    },
+    {
+      "name": "cxd2878.h",
+      "sha256": "77d342437535123bfc895690672472c282c26d269442eeb6e112fd4c81272e15",
+      "outputSHA256": "77d342437535123bfc895690672472c282c26d269442eeb6e112fd4c81272e15"
+    },
+    {
+      "name": "cxd2878_priv.h",
+      "sha256": "b7dae8fe8f9a567db9f2942888181849d6662acff8c31ed0d33661bc8dfdf671",
+      "outputSHA256": "b7dae8fe8f9a567db9f2942888181849d6662acff8c31ed0d33661bc8dfdf671"
+    },
+    {
+      "name": "it930x.c",
+      "sha256": "572cf6f0d5c1be7ee1fd79b881c8a9d79177df3296a37dba0df3e91d9e9f530f",
+      "outputSHA256": "572cf6f0d5c1be7ee1fd79b881c8a9d79177df3296a37dba0df3e91d9e9f530f"
+    },
+    {
+      "name": "it930x_smartcard.h",
+      "sha256": "15d724e5b0a7b507d8489bf29267a10a93e4c87e02eea4415fe193d4a48cb9cc",
+      "outputSHA256": "15d724e5b0a7b507d8489bf29267a10a93e4c87e02eea4415fe193d4a48cb9cc"
+    },
+    {
+      "name": "LICENSE",
+      "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6",
+      "outputSHA256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6"
+    },
+    {
+      "name": "m88rs6060.c",
+      "sha256": "bfbf68570fb81e79516803adeca587b5a306c3192dae8411cef441020280d8e1",
+      "outputSHA256": "bfbf68570fb81e79516803adeca587b5a306c3192dae8411cef441020280d8e1"
+    },
+    {
+      "name": "m88rs6060.h",
+      "sha256": "55f80c0a701222f8eabae2cfebd6205e04a1c18f0aa1f8c3a18d324fc5201dd3",
+      "outputSHA256": "55f80c0a701222f8eabae2cfebd6205e04a1c18f0aa1f8c3a18d324fc5201dd3"
+    },
+    {
+      "name": "m88rs6060_priv.h",
+      "sha256": "8ca57bb2b37de87f831d89969171b9de136a0bf72213818dc2f5c14f6918f2a5",
+      "outputSHA256": "8ca57bb2b37de87f831d89969171b9de136a0bf72213818dc2f5c14f6918f2a5"
+    },
+    {
+      "name": "Makefile",
+      "sha256": "ab67b7866a99476121638ed66ad9f19e274a902f37501a796129581d1d669211",
+      "outputSHA256": "579927a3b2cb0d31b0c123d3c54aff699817aef8339638cfab0e5c82fa7d23f2"
+    },
+    {
+      "name": "tbs5530.c",
+      "sha256": "a46d8285ffff6c929d2251597c14b6cc801bc389f9c3e1aea52924e0644621b4",
+      "outputSHA256": "e1a6d36a2f98ad16ae568eee30c0da130d549d23ca7f3e29cb5b685b26b0ed37"
+    },
+    {
+      "name": "tbs5530.h",
+      "sha256": "cf004b272f12e4387a33c7df978a5ac1ddab3c8ff89edcf3b0c92ae12bb26b10",
+      "outputSHA256": "108202bdf699ad1e3b6a88e33635d67c3bde401748676234090d513b43e06b4c"
+    }
+  ],
+  "patches": [
+    {
+      "name": "minimal-terrestrial.patch",
+      "sha256": "626a3b2d7aae387e211bd168633f0c8d403470fd008136660834b098f927efa1"
+    },
+    {
+      "name": "sony-error-locks.patch",
+      "sha256": "aaf0a8dc94da8d7f7757ea37b21be3a99959b5fb2a4066ba084ac39d01138bd2"
+    }
+  ],
+  "guardSHA256": "20e3cea451cd56bd044b9b6a50b1789176a7a1bb83d3ae85194636946351e7a7"
+}

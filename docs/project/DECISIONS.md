@@ -1,5 +1,25 @@
 # Architecture decision record (ADR)
 
+## ADR-033 — Phase 3.1: tách original, M và hai cửa cold/operational; timing sớm là thí nghiệm riêng
+
+**Date:** 2026-11-09 → 2026-11-10
+
+**Status:** Đã triển khai, kiểm offline và chạy Linux M theo các grant cụ thể. Cold bootstrap và operational handoff đã đo; cả late/early vẫn 0 byte TS. Original community chỉ build, chưa load; original official closure chưa build đầy đủ. Không mở phase mới, không ROOT_CAUSE_CONFIRMED hoặc Android TS_SMOKE_PASS.
+
+**Context:** Diagnostic D sửa rộng không thể đại diện original runtime. Community gốc thực dùng 8×65536 và đã comment bank9C/10; probe luôn nạp firmware rồi chạy cả satellite/B7/8A0801. Cold default alt0 chưa có EP82; sau A0, cache cũ không phù hợp nhận. VM hiện xHCI, khác D lịch sử EHCI; không tự đổi controller để ép so sánh.
+
+**Decision:** Build/hash O-C nguyên trạng nhưng không load closure chưa an toàn. Tạo M có patch truy vết riêng: bỏ satellite/ALP consumer, giữ terrestrial/demux/feed/successful resubmit; thêm admission/allowlist/full132/hash/first-error/heartbeat/deadline/cap/drain. Sửa lỗi nhả mutex/recursive-lock Sony riêng, không đổi register bytes thành công. Đây là safety adaptation, không original hoặc portability-only.
+
+**Firmware lifecycle:** Cold chỉ nhận exact default profile và một upload đủ 132 transfers. Nếu cache chưa EP82, dừng probe trước I2C/Bulk, không reset/reload để cứu. Sau natural re-enumeration, dùng grant/receipt/ledger operational riêng trên cùng physical epoch, không request_firmware/A0; xóa firmware tạm trước nhận. Không rearm store hoặc nạp lần hai.
+
+**Experiment:** Sau M late không TS, người dùng duyệt một fresh attachment và patch timing riêng. Chỉ chuyển một 8A0A00 từ sau lock sang trước terrestrial init; giữ PLP0/drive/queue/xHCI và không có stream-select lần hai. Runtime xác nhận thứ tự mới, nhưng vẫn tám URB pending 10 giây rồi cancel -2/0 byte. Không đưa timing sớm vào Android mặc định hoặc coi đây là bản sửa đủ.
+
+**Validation:** O-C 5 module/226 CRC; M và timing 3 module/127 CRC khớp guest. JVM 530, debug/release/lint; native GCC/MSVC ASan, NDK syntax bốn ABI, normalizer PS7/PS5.1, callback 820, receiver 80 flows Windows/Linux, runner 10 và CRC parser 10 PASS có phạm vi. GCC ASan thiếu libasan nên NOT RUN runtime; không cài package. Android live/instrumentation mới NOT RUN.
+
+**Alternatives / reopen trigger:** Không load original chỉ vì compile được, không thay toàn media stack hoặc dùng Linux host vật lý làm điều kiện hoàn thành. Không replay B7/04xx, drive 55, reset/controller/LNB hoặc lặp buffer/credit/timing. Chỉ mở phép mới khi source/readback phân biệt selected PLP/TS output/FIFO hoặc chuẩn bị Android SET_INTERFACE mặc định OFF có grant riêng. USB bytes hợp lệ nhưng DVR rỗng sẽ mở lại nhánh demux; hiện USB đầu vào đã 0.
+
+**Rollback / records:** Modules/usbmon/filter/firmware tạm do phiên tạo đã gỡ sau drain, tuner Windows/PnP OK/BDA/Shared; ledgers còn. Không snapshot, commit/push hoặc sửa references. [Tools](../../tools/linux-original/README.md), hai bundle ngoài Git `phase31-original-20261109-234104-c6017f83` và `phase31-original-20261110-004247-09840fb6`. Giữ giới hạn: binary cold A chưa copy riêng trước rebuild, không gán hash handoff cho nó.
+
 ## ADR-032 — Phase 3.1: mirror EP0 và đối chứng native 8192 riêng, không replay GPIO
 
 **Date:** 2026-11-09

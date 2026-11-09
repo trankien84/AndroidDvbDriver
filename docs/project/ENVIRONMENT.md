@@ -1,5 +1,16 @@
 # Kiểm kê môi trường
 
+## 2026-11-09 → 2026-11-10 — Linux cold M, xHCI hiện hành và cleanup
+
+- **Git:** branch `chore/modernize-android-build`, HEAD `cbb2aa6892ede102d7b122badec848ae7c483b14`, working tree sạch đầu phiên. References chỉ đọc: TBS `2ce787de9f6e81b4294692a45de15596ae2e1322`, community C `c5fa27eecbe80633cbb365cc44656daea1c0e2e3`, CoreELEC `072f8e99e0ac66d88d7278784e922e08e8253210`, Go `6aaa1899991c875ba0482fa9098adc6c83b01fd8`. Không sync hoặc đổi các SHA.
+- **VM đã kiểm mới:** VBoxManage `7.2.22r175245`, VM `Ubuntu-24.04` đang chạy; SSH `ubuntu-VMS` với BatchMode/StrictHostKeyChecking trả root, Ubuntu 24.04.5/kernel `6.8.0-149-generic`/x86_64. Config hiện xHCI on, EHCI off; guest có root 480M/5000M và controller xhci_hcd. Khác ghi chép EHCI lịch sử, không do phiên này đổi. Không snapshot, reboot/reset hoặc cấu hình lại VM/SSH/NAT.
+- **Công cụ guest:** headers, GCC 13.3.0, make, readelf, tcpdump 4.99.4 và kmod 31 có sẵn. O-C build 5 module; M build 3 module. Kmod dump modversions báo Invalid argument do header Ubuntu dùng `u32 next/u32 crc/name[]`, không layout cố định; đã đọc ELF và đối chiếu Module.symvers, không force ABI hoặc cài package.
+- **USB/firmware thật:** cold lần A bus 2/device 2 rồi tự thành 3; lần B device 4 rồi 5. Default descriptor 189 byte/hash e2887bad… có alt0 không endpoint; operational 50 byte/hash 22e2f1df… có config 1/interface 0/alt 0, EP82/81 maxpacket 512. Mỗi physical epoch đúng một upload 132/full8192/hash b97cf208…, xác minh từ pcap. Không coi descriptor là readback RAM hoặc suy VID:PID đủ chứng minh operational.
+- **Quyền và file tạm:** từng grant/cold physical confirmation được lưu ngoài Git. Firmware tên `dvb-usb-id5530.fw` chỉ stage khi đường dẫn và biến thể nén chưa tồn tại; xóa đúng file/hash trước operational. USB filter tạm chỉ 734c:5530, gỡ sau drain. Modules chỉ từ scratch, không install/depmod/DKMS, thay kernel/media core hoặc Windows BDA.
+- **Trạng thái cuối đã đo:** Windows PnP OK/TBS 5530 DVB BDA, usbipd Shared; VM không còn tuner hoặc tbs/cxd/alp/dvb_core/usbmon do phiên nạp. xHCI giữ nguyên, filter tạm vắng. Ledgers không xóa/rearm. Raw/captures/grants/modules ở hai bundle `phase31-original-*` dưới D:\TSDuck.
+- **Android toolchain đã kiểm:** build declarations giữ AGP 9.5.0/wrapper 9.8.2/Build-Tools 37.0.0/NDK 30.0.16248370/Java 8/minSdk 21; runtime JDK 25.0.5.0.3. Không nâng/cài SDK/JDK/dependency. Fresh JVM 530 và debug/release/lint PASS; native GCC 16.2 và MSVC ASan PASS, NDK syntax bốn ABI/API21 PASS. GCC ASan link thiếu libasan, không cài thêm; Android physical/ADB/instrumentation mới NOT RUN.
+- **GitNexus:** CLI 1.6.12 phát hiện; `status --json` không trả sau cửa sổ chờ, đã dừng đúng helper PID/tree. Không certify index current, không reindex/repair hoặc dùng graph làm bằng chứng. Nghiên cứu dựa trên source/hash/diff và tests. Một task-agent không khởi chạy do model unsupported; không có kết quả giả hoặc đổi model để retry.
+
 ## 2026-11-09, phiên 19:18 +07 — Samsung A/B và công cụ offline hiện hành
 
 - **Git:** branch `chore/modernize-android-build`, HEAD `48b53d788db5e023123afbc0a65f77a16ae084ef` trước/sau; có sẵn `.github/copilot-instructions.md` modified và `.github/instructions/virtualbox-ubuntu-ssh.instructions.md` untracked, giữ nguyên. Không sync, stage/commit/push hoặc sửa references.

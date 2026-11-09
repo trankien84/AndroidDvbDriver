@@ -1,0 +1,47 @@
+diff --git a/tbs5530.c b/tbs5530.c
+--- a/tbs5530.c
++++ b/tbs5530.c
+@@ -165,7 +165,8 @@ static int tbs5530_start_streaming_core(struct tbs5530_dev *dev)
+ 
+ 	buf[0] = 10;
+ 	buf[1] = dev->active_fe;
+-	tbs5530_op_rw(dev->udev, 0x8a, 0, 0, buf, 2, tbs5530_WRITE_MSG);
++	if (!early_stream_select)
++		tbs5530_op_rw(dev->udev, 0x8a, 0, 0, buf, 2, tbs5530_WRITE_MSG);
+ 
+ 	dev->streaming = true;
+ 	dev->urb_complete_ok = 0;
+@@ -264,6 +265,11 @@ static int tbs5530_fe_ter_init(struct dvb_frontend *fe)
+ 	struct tbs5530_dev *dev = fe->dvb->priv;
+ 
+ 	dev->active_fe = 0;
++	if (early_stream_select) {
++		u8 data[2] = {10, 0};
++		int ret = tbs5530_op_rw(dev->udev, 0x8a, 0, 0, data, 2, tbs5530_WRITE_MSG);
++		if (ret != 2) return ret < 0 ? ret : -EREMOTEIO;
++	}
+ 	if (dev->fe_ter_ops_orig.init)
+ 		return dev->fe_ter_ops_orig.init(fe);
+ 	return 0;
+diff --git a/tbs5530_min_guard.h b/tbs5530_min_guard.h
+--- a/tbs5530_min_guard.h
++++ b/tbs5530_min_guard.h
+@@ -5,7 +5,7 @@
+ #include <linux/ktime.h>
+ #include <linux/workqueue.h>
+ 
+-static bool minimal_enable, allow_cold_firmware, operational_handoff, stop;
++static bool minimal_enable, allow_cold_firmware, operational_handoff, early_stream_select, stop;
+ static unsigned int expected_busnum, expected_devnum;
+ static unsigned long heartbeat;
+ static atomic64_t heartbeat_at;
+@@ -31,7 +31,8 @@ static const struct kernel_param_ops tbs_m_telemetry_ops = { .get = tbs_m_teleme
+ module_param_cb(telemetry, &tbs_m_telemetry_ops, NULL, 0400);
+ module_param(minimal_enable, bool, 0400);
+ module_param(allow_cold_firmware, bool, 0400);
+-module_param(operational_handoff, bool, 0400);
++module_param(operational_handoff, bool, 0400);
++module_param(early_stream_select, bool, 0400);
+ module_param(expected_busnum, uint, 0400);
+ module_param(expected_devnum, uint, 0400);
+ 

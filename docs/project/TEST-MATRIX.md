@@ -1,5 +1,39 @@
 # TBS5530 test matrix
 
+## 2026-11-09 → 2026-11-10 — Phase 3.1: original build, Linux M late/early và cleanup
+
+Git trước/sau `chore/modernize-android-build` / `cbb2aa6892ede102d7b122badec848ae7c483b14`, sạch đầu phiên. Không stage/commit/push/sync hoặc đổi historical PASS. Bằng chứng mới trong hai bundle `phase31-original-20261109-234104-c6017f83` và `phase31-original-20261110-004247-09840fb6` dưới D:\TSDuck.
+
+| Gate / phép thử mới | Kết quả | Bằng chứng / giới hạn |
+| --- | --- | --- |
+| Git/source/artifact admission | PASS | Bốn source SHA pin lại; tám raw artifact cũ khớp manifest; references chỉ đọc |
+| Original community O-C | PASS build, NOT RUN load | Copy mới/hash nguyên trạng; `make -j2` đủ 5 module/MODPOST/vermagic; 226 symbol CRC khớp guest. Probe vệ tinh/B7/8A0801 chưa an toàn trong scope |
+| Original official O-T | NOT BUILT full closure, NOT RUN | Source review vendor media API/layout; không suy ABI từ board-only hoặc tự cài media stack |
+| M source/compile/ABI | PASS | Terrestrial config/init/feed và successful receive được bảo toàn; patch safety riêng; 3 module/127 CRC, không install |
+| Extracted callback/guard | PASS 820 checks | Tái hiện original resubmit zero/lỗi âm; kiểm M short/error/cap/deadline/submit/drain contract bằng fake, không USB |
+| Receiver identity/profile | PASS 80 mocked flows mỗi Windows/Linux | Tên original/128-byte FE field, VID:PID/canonical parent/adapter, frontend/demux/DVR cùng parent; K36/8 MHz/manual PLP0; negative/STOP/cleanup; production Linux compile PASS |
+| Runner grant/ledger | PASS 10 checks | WhatIf không consume; early timing cần grant; O_EXCL/fsync chống replay, cold/handoff riêng; dừng trước SSH trong tests |
+| CRC parser | PASS 10 fixtures | Layout thật `u32 next/u32 crc/name[]` và NULL sentinel; CRC sai/thiếu export/truncated bị từ chối. Kmod31 dump Invalid argument không bị force qua |
+| Cold M bootstrap A | PASS firmware, dừng trước frontend | 132 A0 full-length, coverage 8192/hash đúng; cached EP82 chưa có, tự device2→3, không reset/upload lần hai; cleanup_ok=1 |
+| M late operational | FAIL nhận TS; valid diagnostic | K36/status 31, 8A sau lock; tám URB requested 65536 chờ 10 giây rồi cancel -2/actual 0; submitted/reaped 8/8, outstanding 0, DVR 0; -110 là policy |
+| M late trace | PASS capture/normalizer | 1492 events paired, dropped 0; không A0/B7, vendor controls full-length; pcap SHA 2470e8fe… |
+| Timing patch/offline | PASS | Tái tạo từ pinned M; chỉ hai call sites và flag OFF, exact payload/early-before-init/short-error/baseline tests |
+| Cold timing bootstrap B | PASS firmware | Fresh physical epoch do người dùng xác nhận; đúng 132 transfers/8192 byte/hash, device4→5 tự nhiên, không A0 ở handoff |
+| M early operational | FAIL nhận TS; timing không đủ sửa | Frame 408 có một 8A0A00 trước init, K36/status 31; tám URB chờ 10 giây rồi cancel -2/actual 0, submitted/reaped 8/8, outstanding 0, DVR 0 |
+| Timing capture/normalizer | PASS có giới hạn | 1935 events/dropped 0; boundaries đúng ordinal 60/384, 1934 paired và một missing-completion enumeration. Toàn bộ 132 A0 và 8 Bulk paired riêng; không che cảnh báo |
+| Fresh Android JVM | PASS 530/530 | App 68/drivers 431/usbxfer 31; failure/error/skipped 0; wrapper --rerun-tasks, 331 tasks executed |
+| Debug/release/lint | PASS | Wrapper :app:assembleDebug/:app:assembleRelease/:app:lintDebug/:app:lintRelease exit 0; không đổi toolchain |
+| Native GCC / MSVC ASan | PASS 4096/8192 | Real core fault injection/canary; MSVC lần đầu thiếu /Zi gây warning-as-error, sửa command rồi PASS, không sửa source |
+| GCC ASan riêng | NOT RUN runtime | Link FAIL thiếu libasan trong MinGW đã cài; không cài thêm. Không đánh đồng với GCC thường hoặc MSVC ASan |
+| NDK core/JNI | PASS syntax-only 4 ABI/API21 | Không suy Android hardware từ syntax; release/debug build kiểm riêng |
+| Usbmon normalizer fixtures | PASS 77/77 mỗi PS7/PS5.1 | Fresh tests, không hardware |
+| Shell/PowerShell/WhatIf | PASS | bash -n guest; scripts parse, prepare WhatIf/reproduction/hash, runner WhatIf không I/O |
+| Cleanup/owner cuối | PASS | URB drain 8/8, outstanding 0 cả hai; modules/usbmon/filter/firmware tạm vắng; Windows PnP OK/BDA/Shared; ledger còn |
+| Android live/instrumentation mới | NOT RUN | Không grant Android mới hoặc causal fix; không ADB/firmware/tune/receive mới |
+| TS sample/PAT/PMT/quality | FAIL nhận TS, parser NOT RUN | Hai file 0 byte, không có sample ≥32768/sync 188/PAT/PMT/CRC/TEI/CC. Android TS_SMOKE_PASS vẫn chưa đạt |
+
+Kết luận: ROOT_CAUSE_UNRESOLVED_WITH_NARROWED_SCOPE. M không original; timing sớm không đủ sửa trong cấu hình M/xHCI, không chứng minh một source diff là nguyên nhân. Không mở phase mới hoặc chạy lại cùng ledger.
+
 ## 2026-11-09, phiên 19:18 +07 — Phase 3.1: EP0 mirror và Samsung 4096/8192
 
 Branch/HEAD trước và sau `chore/modernize-android-build` / `48b53d788db5e023123afbc0a65f77a16ae084ef`. Giữ edits instructions đầu phiên, không stage/commit/push/sync. Không đổi historical PASS/FAIL. Báo cáo/logs mới dưới `D:\TSDuck\reports\phase31-continuation-20261109-192232-71163e13` và sibling logs; module core/firmware proof có bundles riêng được dẫn trong báo cáo tổng.

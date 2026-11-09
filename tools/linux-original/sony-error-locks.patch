@@ -1,0 +1,77 @@
+diff --git a/cxd2878.c b/cxd2878.c
+--- a/cxd2878.c
++++ b/cxd2878.c
+@@ -4777,40 +4777,40 @@ static int cxd2878_init(struct dvb_frontend *fe)
+ 	if (SONY_TUNER_IS_ASCOT3(dev->chipid) || SONY_TUNER_IS_FRIEA(dev->chipid)) {
+ 		/* Clear all registers */
+ 		ret = cxd2878_wr(dev,dev->slvx,0x02,0x00);
+-		if(ret) return ret;
++		if(ret) goto err;
+ 
+ 		/* Wait for oscillator stabilization */
+ 		msleep(4);
+ 
+ 		/* Set SLV-X Bank : 0x00 */
+ 		ret = cxd2878_wr(dev,dev->slvx,0x00,0x00);
+-		if(ret) return ret;
++		if(ret) goto err;
+ 
+ 		/* Initial setting for crystal oscillator */
+ 		ret = cxd2878_wr(dev,dev->slvx,0x1D,0x00);
+-		if(ret) return ret;
++		if(ret) goto err;
+ 
+ 		/* Clock mode setting */
+ 		ret = cxd2878_wr(dev,dev->slvx,0x14,dev->base->config->xtal);
+-		if(ret) return ret;
++		if(ret) goto err;
+ 
+ 		/* Wait for oscillator stabilization */
+ 		msleep(1);
+ 
+ 		/* Initialize setting */
+ 		ret = cxd2878_wr(dev,dev->slvx,0x50,0x00);
+-		if(ret) return ret;
++		if(ret) goto err;
+ 
+ 		if(dev->base->config->atscCoreDisable) {
+ 			/* ATSC 1.0 core disable setting */
+ 			ret = cxd2878_wr(dev,dev->slvx,0x90,0x00);
+-			if(ret) return ret;
++			if(ret) goto err;
+ 			msleep(1);
+ 		}
+ 
+ 		/* Negate XSRST */
+ 		ret = cxd2878_wr(dev,dev->slvx,0x10,0x00);
+-		if(ret) return ret;
++		if(ret) goto err;
+ 
+ 		if(dev->base->config->atscCoreDisable)
+ 			msleep(1);
+@@ -4896,7 +4896,8 @@ static int cxd2878_init(struct dvb_frontend *fe)
+ 	}
+ 	else {
+ 		dev_info(&dev->base->i2c->dev, "Unknown chipid %x", dev->chipid);
+-		return -ENOTSUPP;
++		ret = -ENOTSUPP;
++		goto err;
+ 	}
+ 
+ 	cxd2878_i2c_repeater(dev,0);
+@@ -5484,10 +5485,11 @@ static int cxd2878_set_frontend(struct dvb_frontend *fe)
+ 		c->bandwidth_hz, c->symbol_rate, c->inversion,
+ 		c->stream_id);
+ 
+-		mutex_lock(&dev->base->i2c_lock);
+-
+-	if(!dev->warm)
+-	    cxd2878_init(fe);
++	if (!dev->warm) {
++		ret = cxd2878_init(fe);
++		if (ret) return ret;
++	}
++	mutex_lock(&dev->base->i2c_lock);
+ 
+ 	if(dev->base->config->RF_switch)
+ 		dev->base->config->RF_switch(dev->base->i2c,dev->base->config->rf_port,1);

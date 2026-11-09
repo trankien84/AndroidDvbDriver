@@ -1,5 +1,18 @@
 # Port TBS5530 sang Android — trạng thái hiện tại
 
+## 2026-11-09 → 2026-11-10 — Phase 3.1: đối chứng Linux gần nguyên gốc và timing sớm vẫn chưa có TS
+
+**Chưa xác nhận nguyên nhân gốc; Android chưa đạt TS_SMOKE_PASS.** Git trước/sau vẫn `chore/modernize-android-build` / `cbb2aa6892ede102d7b122badec848ae7c483b14`, sạch đầu phiên. Không stage/commit/push, đổi branch hoặc sửa references.
+
+- **Original community:** đã build mới đủ 5 module trên Ubuntu `6.8.0-149-generic`, source hash giữ nguyên và 226 symbol CRC khớp. Không load nguyên trạng vì probe còn chạy firmware/reset vệ tinh, B7 và 8A0801. Official TBS cần cả vendor media framework; chưa build/load closure đầy đủ trên guest stock, không coi board-only `.ko` là đủ.
+- **Sửa hai nhận định về source:** community gốc đã dùng 8×65536; bank9C/10 đã bị comment trong Sony gốc, không do diagnostic D tự đổi. M mới giữ terrestrial/demux/successful resubmit nhưng thêm giới hạn và bỏ đường vệ tinh; không được gọi M là original. Chi tiết trong [công cụ đối chứng](../../tools/linux-original/README.md).
+- **Linux thật:** người dùng duyệt cold M rồi handoff không firmware, sau đó một timing experiment trên attachment mới. Cả hai bootstrap có đúng 132 A0 full-length, tái tạo 8192 byte từ pcap khớp hash đã pin; thiết bị tự re-enumerate default→operational. Guard chặn dùng endpoint cache default, không reset hoặc nạp firmware lần hai. VM hiện là xHCI, không phải EHCI như D lịch sử; phiên này không đổi controller.
+- **Hai phép nhận M:** K36/8 MHz/manual PLP0 khóa status 31. Timing mặc định gửi 8A0A00 sau lock; timing riêng gửi đúng một lệnh trước init. Cả hai có tám URB requested 65536 chờ khoảng 10 giây rồi tám cancel -2/actual 0; submitted/reaped 8/8, outstanding 0, USB/DVR 0 byte. -110 là deadline policy, không HCD completion. Timing sớm không đủ sửa trong cấu hình đã đo; không gọi khác biệt với D hoặc Android là causal proof.
+- **Validation mới:** JVM 530/530, debug/release/lint; native GCC và MSVC ASan 4096/8192; NDK syntax bốn ABI; normalizer 77/77 mỗi PS7/PS5.1 PASS. Thêm 820 extracted checks, receiver 80 mocked flows trên Windows/Linux, M 127 CRC, tests runner 10 và CRC parser 10 PASS. GCC ASan không link vì thiếu libasan, không cài thêm. Android live/instrumentation mới NOT RUN; chưa có causal fix để port.
+- **Cleanup đã kiểm:** tuner trả Windows/PnP OK/BDA và usbipd Shared; guest không còn modules phiên tạo/usbmon/filter/firmware tạm. Giữ consumed ledgers, không snapshot, kernel/driver Windows/LNB/DC hoặc GPIO mới.
+
+Báo cáo chính: `D:\TSDuck\reports\phase31-original-20261109-234104-c6017f83\closeout.md`; bundle timing `phase31-original-20261110-004247-09840fb6`. Raw/modules/firmware/grants ở ngoài Git. Bước tiếp theo có giới hạn là đối chiếu selected-PLP/L1 và TS output/FIFO với Windows trước khi chọn phép đọc hoặc Android SET_INTERFACE mặc định OFF có grant mới; không chạy lại buffer/credit/timing scan. Trạng thái: **ROOT_CAUSE_UNRESOLVED_WITH_NARROWED_SCOPE**, vẫn Phase 3.1.
+
 ## 2026-11-09, phiên 19:18 +07 — Phase 3.1: đã có EP0 Android; 8192 byte vẫn EOVERFLOW
 
 **Chưa xác nhận nguyên nhân gốc; Android chưa đạt TS_SMOKE_PASS.** Branch/HEAD trước và sau `chore/modernize-android-build` / `48b53d788db5e023123afbc0a65f77a16ae084ef`; giữ hai thay đổi instructions có trước phiên, không stage/commit/push hoặc sửa references.

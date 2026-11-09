@@ -1,0 +1,14 @@
+{
+  "patchSHA256": "4e9c00aaf064769ba087295173874636a86411094115c24245208a2f5adfaf9d",
+  "baseManifestSHA256": "b2c654d96ad0af39bb242f61a87e77c762e3dbedc8dfce5545d169ab636f67e6",
+  "files": [
+    {
+      "sha256": "56b906eac56262558d76b0b648a46921d08d3accb13ccecd885d46b24f1a5722",
+      "name": "tbs5530.c"
+    },
+    {
+      "sha256": "1370b0b6a9e5843834a21343b1baf1c789c788f6ed371bf8b0dba70ef02fd1cf",
+      "name": "tbs5530_min_guard.h"
+    }
+  ]
+}

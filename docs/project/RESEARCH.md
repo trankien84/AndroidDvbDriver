@@ -1,5 +1,35 @@
 # Research log (append-only)
 
+## 2026-11-09 → 2026-11-10 — Phase 3.1: original closure, cold re-enumeration và đối chứng M timing
+
+### Kết luận mới có giới hạn
+
+**Linux M chưa nhận TS; Android chưa có causal fix.** O-C community đã build nguyên trạng nhưng không load vì probe chứa satellite/shared side effects. M late và M early đều khóa K36/manual PLP0, tám URB requested 65536 chờ hết 10 giây rồi cancel -2/actual 0; USB/DVR 0 byte. Không có successful/zero completion trước deadline. -110 là policy, không HCD error; không coi đây là Linux original runtime failure hoặc nguyên nhân Android -75 đã xác nhận.
+
+### Nguồn gốc và semantic diff
+
+HEAD Android `cbb2aa6892ede102d7b122badec848ae7c483b14`; TBS `2ce787de9f6e81b4294692a45de15596ae2e1322`, C `c5fa27eecbe80633cbb365cc44656daea1c0e2e3`, CoreELEC `072f8e99e0ac66d88d7278784e922e08e8253210`, Go `6aaa1899991c875ba0482fa9098adc6c83b01fd8`, không fetch/sync hoặc sửa references.
+
+`SOURCE-CONFIRMED`: community `tbs5530.h` định nghĩa NUM_URBS=8/URB_BUF_SIZE=65536; D không tự tăng queue này. `cxd2878.c:4821` đã comment bank9C/10 trong source community gốc; D giữ Sony byte-identical, không tự bỏ đoạn đó. Official/CoreELEC là nguồn 8×4096. Các nhận định lịch sử về khác biệt nguồn cần đọc cùng đính chính này, không sửa kết quả runtime cũ.
+
+O-C `tbs5530_dvb_init` gọi M88RS6060 probe; `m88rs6060_probe:3407` gọi ready/hard reset/tuner/init/firmware vệ tinh trước B7/0000 và 8A0801. Chỉ tránh `.set_voltage` không cô lập các side effect ấy. O-T cần cả vendor DVB/media framework và layout không trùng stock; không chứng nhận ABI từ board-only `.ko`. Closure official/CoreELEC không reload descriptor sau A0 trong nhánh `no_reconnect=1`; thiếu cached EP82 có thể khiến submit -ENOENT, khác completion -75 Android.
+
+M bỏ satellite/ALP consumer nhưng giữ terrestrial config/init/feed/demux và successful resubmit, kể cả zero. Thêm allowlist/hash/full132, first-error/heartbeat/deadline/cap/drain; Sony chỉ sửa bảy return lỗi để nhả mutex, unsupported exit và cold-init recursive-lock. Đây là safety adaptation, không original hoặc portability-only. Patch/manifest/tests ở [linux-original](../../tools/linux-original/README.md); semantic diff theo hàm và closure đầy đủ ở báo cáo ngoài Git.
+
+### Firmware lifecycle và runtime mới
+
+`RUNTIME-OBSERVED`: VM thực hiện tại xHCI/High-Speed, không phải EHCI lịch sử; không đổi controller. Cold A có descriptor 189 byte/hash `e2887bad8b5a0e8dcaaa69bd636a01a2d11e53fe4b532b5b14828a2d3df952de`, alt0 không endpoint. M gửi 132 A0, full length, coverage 8192 byte và firmware SHA `b97cf208bb586f706b26aa5450de6bb97375a3e3eabe833cddb0ae3a4f69d0dc` tái tạo từ pcap. Guard dừng trước I2C/Bulk do cached EP82 chưa có; thiết bị tự re-enumerate device2→3, operational hash `22e2f1df9f66c58dbb6c554e400b6b8abcb78ee4f277e03679bc0fac7a25add5`. Không reset hoặc upload lần hai; handoff không request_firmware/A0, file firmware tạm đã xóa.
+
+M late board SHA `5ad5512988800c2ee6954faa4fed8058f33c489f505a01ac6086b2859a2141a6`: 375 OUT80, 178 OUT90, 178 IN91 và một OUT8A/0A00 đều full-length. C4 đọc/ghi 29, C6 ghi 01, HiZ81 ghi 00, C3 ghi 00, reg96/97 gửi 54/54; AF=00/AD=01 là manual PLP0, bank20/status cuối 26. Đây là giao dịch thực, chưa selected-PLP/L1 hoặc effective drive readback. Tám Bulk submit tại frame 775–782; chỉ có tám cancellation tại frame 1485–1492 sau khoảng 10 giây. Pcap có 1492 events paired, dropped 0, SHA `2470e8fec772f5b50ebe692d58897f35e5d8c7133a32876742bb2250bc52827a`.
+
+Theo quyền mới, fresh physical epoch B giữ cổng/cáp/nguồn/RF IN/xHCI. Timing board SHA `a02c607cefe7bd02361f1629f78e39178e17dd9a88a53078b97d1ee77447678d`, chỉ chuyển một 8A0A00 trước init; frame 408 xác nhận thực thi sớm, không có lần thứ hai ở start-feed. Bootstrap B vẫn đủ 132 transfers/hash và tự chuyển device4→5. K36/status 31 đạt nhưng tám URB vẫn chờ 10 giây rồi cancel, submitted/reaped 8/8, outstanding 0, bytes 0. Pcap SHA `abdea3f3f7af76b7d4535cec73c99890e0f32638e883bb329bbc3ddb4beb2a34`, có 1935 events/dropped 0; normalizer căn ordinal 60/384 có 1934 records paired và một missing-completion ở enumeration, không liên quan A0/Bulk đã paired đủ. Timing sớm không đủ sửa trong điều kiện đã đo; không coi hai physical epochs là kiểm soát hoàn hảo mọi trạng thái bo.
+
+### Giả thuyết còn mở và provenance
+
+Không đổ lỗi demux khi USB chưa có payload. Zero-stop D không phải lời giải đủ cho mọi lần thiếu TS, nhưng M chưa có zero-success để kiểm chính nhánh resubmit trên hardware. Cold/xHCI M khác warm/EHCI D, không quy một source diff thành root cause. Windows B7/04xx/double firmware và selected-PLP/TS output/FIFO vẫn cần source/readback/side-effect plan; không replay hoặc scan buffer. Android SET_INTERFACE mặc định OFF là candidate độc lập cần implementation/tests/grant riêng, chưa chạy.
+
+Hai bundle chính: `D:\TSDuck\reports\phase31-original-20261109-234104-c6017f83` và `phase31-original-20261110-004247-09840fb6`, raw trong sibling logs. Binary cold A có SHA build/load được ghi nhưng chưa copy riêng trước rebuild handoff; không gán hash handoff cho nó. Cleanup cuối Windows/PnP OK/BDA/Shared, guest modules/filter/firmware tạm vắng, ledgers còn. AgentMemory milestone đã lưu và đọc lại đúng canonical project/author; không gửi raw hoặc firmware.
+
 ## 2026-11-09 — Phase 3.1: proof FX2 và transcript Android A/B thật
 
 **Kết luận:** Android vẫn không nhận TS; hai attachment Samsung với requested 4096/8192 đều có tám completion `-75/actual 0`, syscall thành công và drain sạch. Không xác nhận root cause. EP0 Android đã được thu byte-exact ở lớp ứng dụng, không còn chỉ suy từ source; không gọi đó là kernel usbmon hoặc physical wire.
