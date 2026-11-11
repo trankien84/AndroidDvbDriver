@@ -398,7 +398,7 @@ public final class Tbs5530AndroidUsbFacade implements Tbs5530UsbBinding.Facade {
         @Override void close() throws IOException;
     }
     interface ReceiveBackendFactory {
-        ReceiveBackend create(UsbDeviceConnection connection, UsbEndpoint endpoint) throws IOException;
+        ReceiveBackend create(UsbDeviceConnection connection, UsbInterface intf, UsbEndpoint endpoint) throws IOException;
     }
     static final class AndroidManager implements Manager {
         private final Context application;
@@ -488,7 +488,7 @@ public final class Tbs5530AndroidUsbFacade implements Tbs5530UsbBinding.Facade {
                     if (address != 0x82 || selectedEndpoint == null || selectedEndpoint.getDirection() != 128
                             || selectedEndpoint.getType() != 2) throw new IOException("Bulk IN 0x82 unavailable");
                     if (receiveFactory != null) {
-                        if (receive == null) receive = receiveFactory.create(connection, selectedEndpoint);
+                        if (receive == null) receive = receiveFactory.create(connection, intf, selectedEndpoint);
                         int count = receive.read(buffer, length, timeoutMillis);
                         bulkErrno = receive.errno();
                         return count;

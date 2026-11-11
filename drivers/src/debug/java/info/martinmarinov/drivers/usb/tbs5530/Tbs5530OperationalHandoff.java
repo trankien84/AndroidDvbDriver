@@ -9,6 +9,8 @@ import java.util.concurrent.atomic.AtomicReference;
 /** Opt-in debug acquisition through the existing binding/coordinator. Never uploads firmware. */
 public final class Tbs5530OperationalHandoff implements AutoCloseable {
     public interface Consent { void requireCurrent() throws IOException; }
+    public interface SonyReadbackHook { void beforeFirstBulk() throws IOException; }
+    private SonyReadbackHook sonyReadbackHook;
     private final Tbs5530Session session;
     private final Tbs5530UsbBinding binding;
     private final Consent consent;
@@ -20,6 +22,7 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
         volatile Tbs5530TsSmoke.Limits limits;
         volatile Consent pollGuard;
         volatile Tbs5530NativeUsbfsBackend backend;
+        volatile boolean k36AutoTuneConfirmed;
         NativeConfiguration(String runId) {
             if (runId == null || !runId.matches("[A-Za-z0-9_-]{1,100}")) throw new IllegalArgumentException("Invalid diagnostic run ID");
             this.runId = runId;
@@ -52,8 +55,8 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
         if (api == Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO) return new Tbs5530AndroidUsbFacade.AndroidManager(context.getApplicationContext());
         if (Tbs5530AutonomousPlans.nativeUrb(api)) {
             return new Tbs5530AndroidUsbFacade.AndroidManager(context.getApplicationContext(),
-                    (connection, endpoint) -> {
-                        Tbs5530NativeUsbfsBackend backend = new Tbs5530NativeUsbfsBackend(connection, endpoint, context.getFilesDir(),
+                    (connection, intf, endpoint) -> {
+                        Tbs5530NativeUsbfsBackend backend = new Tbs5530NativeUsbfsBackend(connection, intf, endpoint, context.getFilesDir(),
                                 configuration.runId, configuration.limits, () -> {
                                     consent.requireCurrent();
                                     if (configuration.pollGuard == null) throw new IOException("Native poll guard unavailable");
@@ -67,7 +70,7 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
             throw new IOException("Bounded queued diagnostic requires API26+");
         }
         return new Tbs5530AndroidUsbFacade.AndroidManager(context.getApplicationContext(),
-                (connection, endpoint) -> new Tbs5530QueuedUsbBackend(connection, endpoint, context.getFilesDir()));
+                (connection, intf, endpoint) -> new Tbs5530QueuedUsbBackend(connection, endpoint, context.getFilesDir()));
     }
     Tbs5530OperationalHandoff(Context context, Tbs5530AndroidRuntime runtime,
                              Tbs5530AndroidUsbFacade.Manager manager, Consent consent) throws IOException {
@@ -172,9 +175,24 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
         return (session.getState() == Tbs5530Session.State.CONNECTED || session.getState() == Tbs5530Session.State.READY)
                 && session.isInterfaceClaimed() && !pending();
     }
+    void requireSonyReadbackOwner() throws IOException {
+        consent.requireCurrent(); session.requireUsable(generation());
+        Tbs5530OperationalProfile current = profile.get();
+        if (readApi != Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096 || nativeConfiguration == null || !nativeConfiguration.k36AutoTuneConfirmed
+                || !operationalOwner() || current == null || current.negotiatedUsbSpeed != 3 || current.streamPacketSize != 512 || !session.isFrontendLocked())
+            throw new IOException("Exact idle native4096 locked operational owner required");
+        NativeReceiveSnapshot nativeState = nativeReceiveSnapshot();
+        if (nativeState != null && (nativeState.attempted != 0 || nativeState.submitted != 0 || nativeState.completed != 0
+                || nativeState.outstanding != 0 || nativeState.quarantined)) throw new IOException("Readback cannot run after any URB attempt");
+    }
     Tbs5530Session session() { return session; }
     Tbs5530ControlIo controlIo() throws IOException { return binding.controlIo(); }
     Tbs5530BulkTransport bulkIo() throws IOException { return binding.bulkIo(); }
+    public void sonyReadbackHook(SonyReadbackHook hook) throws IOException {
+        requireSonyReadbackOwner();
+        if (sonyReadbackHook != null || nativeConfiguration.limits != null) throw new IOException("Readback hook already bound or receive started");
+        sonyReadbackHook=java.util.Objects.requireNonNull(hook);
+    }
     public Tbs5530TsSmoke smoke(Tbs5530TsSmoke.Permission permission, Tbs5530TsSmoke.Clock clock) throws IOException {
         return smoke(permission, clock, (bytes, length) -> { });
     }
@@ -187,19 +205,46 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
             effective = new Tbs5530TsSmoke.Permission() {
                 public void consume(Tbs5530TsSmoke.Limits limits, long token) throws IOException {
                     if (nativeConfiguration.limits != null) throw new IOException("Native diagnostic already configured");
+                    if (limits.explicitSetInterfaceAlt0 && (!nativeConfiguration.k36AutoTuneConfirmed
+                            || !permission.explicitSetInterfaceAlt0Approved()))
+                        throw new IOException("Exact K36 AUTO tune and explicit interface selection grant required");
+                    if (limits.sonyTsOutputReadback && (!permission.sonyTsOutputReadbackApproved() || sonyReadbackHook == null))
+                        throw new IOException("Bound Sony readback hook and grant required");
                     permission.consume(limits, token);
                     nativeConfiguration.pollGuard = () -> {
                         session.requireUsable(token);
+                        if (!operationalOwner()) throw new IOException("Claimed active exclusive owner required");
                         permission.requireCurrent(token);
+                        if (limits.explicitSetInterfaceAlt0 && (!nativeConfiguration.k36AutoTuneConfirmed
+                                || !permission.explicitSetInterfaceAlt0Approved()))
+                            throw new IOException("Explicit interface selection grant or K36 AUTO revoked");
                     };
                     nativeConfiguration.limits = limits;
                 }
                 public void requireCurrent(long token) throws IOException { permission.requireCurrent(token); }
                 public void audit(String event, int ordinal, int count) throws IOException { permission.audit(event, ordinal, count); }
                 public boolean nativeUrbReceptionApproved() { return permission.nativeUrbReceptionApproved(); }
+                public boolean explicitSetInterfaceAlt0Approved() { return permission.explicitSetInterfaceAlt0Approved(); }
+                public boolean sonyTsOutputReadbackApproved() { return permission.sonyTsOutputReadbackApproved(); }
+                public void beforeFirstBulk() throws IOException {
+                    requireSonyReadbackOwner(); permission.requireCurrent(generation);
+                    if (nativeConfiguration.limits == null || !nativeConfiguration.limits.sonyTsOutputReadback
+                            || !permission.sonyTsOutputReadbackApproved() || sonyReadbackHook == null)
+                        throw new IOException("Sony readback hook or permission unavailable");
+                    sonyReadbackHook.beforeFirstBulk();
+                }
             };
         }
         return new Tbs5530TsSmoke(session, generation, new Tbs5530Bridge(controlIo(), session, generation), bulkIo(), effective, clock, readApi, observer);
+    }
+    void programCompleted(Tbs5530Frontend.Plan plan) {
+        if (nativeConfiguration == null) return;
+        if (plan.operation == Tbs5530Frontend.Operation.INITIALIZE || plan.operation == Tbs5530Frontend.Operation.TUNE) {
+            Tbs5530DvbT2TuneParameters tune = plan.tuneParameters;
+            nativeConfiguration.k36AutoTuneConfirmed = plan.operation == Tbs5530Frontend.Operation.TUNE && tune != null
+                    && tune.frequencyHz == 594000000L && tune.bandwidthHz == 8000000
+                    && tune.selection.mode == Tbs5530DvbT2TuneParameters.Mode.AUTO;
+        }
     }
     /** Opaque binding, kept in private approval files; raw USB identity never enters project logs. */
     public String approvalIdentity() throws IOException {
@@ -216,13 +261,15 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
     /** Read on the owner worker or after completion/cleanup; never races a native syscall. */
     public NativeReceiveSnapshot nativeReceiveSnapshot() {
         Tbs5530NativeUsbfsBackend backend = nativeConfiguration == null ? null : nativeConfiguration.backend;
-        return backend == null ? null : new NativeReceiveSnapshot(backend.snapshot(), backend.quarantined());
+        return backend == null ? null : new NativeReceiveSnapshot(backend.snapshot(), backend.quarantined(), backend.interfaceSelectionSnapshot());
     }
     public static final class NativeReceiveSnapshot {
         public final long attempted, submitted, completed, outstanding, copiedBytes, cleanupBytes, completionSequence;
         public final int syscallErrno, syscallReturn, urbStatus, actualLength, slot;
         public final boolean quarantined;
-        NativeReceiveSnapshot(long[] s, boolean quarantined) {
+        public final Tbs5530ExplicitInterfaceSelection.Snapshot interfaceSelection;
+        NativeReceiveSnapshot(long[] s, boolean quarantined, Tbs5530ExplicitInterfaceSelection.Snapshot interfaceSelection) {
+            this.interfaceSelection = interfaceSelection;
             attempted = s[0]; submitted = s[1]; completed = s[2]; outstanding = s[3]; copiedBytes = s[4]; cleanupBytes = s[5];
             syscallErrno = (int)s[7]; urbStatus = (int)s[9]; actualLength = (int)s[10]; slot = (int)s[11];
             completionSequence = s[12]; syscallReturn = (int)s[13]; this.quarantined = quarantined || s[6] != 0;

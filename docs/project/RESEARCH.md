@@ -1,5 +1,276 @@
 # Research log (append-only)
 
+## 2026-11-11, phiên 10:11 — Đối chiếu raw init/first Bulk của BDA cold2 và VM 014626
+
+**Đã thu hẹp sai khác về init tuner và USB descriptors, đồng thời xác định RSSI là thao tác có ghi gây nhiễu cho phép so VM.** Chưa chứng minh nó gây BABBLE hoặc Android -75. Chỉ đọc file cũ, không USB/SSH/VM hoặc capture mới; không sửa mã runtime.
+
+### Dữ liệu và kiểm chứng
+
+Hash lại BDA cold2 `70fced47614ff8ec17c9e78f79fca16408c23e6bcadcfb6ad25a4c69cd7f9ded`, VM cold `99b2a5ffadb5107a50b2e2663b5e0990bf854b2b477035d60129ad8166c2b683` và VM operational `7a5d408dae56f28de5d1ff88787a5fd770a9dd7261a7500f42d65dc05b9ee7e2`; đều khớp lịch sử. Node 26.7.0 giải mã raw, TShark 4.6.9 kiểm độc lập boundary/descriptor/function. Có 20 comparison tests mới, 21 decoder và 11 raw-capture tests, tổng 52 PASS/0 FAIL. Scripts/logs ngoài Git có exit codes và provenance.
+
+TS BDA cùng phiên là 30.897.800 byte/SHA `11a6a1c098fdf8adae94b8aea71d60162f236b2993fc9169295ec79dd97f1132`. TSDuck 3.45-4798 mới phân tích offline exit 0: 164350 packets, 14 services, 47 PIDs, invalid sync=0 và TEI=3054, khoảng 1,8582%. Baseline có payload, không phải stream sạch; không dùng PCR bitrate bất thường làm throughput hoặc buffer target.
+
+### Ma trận theo mốc có ý nghĩa
+
+| Mốc | Windows BDA cold2 | VM host capture 014626 | Mức bằng chứng / ý nghĩa |
+| --- | --- | --- | --- |
+| Firmware | Hai epoch, mỗi epoch đúng 132 controls/8192 byte/hash | Một epoch đúng 132/hash | RUNTIME-OBSERVED, cùng ảnh nhưng khác số lần; không replay double A0 |
+| Operational descriptor | Combined SHA 22e2f1df..., config=1/interface=0/alt=0, EP82/81, max packet=512 | Cùng bytes/hash và cấu trúc; config đã set ở cold | RUNTIME-OBSERVED; chưa có proof thiếu alt-setting |
+| Tuner init/tune | 25/11 I²C operations | Đúng cùng thứ tự/payload | OFFLINE-TESTED; không có tune payload mismatch trong các chuỗi này |
+| PLP request | Bank 0x23, AF=00/AD=01 | Cùng writes | Manual PLP0 ở cả hai; actual PLP/L1 vẫn UNKNOWN |
+| TS output programmed | C3=00/C4=29/C6=01/80=28/81=00/95=15/A9=00/33=01/D9=08 | Cùng last-write | Không chứng nhận readback sau lock hoặc chân điện |
+| Drive 96/97 | 55/55 | 54/54 | RUNTIME-OBSERVED writes; physical effect/causal link UNKNOWN |
+| Board selectors | B7 IN 10 lỗi/10 thành công; 8A 0A00/0400/0401 trước init/tune | 8A 0A00 muộn, khoảng 10,105 ms trước Bulk | Khác board/order, không phải quyền replay GPIO/040x |
+| RSSI | Không complete RSSI trước Bulk, tuner 0x88 last-write=00 | Năm complete windows và một window ngang Bulk, tuner 0x88 last-write=04 | Phát hiện gây nhiễu mới; cần cô lập, không phải root cause đã chứng minh |
+| First Bulk | Submit frame 1650/complete frame 1659, status=0/actual=8192, 2,291 ms | Submit frame 743/complete frame 744, BABBLE/actual=0, 0,258 ms | Kết quả nhận khác thật; requested của hai pcap đều UNKNOWN |
+
+BDA không thấy SET_INTERFACE, CLEAR_HALT hoặc host reset-pipe trước first Bulk trong scope đã ghi; VM cold cũng tới đúng config/alt operational. BDA ABORT_PIPE chỉ ở teardown frames 20931/20940. URB function VENDOR_DEVICE=0x0017 so với CONTROL_TRANSFER=0x0008 là container API Windows theo WDK, không tự chứng minh vendor request trên bus khác nhau. Không dùng ETW targeted của phiên khác điền requested=8192 cho cold2.
+
+### RSSI, monitor window và phản chứng
+
+Nguồn TBS `cxd2878.c:453–485`, CoreELEC `:400–432`, community C `:465–497` và Go `tuner_ascot3.go:283–305` cùng có RSSI ghi tuner 0x87/0x88=C4/41, ADC qua 0x59/0x5B, rồi restore 0x59/0x88/0x87=04/04/C0. Trong VM, `cxd2878_read_status` gọi repeater và RSSI; do đó lock polling ở M không phải control-read-only. Chuỗi tune trước đó của hai lượt lại khớp hoàn toàn.
+
+VM có reg 0x88=04 trước Bulk; repeater SLV-X 0x08=01 được ghi frames 741/742, đóng frames 776/777 sau submit đầu 39,378 ms. Đây là cổng I²C, không phải TS-enable. BDA chưa có RSSI trước Bulk, sau đó restore 0x88=00. Không gọi last repeater=01 là cấu hình TS bị tắt hoặc lỗi cố định.
+
+Phản chứng: ba trong bảy RSSI windows hậu Bulk của BDA vẫn có completion thành công; frames 2101–2191 có 19 completions/155648 byte. Repeater mở tự nó không chứng minh lỗi. Android Sony-readback phiên 16:10 có hai writes tuner 0x88=00, repeater đóng sau init/tune và không ghi 0x88=04, nhưng vẫn tám URB -75/actual=0. Vì vậy RSSI khác của VM không giải thích được một mình Android; nó là biến cần loại khỏi phép so, không phải fix được xác nhận.
+
+### Ranh giới so và giả thuyết còn lại
+
+BDA có tám IRP pending khi completion đầu thành công; VM chỉ có một vì BABBLE tới ngay, max pending sau đó là 7. Không quy lỗi cho queue chưa đầy hoặc lấy actual=8192 làm requested=8192. First Bulk BDA còn cắt ngang pointer90/frame 1649; completion frame 1657 và read91/frame 1671 sau Bulk, không là pre-Bulk snapshot. Bank-select reg00, unknown bank, stale A2/C6/80/95/33 reads đã tách khỏi last-write; A2 cuối cùng đều ghi 04, không LED mismatch mới.
+
+Nguồn giữ đúng SHA: [TBS cxd2878.c](https://github.com/tbsdtv/linux_media/blob/2ce787de9f6e81b4294692a45de15596ae2e1322/drivers/media/dvb-frontends/cxd2878.c), [CoreELEC cxd2878.c](https://github.com/CoreELEC/linux-amlogic/blob/072f8e99e0ac66d88d7278784e922e08e8253210/drivers/media/dvb-frontends/cxd2878.c), [community C](https://github.com/koreapyj/cxd28xx/blob/c5fa27eecbe80633cbb365cc44656daea1c0e2e3/cxd2878.c), [Go tuner_ascot3.go](https://github.com/Till0196/coax/blob/6aaa1899991c875ba0482fa9098adc6c83b01fd8/internal/coaxd/demod/cxd2878/tuner_ascot3.go). Source-provenance JSON có file hashes/functions và các SHA đầy đủ; không sửa hoặc sync references. CoreELEC là nguồn độc lập, không phải hardware baseline đã chạy.
+
+Giữ Phase 3.1/ROOT_CAUSE_UNRESOLVED. Bước tiếp được đề xuất là lập kế hoạch M tách RSSI khỏi cửa sổ Bulk đầu, giữ lock guard/heartbeat/deadline và kiểm fake; mọi live cần quyết định riêng. Không replay B7/040x/double A0 hoặc đổi drive 54→55 từ correlation. Bundle `phase31-bda-vm-offline-20261111-101351-3dad820b` ngoài Git có báo cáo, JSON reviewed-v2, tests, TShark/TSDuck logs và input hashes.
+
+## 2026-11-11 01:46 — Cùng lượt đo: Windows báo BABBLE sớm, guest chỉ hoàn tất cancellation
+
+**Đã thu được lỗi ở Windows host trước khi guest timeout. Không còn cơ sở dùng riêng guest cancellation để kết luận host không gặp lỗi USB.** Chưa xác định được nguyên nhân tín hiệu/board/FIFO và chưa có fix Android; giữ Phase 3.1/ROOT_CAUSE_UNRESOLVED.
+
+### Phạm vi, firmware và lock
+
+Run `phase31-layered-20261111-014626-5c93af62` dùng đúng M late, K36/594 MHz/8 MHz/manual PLP0, guest xHCI và queue 8×65536 đã pin. Không thay module/source/receiver hoặc USB payload. Đây không phải tái hiện trực tiếp Android AUTO PLP/8×4096. Helper kết thúc sau 104567 ms, cả cold và operational đã drain/cleanup.
+
+Cold host pcap có 320 frames/160 controls; đúng 132 A0, đủ độ dài, đúng reset/chunk/release/coverage và firmware SHA `b97cf208bb586f706b26aa5450de6bb97375a3e3eabe833cddb0ae3a4f69d0dc`. Image 8192 byte chỉ bootstrap một lần, frames 29–292. Handoff operational dùng descriptor mới cùng physical epoch, không firmware staging hoặc A0. Receiver K36 báo lock status=31, Sony bank20/10 đọc 0x26; cuối receive_timeout/result=1, sample 0 byte, khoảng 10147,849 ms từ lock đến receive_end.
+
+### Đối chiếu nhiều lớp
+
+| Lớp | Quan sát mới | Không được suy ra |
+| --- | --- | --- |
+| Windows USBPcap | 36 Bulk completions: một 0xC0000012, 35 0xC0010000, mọi actual=0 | Requested length vẫn UNKNOWN; không có wire-level proof |
+| Guest usbmon | Tám submit, requested=65536 mỗi yêu cầu; tám completion -2/actual=0 | Cancellation không chứng minh host không lỗi sớm |
+| Guest raw xHCI | Tám enqueue/tám giveback đủ cùng tám URB, length=65536/actual=0, raw status=-115 | Raw urb.status không phải completion status cuối |
+| EP0 | 706 controls setup/payload khớp từng byte và thứ tự ở hai phía, mọi status=0 | Control-plane hoạt động không chứng minh Bulk hoặc FIFO hoạt động |
+| Terrestrial stream select | Một 0x8A payload 0A00/status=0 trước Bulk, host frame 739 | Chưa đo chân TS hoặc cờ FIFO |
+| Drain | submitted=8/reaped=8/outstanding=0/bytes=0/fault=-110/firmware_calls=0 | Timeout cuối không ghi đè lỗi host đầu |
+
+WDK local 10.0.19041.0 `shared\usb.h:304,339` xác nhận `0xC0000012=USBD_STATUS_BABBLE_DETECTED`, `0xC0010000=USBD_STATUS_CANCELED`; hash header lưu trong JSON. Host first Bulk submit frame 743 → completion 744 trong 0,258 ms; cancellation đầu khoảng 10032,850 ms tính từ cùng host submit. Sau lỗi đầu còn 335 EP0 controls thành công. Đây là thứ tự riêng clock Windows, không ghép với clock guest/Android. Host có thêm IRP trong teardown; không ép 36 IRP thành tám URB hoặc khẳng định proxy chia/gộp/retry theo tỷ lệ khi chưa có proof.
+
+BABBLE_DETECTED là status của Windows host stack, không phải phép đo điện chứng minh babble/CRC, không quy lỗi dây/nguồn/tuner hoặc Android kernel. Cả hai lớp không có payload không chứng minh FIFO rỗng. Điều mới được khoanh là lỗi sớm đã hiện ở phía Windows host của chính lượt VM này, trong khi guest chỉ thấy hủy khi hết thời gian.
+
+### Raw xHCI và final status khác thời điểm
+
+Nguồn upstream Linux v6.8, commit `e8f897f4afef0031fe618a8e94127a0934896aba`: `xhci_log_urb` chép `urb->status`; `xhci_giveback_urb_in_irq` gọi trace trước `usb_hcd_giveback_urb`. USB core mới phát `usbmon_urb_complete` với status cuối rồi gán `urb->status`. Vì vậy raw field -115 không được thay cho usbmon completion -2 hoặc coi là một lỗi mới. Baseline upstream giải thích thứ tự, không chứng nhận toàn bộ source Ubuntu 6.8.0-149 đang chạy. Đã giữ binary, raw report và formats; không suy status=0 từ print format thiếu field.
+
+Nguồn: [xhci-ring.c](https://github.com/torvalds/linux/blob/e8f897f4afef0031fe618a8e94127a0934896aba/drivers/usb/host/xhci-ring.c), [xhci-trace.h](https://github.com/torvalds/linux/blob/e8f897f4afef0031fe618a8e94127a0934896aba/drivers/usb/host/xhci-trace.h), [hcd.c](https://github.com/torvalds/linux/blob/e8f897f4afef0031fe618a8e94127a0934896aba/drivers/usb/core/hcd.c). Không sửa reference checkout hoặc kéo source vào APK.
+
+### Coverage, cleanup và độ tin cậy
+
+Cả hai observers ready trước runtime; snapshots có barrier PASS, clock mono, ring effective 67 KiB và owned recorder exclusions. Guest operational tcpdump ghi 1434 packets/drop=0; cold ghi 293 packets/drop=0. Không pcap truncation hoặc unpaired controls/Bulk được báo; host/guest anchors đúng target. Trace export exit=0, stats đủ và không lost/overrun được báo, xHCI có đủ 8/8. Guest max emit gap=729 ms/freshness_gap_misses=0, Windows max health gap=606 ms; cadence misses giữ nguyên, không nới hard freshness 2000 ms.
+
+Các guest terminal flags measurement_valid=false/observation_invalid=true/capture_validity=UNKNOWN/requires_parent_certification=true được worker gán bảo thủ kể cả STOP bình thường; không phải bốn lỗi mới. Parent ghi `parent-coverage-review.json` riêng, không sửa terminal gốc thành PASS hoặc chứng nhận TS. Có 74 file guest đã hash giữa guest và bản Windows, tất cả khớp. Cold host SHA `99b2a5ffadb5107a50b2e2663b5e0990bf854b2b477035d60129ad8166c2b683`; operational host `7a5d408dae56f28de5d1ff88787a5fd770a9dd7261a7500f42d65dc05b9ee7e2`; operational usbmon `d81d250ba7e1e9b0f9110f7414f2961211cf77763d5ca0839e9cf4dd3b448827`.
+
+Cleanup hai phase true; module/firmware hardlink/filter/usbmon và trace instance của lượt đã gỡ, VM/controller giữ nguyên. Người dùng đã rút tuner, read-only hậu kiểm CLEAN_DISCONNECTED. Không chạy thêm hardware. Guest full fake cuối 58/58 PASS sau source-contract/harness fixes; giữ toàn bộ failure cũ. Parent có 89/19/32/61/17 checks và parser có 19 tests PASS đúng phạm vi, không rerun JVM/Android/build.
+
+Báo cáo `layered-observation-report.md`, structured result, coverage review, timelines, sanitized xHCI và hashes ở bundle cùng run dưới D:\TSDuck\reports/logs/traces. Bốn reference SHA không đổi như checkpoint trước, không sync/fetch. Kế hoạch quan sát đã hoàn tất; bước tiếp được đề xuất là đối chiếu offline ranh giới Bulk/pipe/configuration với Windows BDA đã có TS, không tạo request FX2 mới hoặc lặp lại firmware.
+
+## 2026-11-10, phiên 19:32 → 2026-11-11 00:28 — Bộ quan sát đã chạy pre-runtime, chưa đo đường TS
+
+**Đã có bằng chứng hai recorder khởi động, nhưng chưa có phép đo firmware hoặc Bulk để so các lớp.** Gate guest chưa ready đã ngăn chương trình M chạy. Đây là lỗi bộ đo, không phải bằng chứng mới về tuner, RF, FIFO hoặc Android.
+
+### Triển khai và kiểm offline
+
+Thêm [tools/observation](../../tools/observation/README.md): grant/hash bất biến, consume trước runtime, coordinator dừng và xác nhận drain, Windows target-only capture, guest usbmon/raw xHCI, wrapper M late và các parser tách requested/actual/status. M giữ nguyên module SHA `5ad5512988800c2ee6954faa4fed8058f33c489f505a01ac6086b2859a2141a6`, xHCI/K36/manual PLP0/8×65536; không đổi source hoặc payload USB của module. Firmware staging chỉ là file/hardlink tạm, không phải upload đã xảy ra.
+
+Kiểm fixture mới nhất gồm 83 grant/coordinator, 19 process integration, 28 adapter, 61 persistent-channel và 19 parser checks PASS. Windows worker có 192 checks/25 processes và 6 startup workers dưới tải PASS; guest Linux có 55 checks PASS. Các kết quả này có log riêng, không thay kết quả hardware lịch sử hoặc chứng nhận end-to-end live.
+
+### SSH và ranh giới thời gian
+
+Các SSH ngắn từng timeout cả ở admission/create-run và staging, trước firmware. Đã thay trao đổi đang hoạt động bằng một kênh stdin/stdout lâu dài có sequence tăng đúng, LF, timeout trả lời 1500 ms và STOP khi mất đầu vào; chỉ host mới gia hạn heartbeat. Không tăng guard phần cứng 2000 ms. Trace fixture xác định `read -t .1` có thể lấy một phần dòng, cụ thể id `5` của sequence 57, rồi dừng; sửa đọc trọn dòng và thêm regression tách `PU`/`LSE` cách 200 ms. Có 80 PULSE qua strict SSH Linux PASS, độ trễ 45–707 ms, trung bình 86,4375 ms.
+
+Runner cho command hữu hạn đóng stdin ngay, SSH không tương tác thêm `-n`; kênh protocol vẫn giữ stdin mở có chủ đích. Test đọc đến EOF PASS và 16 SSH chỉ đọc PASS, tối đa 3065 ms. Chưa chứng minh một nguyên nhân hệ thống duy nhất cho mọi timeout cũ; không gọi stdin là root cause đã xác định của lỗi tuner. Các active heartbeat không mở SSH/SCP mới.
+
+### Lượt pre-runtime thực và giới hạn bằng chứng
+
+Run `phase31-layered-20261111-002355-dd8e8d4f` đã ARMED trước người dùng cắm đúng cổng. Host raw admission thấy đúng VID:PID/default, không có non-target descriptor; cuối pcap có 28 frames/14 controls, 0 Bulk, 2178 byte, SHA `2f7c1e970f5b8070714ce82ed0a60e2f8db0d1a21c403cba31713e52aa2f8fe3`. Parent không gọi runtime; phase rỗng, không có firmware132 hoặc TS sample mới. Guest terminal là OBSERVER_NOT_READY, ready=false, usbmon 1234 byte và trace.dat 2049067 byte; export/stats/cleanup đầy đủ, không lost events được báo. Không biến trace có file thành ready hoặc sự vắng Bulk trước runtime thành negative test của tuner.
+
+Cleanup của run này true: own recorder đã kết thúc, module/firmware staging/filter/usbmon được gỡ, trace instance đã xóa sau export. Người dùng xác nhận rút/ngắt nguồn ít nhất 5 giây, đèn tắt và giữ rút; physical epoch mới chỉ được tạo sau xác nhận này. Không tự retry cùng attachment hoặc reset VM. Raw/log/grants/receipts nằm ngoài Git dưới D:\TSDuck; guest startup đang được điều tra, phép đo nhiều lớp vẫn BLOCKED trước firmware.
+
+Bốn reference SHA đã đọc lại không đổi: TBS `2ce787de9f6e81b4294692a45de15596ae2e1322`, CoreELEC `072f8e99e0ac66d88d7278784e922e08e8253210`, C `c5fa27eecbe80633cbb365cc44656daea1c0e2e3`, Go `6aaa1899991c875ba0482fa9098adc6c83b01fd8`. Không sync/fetch hoặc sửa reference, không thêm kết luận source về electrical signaling.
+
+## 2026-11-10, phiên 18:46 — Khả năng đọc FX2 và phương án quan sát host có giới hạn
+
+**Chưa có phép đọc thanh ghi FX2 live được chứng minh an toàn; đã chọn hướng quan sát các lớp host/guest thay vì đoán request.** Đây là bước chuẩn bị, không phải phép thử tuner mới hoặc kết luận về nguyên nhân TS 0 byte.
+
+### Kiểm firmware độc lập
+
+Nhánh nguồn rà đủ 11 dispatcher handlers và helper trên ảnh 8192 byte/SHA `b97cf208bb586f706b26aa5450de6bb97375a3e3eabe833cddb0ae3a4f69d0dc`, chạy mới 64 tests offline PASS. Không có request đã chứng minh trả IFCONFIG/PORTACFG/EP2 flags/count mà không đổi trạng thái liên quan. B8 trả bốn byte IRAM rồi đặt chúng thành FF; ý nghĩa và nguồn cập nhật chưa chứng minh. Các đường 90/92/93→91 dùng I²C và staging IRAM, không phải generic XDATA/SFR read. Giữ BLOCKED_FOR_LIVE_REGISTER_READ.
+
+TRM FX2 §3.8 có hardware A0 upload/download cho RAM, bất kể RENUM. Vì vậy thiếu A0 trong switch firmware không có nghĩa mọi A0 IN đều không tồn tại. Nhưng các peripheral E6xx cần quan sát không thuộc contract RAM đó; ngoại lệ CPUCS write không chứng minh đọc register khác. Không thử A0 IN, đổi direction/length hoặc dùng địa chỉ RAM trùng số để đọc SFR.
+
+Bảng offsets/hashes ở `fx2-read-capability.json` và `.md` trong bundle mới; JSON SHA `e665faa658af99574e42c397421d01f02f53bd8cb95d50f3df52fca946fbc01d`, Markdown SHA `39fb7c25acb37bb34160ac7f6121a8e7b82e823912b616e872e9318e9cb0946a`. Nguồn IC là [FX2 TRM v2.2](https://www.infineon.com/assets/row/public/documents/30/44/infineon-ez-usb-fx2-trm-version2-2-usermanual-en.pdf), kết hợp firmware bytes đã pin; không có live RAM readback mới.
+
+### Khả năng quan sát host đã kiểm
+
+VBoxManage 7.2.22 và strict SSH xác nhận VM Ubuntu-24.04 đang chạy, UID 0, Ubuntu 24.04.5/kernel 6.8.0-149-generic, controller xHCI. Hash/vermagic M late khớp bản cũ, không module load hoặc controller change. Không thấy target ở VBox usbhost/guest; người dùng xác nhận tuner rút khỏi mọi host.
+
+USBPcap 1.5.4.0 discovery trực tiếp trả 5 interfaces; dumpcap/TShark 4.6.9 không tự hiện USB extcap không đồng nghĩa driver hỏng. Chưa mở capture, chưa chọn target hub/address mới. GUI extcap mặc định capture-all=true; phải kiểm target filter và coverage qua re-enumeration, không dựa vào mặc định. Không sửa Registry, service hoặc driver.
+
+Guest có tcpdump 4.99.4/libpcap 1.10.4 và trace-cmd 3.2.0; usbmon module có sẵn nhưng chưa loaded. Đã đọc formats của xHCI enqueue/giveback/transfer. **Raw giveback có field status nhưng print format không in status.** Phép thu sau này phải giữ binary trace và `trace-cmd report -R -N -t`, không suy status=0 từ việc text mặc định thiếu field. Dùng instance riêng, không reset global tracing.
+
+### Kế hoạch được đề xuất, chưa thực thi
+
+Giữ M late, K36/manual PLP0, controller/source/module/timing và queue 8×65536; chỉ thêm Windows USBPcap, guest usbmon và raw xHCI trace trong cùng lượt. Đây không phải tái hiện trực tiếp Android -75 hoặc một buffer/controller experiment. Snaplen ít nhất 131072 cần được kiểm để không cắt URB 65536 byte; mỗi observer dự kiến tối đa 90 giây/64 MiB. Session/receive/heartbeat giữ giới hạn M đã pin.
+
+Nếu host có bytes mà guest không có, chỉ khoanh đường proxy/virtual host/guest của chính lượt đó; không tự quy lỗi Android. Nếu cả hai không có bytes, chưa chứng minh FIFO rỗng hoặc tuner hỏng. Missing/lost/truncated observer làm kết quả INCONCLUSIVE, không phải negative experiment của tuner. Không ghép URB 1:1 khi proxy có thể chia/gộp; clocks và payload ordering giữ riêng cho tới khi có bằng chứng liên hệ.
+
+Policy offline có 36 tests PASS sau một lỗi missing-operational gate đã sửa; không có bộ điều phối observer/STOP, cap thực hoặc end-to-end capture test. Trạng thái kế hoạch là PREPARED_NOT_AUTHORIZED_NOT_EXECUTABLE. Cần hoàn tất các phần đó, kiểm filter target qua re-enumeration, rồi mới xin exact consent cho handoff/temporary filter/usbmon và một cold bootstrap. Không cấp lại quyền từ receipt cũ hoặc detach consumed epoch để bắt đầu capture.
+
+Người dùng hiện chỉ cần giữ tuner ngắt, VM chạy và chuẩn bị cáp/nguồn/coax đã dùng; chưa cắm hoặc power-cycle. Raw/preflight riêng, kế hoạch và báo cáo nằm trong bundle `phase31-observation-ready-20261110-185020-78ccd455` dưới D:\TSDuck. Bốn reference SHA giữ nguyên như phiên 18:02, không sync/fetch. Giữ Phase 3.1/ROOT_CAUSE_UNRESOLVED; chưa có hardware result mới.
+
+## 2026-11-10, phiên 18:02 — Windows khớp các giá trị đã ghi; không có snapshot sau lock tương đương
+
+**Đã đối chiếu raw, chưa tìm được output-byte fix có căn cứ.** Lượt này chỉ đọc các file đã có, không tạo phép thử tuner mới. Windows thiếu readback đủ bảy byte sau lock; giống giá trị đã ghi không đồng nghĩa đã đo cùng trạng thái chân hoặc FIFO với Android.
+
+### Đầu vào và phương pháp mới
+
+Cold2 pcap được hash lại: `70fced47614ff8ec17c9e78f79fca16408c23e6bcadcfb6ad25a4c69cd7f9ded`. Android EP0 SHA `39240893ee7e0752caf7ad9d24c3b4c5b270b0da5bf72927238618f377bd65e4`, native SHA `6b8aeb8dd34421857067393af8176acc1b01ceb35fda821ec5f0e8176ecb67bb`. TShark 4.6.9 xuất lại toàn bộ control của target và chỉ cặp Bulk đầu. Decoder có 6751 controls, không warnings; Bulk submit tại frame 1650, complete tại frame 1659, status=0/actual=8192. Requested length vẫn UNKNOWN; không nhập dữ liệu ETW của lượt khác vào pcap này.
+
+Phân tích dùng frame hoàn tất và ranh giới firmware epoch, không chỉ lấy lần đọc cuối. Xuất 69 READ/WRITE events cho 17 targets. Có 21 decoder và 17 comparison tests PASS; các test kiểm stale read, write pending, epoch, bank UNKNOWN, owner, clock và pointer. Không chạy lại JVM/Android/hardware; kết quả PASS trước đó vẫn là lịch sử.
+
+### Bảy giá trị chính và thứ tự đọc/ghi
+
+Các byte trong bảng là hex; số frame chỉ thuộc cold2. Windows lock tại frame 1581 và 1593, sau tất cả các lần đọc output dưới đây.
+
+| Register bank00 | Windows last-write | Windows last-read | Quan hệ của read | Android AFTER_LOCK / BEFORE_FIRST_URB |
+| --- | --- | --- | --- | --- |
+| C4 | 29, frame 825 | 29, frame 1269 | Sau write, trước lock | 29 / 29 |
+| C6 | 01, frame 857 | 00, frame 853 | Trước write cuối | 01 / 01 |
+| 80 | 28, frame 1249 | 3F, frame 1245 | Trước write cuối | 28 / 28 |
+| 81 | 00, frame 1277 | NOT_AVAILABLE | Không read | 00 / 00 |
+| 95 | 15, frame 905 | 3D, frame 901 | Trước write cuối | 15 / 15 |
+| A9 | 00, frame 1133 | 00, frame 1357 | Sau write, trước lock | 00 / 00 |
+| 33 | 01, frame 1073 | 01, frame 1069 | Trước write, dù cùng giá trị | 01 / 01 |
+
+Không được gọi các lần đọc cũ C6/80/95/33 là final-state discrepancy. C3 và D9 cùng được ghi `00`/`08` nhưng chưa readback. Drive 96/97 khác writes `55/55` với `54/54`; mapping và hiệu lực vật lý còn UNKNOWN. Windows yêu cầu manual PLP0, Android yêu cầu AUTO; actual PLP/L1 vẫn NOT_AVAILABLE. Block bank9C/10–13 cùng ghi bốn byte `00` ở hai bên.
+
+### Ranh giới FX2 chưa quan sát
+
+Windows có hai epoch A0, cùng image đã pin; Android bootstrap một lần đủ 132 transfers rồi handoff không A0. Có ba request `8A` trước init Windows (`0A 00`, `04 00`, `04 01`), còn Android gửi `0A 00` sau lock. B7 có 20 IN trước Bulk, gồm 10 thất bại và 10 thành công. Đây là khác biệt sequence, không phải quyền replay GPIO hoặc chứng minh PA7 là reset.
+
+Có 265 vendor request `0x81` trả byte `00` trước Bulk Windows. Firmware đọc software bit IRAM `20.7`, không đọc PORTACFG hoặc cờ FIFO; byte này không chứng minh FIFO rỗng/sẵn sàng. Không có Bulk EP81 trước Bulk EP82 đầu. Pointer control `0x90/01c810` ở frame 1649–1657 cắt qua Bulk submit 1650, nên cũng không được gán thành snapshot hoàn tất trước Bulk.
+
+Mapping firmware tĩnh cũ đã hash lại, không phải runtime mới: `IFCONFIG=CB` chọn Slave FIFO bất đồng bộ; `EP2FIFOCFG=09` bật WORDWIDE/AUTOIN; `EP2AUTOINLEN=0200` tương ứng 512 byte. Không suy Sony TSCLK nối trực tiếp IFCLK, không dùng FIFO bus 16 bit để kết luận sai wiring, không lấy reset default của PORTACFG thay readback. Nguồn IC vẫn là [FX2 TRM v2.2](https://www.infineon.com/assets/row/public/documents/30/44/infineon-ez-usb-fx2-trm-version2-2-usermanual-en.pdf); chưa có schematic chính hãng được bổ sung từ hai tìm kiếm công khai. Không tuyên bố schematic không tồn tại.
+
+### Kết quả và hướng tiếp
+
+Không sửa port production hoặc tăng delay/buffer từ các khác biệt này. Bảy byte là giả thuyết suy yếu, còn board/FIFO/host state và drive/actual PLP là các điểm chưa đo, không phải nguyên nhân đã xác nhận. Phép quan sát FX2/host tiếp theo phải có nguồn, cách đọc được chứng minh, một owner và consent mới; nếu thiếu cơ chế đọc thì phần hardware là BLOCKED, không tự tạo request A0/B7/04xx.
+
+Bundle `phase31-windows-sony-20261110-180339-9e246085` dưới D:\TSDuck\reports có báo cáo, `comparison.json`, `boundary-evidence.json` và `register-provenance.csv`. Raw/arguments/hash ở sibling logs, ngoài Git. Bốn reference SHAs được kiểm lại, không đổi: TBS `2ce787de9f6e81b4294692a45de15596ae2e1322`, CoreELEC `072f8e99e0ac66d88d7278784e922e08e8253210`, community `c5fa27eecbe80633cbb365cc44656daea1c0e2e3`, Go `6aaa1899991c875ba0482fa9098adc6c83b01fd8`. Giữ ROOT_CAUSE_UNRESOLVED và Phase 3.1.
+
+## 2026-11-10, phiên 16:10 — Sony output đã có readback thật, không giải thích được lỗi USB
+
+**Kết luận:** Bảy register được chọn đã giữ đúng các giá trị init ở cả sau lock và ngay trước URB đầu tiên. Android vẫn có tám completion `-75/actual 0`. Phép đo làm yếu giả thuyết các byte này chưa áp dụng hoặc bị stream-select đổi, nhưng không chứng minh chân TS/clock hay FIFO đang có dữ liệu. Không mở phase mới hoặc gán nguyên nhân cho RF, PLP, nguồn/cáp hay Android kernel.
+
+### Nguồn và allowlist
+
+Nguồn chính là TBS `2ce787de9f6e81b4294692a45de15596ae2e1322`, đối chiếu CoreELEC `072f8e99e0ac66d88d7278784e922e08e8253210`, community C `c5fa27eecbe80633cbb365cc44656daea1c0e2e3` và Go `6aaa1899991c875ba0482fa9098adc6c83b01fd8` cho mã hóa bridge. Các reference chỉ đọc, không sync/fetch. Báo cáo provenance `phase31-sony-provenance-20261110-161853-d5c15526` có SHA/file/function/dòng; JSON SHA256 `0ee2c0b273f23ca72d6bf6367946e01417d0d73f6d51c9341f081c5029424147`, Markdown `2757644544a306fef7bb63a35f43efd719493caaf9e47816f78569e2e6e40c69`.
+
+- [TBS cxd2878.c đã pin](https://github.com/tbsdtv/linux_media/blob/2ce787de9f6e81b4294692a45de15596ae2e1322/drivers/media/dvb-frontends/cxd2878.c): `cxd2878_SetRegisterBits` mask00 không I/O, maskFF chỉ write, mask khác mới đọc rồi ghi; không được đếm write96/97 thành readback. C4/A9/sync có read trực tiếp; C6/80/81/95/33 có source read qua các helper cấu hình. Monitor chỉ đọc, không gọi lại đường helper ghi cấu hình.
+- [CoreELEC cxd2878.c đã pin](https://github.com/CoreELEC/linux-amlogic/blob/072f8e99e0ac66d88d7278784e922e08e8253210/drivers/media/dvb-frontends/cxd2878.c) và [community C đã pin](https://github.com/koreapyj/cxd28xx/blob/c5fa27eecbe80633cbb365cc44656daea1c0e2e3/cxd2878.c) là đối chứng riêng. Riêng 81 chỉ có read ở nhánh serial với mask01/80; parallel dùng maskFF nên không read. `read_side_effect_free=UNKNOWN`, không coi source là chứng nhận silicon.
+- C3/96/97/D9 chỉ có chứng cứ writes trong scope này, không đọc live. Actual selected DVB-T2 PLP/L1-post `NOT_AVAILABLE`; AF/AD chỉ là requested selection. Không mượn mapping ATSC3/chip khác. Linux `read_status` có thể kết thúc bank24 và còn PER/repeater/LED, không dùng nguyên hàm làm monitor. Android exact `planPollStatus` chọn bank20/read10 và dừng khi lock mới là provenance entry bank20.
+
+### Kết quả runtime trên Android
+
+Người dùng duyệt riêng một chương trình monitor, biết caveat của read81, và xác nhận power-off ≥5 giây/đèn tắt/gắn lại cùng tablet/cáp/nguồn/RF IN. SM-X926B/API 36/boot 46 được kiểm lại. Giữ cùng epoch qua preflight và handoff; firmware chỉ một lần đủ 132 giao dịch/image 8192 byte trong 2834 ms. Bootstrap terminal `ATTACH_PERMISSION_UI_TIMEOUT` nhưng cleanup đã drain; operational không FirmwarePath/A0. Các preflight trước grant không I²C/URB mới. Khi preflight nằm dưới workflow đã drain, SINGLE_TOP không đưa tới đúng Activity; sửa helper dùng CLEAR_TOP + SINGLE_TOP, không CLEAR_TASK, force-stop hoặc đổi guard. Sau OK thủ công của người dùng, preflight/operational grant đã chạy được.
+
+| Byte bank00 | AFTER_LOCK | BEFORE_FIRST_URB | So với init / ý nghĩa đã có nguồn |
+| --- | --- | --- | --- |
+| C4 | 29 | 29 | Khớp; bit7=0 là parallel, không suy toàn polarity hoặc Hz |
+| C6 | 01 | 01 | Khớp; clock-mask [4:0]=01 |
+| 80 | 28 | 28 | Khớp; nhóm HiZ [4:0]=08, chưa đặt tên riêng từng bit |
+| 81 | 00 | 00 | Khớp; data HiZ bits bằng 0 theo source, không phải phép đo chân vật lý |
+| 95 | 15 | 15 | Khớp; TSCLK drive code [1:0]=1, comment nguồn tương ứng 4 mA, chưa đo dòng thật |
+| A9 | 00 | 00 | Khớp; output selection [1:0]=00, TS |
+| 33 | 01 | 01 | Khớp; interface clock selector=1, không đổi thành Hz |
+
+Cả hai snapshot có sync bank20/10 trước/sau đều `26`: `sync=6, TS_LOCK=1, unlock=0`. Mỗi snapshot đủ 20/20 EP0, 11 OUT/9 IN, chỉ hai selector writes để chọn bank00/bank20; thời gian 619,174461 ms và 587,510231 ms. Raw sequence 190–209 và 211–230 là hai nhóm monitor; stream-select `8A 0A 00` ở giữa. Đây là `ANDROID_APP_OBSERVED`, snapshot `NONATOMIC`, bank `PLAN_INFERRED`; restore full-length là transport evidence, không phải đọc selector. Không I²C khi URB pending. Timestamp Java elapsedRealtime và native CLOCK_MONOTONIC không được so trực tiếp.
+
+Tổng 230 EP0 đều full-length; bỏ 40 monitor controls còn 190 records giống byte-exact cả IN/OUT với baseline B trước (SHA `071b1c7b41c3189ebba36476cbade7aed80f1e5048664025d699ff7e9bbb5ffd`). Alt0 OFF, API calls=0. Native có 8 submit/8 REAP đều `status=-75, actual_length=0`, syscall return/errno=0. Sample 0 byte; terminal REPORT/USB_RECEIVE_FAILURE, DRAIN_CONFIRMED, outstanding=0/quarantine=false. Đã thu/hash 16 files Android-host khớp, xác minh không USB fd sau drain và rời workflow; không nhận thêm hoặc chuyển host.
+
+Báo cáo `sony-result.json` và `sony-readback-result.md` trong bundle `phase31-sony-output-20261110-161951-5b3ce827` dưới D:\TSDuck\reports; raw ở sibling logs. EP0 SHA `39240893ee7e0752caf7ad9d24c3b4c5b270b0da5bf72927238618f377bd65e4`, native SHA `6b8aeb8dd34421857067393af8176acc1b01ceb35fda821ec5f0e8176ecb67bb`. Kiểm phần mềm và các lần dừng được ghi riêng trong [TEST-MATRIX.md](TEST-MATRIX.md). Bước tiếp theo chỉ là so trạng thái đã đọc với Windows raw hiện có để khoanh TS pin/clock → FIFO, không tự thử register hoặc USB ownership mới.
+
+## 2026-11-10, phiên 12:09 — Lifecycle đã sửa; explicit setInterface không đủ sửa lỗi trong lượt B
+
+**Đã đo API thật, không còn HARDWARE_NOT_RUN cho candidate này.** Trên SM-X926B/API36, setInterface(interface0/alt0) trả true, nhưng native8×4096 vẫn có tám URB -75/actual 0. Chưa có MPEG-TS và chưa xác nhận nguyên nhân gốc. Không suy kết quả này thành mọi vấn đề USB host đã bị loại.
+
+### Source và lỗi điều phối đã kiểm chứng
+
+Branch/HEAD `chore/modernize-android-build` / `b73f11097e594acd2abe1769a65ed03216c8e963`, giữ edits có trước. `Tbs5530AutonomousDiagnosticActivity.onNewIntent` trước đây chỉ xử lý attach intent, không tạo challenge mới cho launch thường. Nhánh stop khi runtime=null chưa chứng nhận trường hợp chưa cấp bất kỳ tài nguyên. Helper cũng cần routing CLEAR_TOP + SINGLE_TOP khi màn hình permission che Activity đích; không dùng CLEAR_TASK hoặc force-stop.
+
+Bản sửa debug-only thêm launch correlation riêng, cleanup gate và callback generation; session mới không được tạo khi cleanup/audit chưa xác nhận. `NO_RESOURCES_ACQUIRED` chỉ đạt khi acquisition chưa bắt đầu và owner/runtime/requests/descriptor/capture đều vắng. Nhánh có tài nguyên vẫn phải cancel/drain/runtime termination; số byte0 không chứng minh idle. Terminal được nhận qua terminal=true và cleanup_path có kiểu rõ ràng, không chỉ tên policy state; bootstrap đã drain có thể vẫn giữ state WAIT_REENUMERATION.
+
+Mode `ControlPlaneOnly` được ràng vào challenge/grant, cấm manager/runtime/permission/device open và chặn owner/approval/firmware boundaries. Helper→Android đã có hai phiên exit 0/CONTROL_PLANE_COMPLETE; hardware history SHA trước/sau không đổi và app có 0 USB fd. Một lần no-I/O bị guard 1500 ms dừng; giữ evidence FAIL và không nới heartbeat 2 giây. Đã kiểm focused JVM 6, full 565, build/lint, 5 lifecycle/16 approval Android tests, 57 launch/terminal và 82 heartbeat fake checks. Kiểm source vẫn là chuẩn dù GitNexus chỉ fresh tại checkpoint.
+
+### B thật sau khi được duyệt và cấp OS permission
+
+APK B SHA `8b8dac4061991abc38643315d41b3b1f8383fec5567e68302a080c86f396a05c`. Người dùng duyệt một B mới, xác nhận fresh physical power-off ≥5 giây/đèn tắt, cùng tablet/cáp/nguồn/RF IN và giữ tuner qua các lần khôi phục ADB không reboot. Trước runtime, các lần launch/no-I/O không gửi firmware. Bootstrap thật chỉ một lần full 132, với 8192 image bytes trong 3230 ms; thiết bị tự default→operational, handoff không FirmwarePath/A0.
+
+`RUNTIME-OBSERVED` ở tầng ANDROID_APP_OBSERVED: setInterface gọi đúng một lần, api_result=true, duration 958461 ns≈0,958 ms. Before/after config1/interface0/alt0/EP82/maxpacket512/speed3 và raw SHA `22e2f1df9f66c58dbb6c554e400b6b8abcb78ee4f277e03679bc0fac7a25add5` giữ nguyên; outstanding trước/sau bằng 0. API true không tự chứng minh SET_INTERFACE packet đã xuất hiện trên dây.
+
+Operational có 190 EP0 full-length, giống byte-exact toàn bộ 190 records của baseline A trước đó. K36 AUTO khóa, stream 8A0A00; B không A0. Native có 8 submit/8 REAP, tất cả status=-75/actual=0, syscall return/errno=0; sample 0 byte. Report terminal REPORT/USB_RECEIVE_FAILURE, KNOWN_COMPLETED_USB_ERROR, DRAIN_CONFIRMED/RUNTIME_DRAIN_CONFIRMED, outstanding=0/quarantine=false. Helper exit 1 đúng vì không TS; không orchestration timeout trong operational B. Đã thu/hash mười raw files, EP0 SHA `071b1c7b41c3189ebba36476cbade7aed80f1e5048664025d699ff7e9bbb5ffd`, native SHA `f3c29aaeb4767b493b5d2606687c502c14cee1845748a5f5ed43ca3ecfe09c68`.
+
+### Kết luận có giới hạn và việc không làm
+
+Explicit setInterface alt0 đơn lẻ không đủ sửa EOVERFLOW trên host/profile/epoch đã đo. A/B khác debug APK vì lifecycle fix và physical epochs khác nhau, nên không gọi là perfect causal A/B; các controls, K36 AUTO và native4096 đã giữ đúng. Không tăng tiếp buffer/timeout, không CLEAR_HALT/reset/configuration hoặc replay B7/04xx/drive54→55. B đã drain và rời workflow; không có lượt nhận tiếp theo. ROOT_CAUSE_UNRESOLVED và Android TS_SMOKE_PASS chưa đạt.
+
+Báo cáo ở `D:\TSDuck\reports\phase31-lifecycle-20261110-121354-96284261`, raw/grants/firmware/serial ở sibling logs ngoài Git. Bước nghiên cứu tiếp theo nên là readback trạng thái output Sony với mapping đã có và kế hoạch bank restore được duyệt, giữ source/controller/PLP/timing; không nhảy sang kết luận FIFO/board hỏng khi chưa đo.
+
+## 2026-11-10 — Phase 3.1: TS_LOCK đã được đọc thật; chưa có causal fix cho FIFO hoặc endpoint
+
+**Kết luận:** last proven-good state nằm ở sync/TS_LOCK của Sony và ý định mở TS output. Trạng thái chưa quan sát là PLP thực được chọn, output readback cuối, tín hiệu trên chân/bo và FIFO FX2. Linux M vẫn 0 byte; Android A mới vẫn -75/actual0. B đầu bị guard heartbeat chặn trước setInterface, không phải negative experiment của API.
+
+### Provenance và nguồn đã pin lại
+
+Editable HEAD `b73f11097e594acd2abe1769a65ed03216c8e963`; references chỉ đọc: official `2ce787de9f6e81b4294692a45de15596ae2e1322`, community `c5fa27eecbe80633cbb365cc44656daea1c0e2e3`, CoreELEC `072f8e99e0ac66d88d7278784e922e08e8253210`, Go `6aaa1899991c875ba0482fa9098adc6c83b01fd8`. Không sync hoặc sửa source tham chiếu. Báo cáo và CSV theo từng WRITE/READ ở `D:\TSDuck\reports\phase31-state-20261110-100952-10a3635f`; mọi raw trọng yếu đã hash lại.
+
+Windows cold2 pcap SHA `70fced47614ff8ec17c9e78f79fca16408c23e6bcadcfb6ad25a4c69cd7f9ded`: đọc trực tiếp pcap bytes xác minh hai A0 epochs riêng đều 132 transfers/8192 byte/hash đúng. Descriptor default 189 và operational 50 byte khớp Linux/Android profiles; hai firmware epochs không tự là hai physical attachments. First Bulk submit 1650, completion 1659 tại offset 97414, status 0/actual 8192. USBPcap không chứng minh requested size; requested 8192 và tối đa 8 URB đồng thời là ETW lịch sử riêng, không tự join clocks.
+
+### Trạng thái Sony và các giả thuyết suy yếu
+
+`SOURCE-CONFIRMED`: cả ba `cxd2878_read_status` giải nghĩa SLV-T bank20/reg10 bằng sync=data&7, TS_LOCK bit5 và unlock bit4. `RUNTIME-OBSERVED` qua raw lịch sử được giải mã lại: Windows frame 1581/1593=26; M late frame 699=26 và M early 1144=26 trước Bulk; mỗi M còn chín lần đọc 26 trong pending. M late/early chỉ có tám cancellation -2/actual 0 sau khoảng 10 giây; -110 là deadline policy. TS_LOCK không chứng minh byte đã tới FIFO/USB, nhưng làm yếu nhận định Linux chỉ có FE label mà chưa đo TS_LOCK.
+
+Windows gửi AF00/AD01: manual PLP0 giống M. Android gửi AD00: AUTO. Actual selected DVB-T2 data PLP và L1-post validity chưa có mapping đúng CXD6802 trong ba source đang có hoặc nguồn công khai đã kiểm: NOT_AVAILABLE, không dùng ATSC3 bank 93 hoặc chip khác để đoán. C4 đọc 29/A9 đọc 00 có provenance; C3/HiZ/96–97 sau write cuối chưa readback. Windows drive 96/97=55/55 và M/Android=54/54 vẫn chỉ WRITE_OBSERVED, BOARD_MAPPING_UNKNOWN.
+
+Windows frame 669 và Android sequence 19 đều ghi bank9C/10 bằng bốn byte 0. M không có vì community gốc đã comment block trước D/M. Android vẫn -75 dù có write này, nên khôi phục 9C không phải lời giải đủ dùng chung; không gán sai khác đó cho diagnostic D tự bỏ. Firmware B7/8A04xx chỉ chứng minh latch IOA.2/IOA.7, OEA/PORTACFG/wiring runtime chưa biết; không replay. Init M88 có reset/firmware vệ tinh và tác động board chưa tách được nên O-C vẫn BUILD_PASS_NOT_RUN.
+
+### Mã và kiểm chứng mới
+
+Thêm [bộ giải mã trạng thái](../../tools/ts-state/README.md) với 21 fake tests; UNKNOWN bank giữ null, pairing theo owner, IN81 có proof riêng không làm mất pointer, A0 epochs và status/actual/requested được tách. Pipeline giả có 16 checks cho extracted start_feed/callback rồi fake swfilter/DVR. Callback 820 và receiver 80 PASS riêng, không chứng minh kernel demux thật. FX2 chạy mới 64/64 PASS với firmware/capture private đã có.
+
+[Nhánh Android debug](../../README.md#chẩn-đoán-android-chọn-lại-interface-0alt-0) gọi API thật qua facade sau claim force=false; default OFF, exact operational/High-Speed/owner/idle/K36 AUTO/native4096/grant riêng. Nguồn: [Android API](https://developer.android.com/reference/android/hardware/usb/UsbDeviceConnection#setInterface(android.hardware.usb.UsbInterface)) và [AOSP Android16r1](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/core/jni/android_hardware_UsbDeviceConnection.cpp). API có thể đi tới native set-interface ioctl nhưng không suy wire packet. Guard false/exception/disconnect giữ no-Bulk/no-retry/drain; release class isolation PASS.
+
+Android A mới dùng cùng APK đã pin: bootstrap full 132 trong 3072 ms rồi handoff không A0, K36/AUTO khóa và 190 EP0. Có tám REAP -75/actual 0, syscall return/errno=0, outstanding=0/quarantine=false. B đầu full 132 trong 2940 ms nhưng handoff dừng HOST_HEARTBEAT_INVALID ở FRONTEND_INIT sau 150 EP0. Cả 150 records full-length và byte-exact prefix giống A; chưa có interface/native snapshot. Cả hai drain sạch, không retry epoch uncertain. Helper host timeout và lỗi USB được giữ riêng; chưa chứng minh Wi-Fi là nguyên nhân gốc của tuner.
+
+TS Windows được phân tích lại bằng TSDuck: 30.897.800 byte, 164.350 packet, 14 services, 47 PID, 24 PAT sections và 14 PMT PID. Không có sync error nhưng có 3.054 TEI và 2.395 discontinuities. Không quality PASS, không dùng PCR bitrate khoảng 134 Mb/s làm tốc độ thật. Payload USB đầu 8192 byte chỉ có 32/42 vị trí sync ở alignment tốt nhất, nên USB actual>0 chưa tự là sample TS sạch.
+
+Ba candidate còn lại là explicit Android alt0, effective Sony output/PLP/pins, và shared board/FX2 hoặc virtual host path. Timing 0A00 sớm không đủ sửa M/xHCI; buffer 4096→8192 không sửa Android trong điều kiện lịch sử. Không lặp scan hoặc đổi GPIO/drive mù. ROOT_CAUSE_UNRESOLVED; B chưa tới API nên candidate alt0 vẫn chưa có hardware result.
+
+### Helper và giới hạn khởi chạy cuối phiên
+
+`RUNTIME-OBSERVED`: `adb shell run-as ... cat /proc/uptime` trả Permission denied/exit 1, trong khi shell UID đọc được. Một-call heartbeat ban đầu đặt clock read trong app UID nên grant chưa publish; file staging không phải grant hợp lệ. Sửa host helper để shell UID đọc clock rồi truyền positional argument vào app-private publication trong cùng call. Giữ 1500 ms/2 giây và expiry không renew; 82 fake checks trên mỗi PS7/PS5.1 PASS, gồm UID giả, quoting/injection, orphan staging/no-rearm và read-only export sau drain. Không gọi đây là hardware-verified hoặc causal fix của tuner.
+
+Sau sửa, launch vẫn gặp challenge cũ của activity singleTop và bị allowlist từ chối trước grant. Workflow đó có report WAIT_DEVICE/FOREGROUND_LOST/DRAIN_NOT_CERTIFIED, control mirror 0, firmware/native/interface=null; grant.json vắng, ledger rỗng. Không suy no-I/O thành drain PASS. Script dự định tạo task mới đã dừng tại guard: NEW_TASK/CLEAR_TASK và B2 đều NOT RUN. Giữ nguyên file/epoch/ledger, dừng live; không tự force-stop hoặc rút/cắm để vượt blocker. Đây là giới hạn control-plane/lifecycle, không phải USB overflow mới.
+
 ## 2026-11-09 → 2026-11-10 — Phase 3.1: original closure, cold re-enumeration và đối chứng M timing
 
 ### Kết luận mới có giới hạn

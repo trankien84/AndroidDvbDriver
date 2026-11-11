@@ -30,7 +30,7 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
     private static final long START_MARGIN_MS = 5000;
     private final long generation, maximumMillis;
     private final String ownerIdentity;
-    private final boolean experimentalAuto, endpointPreparation, queuedReception, nativeUrbReception;
+    private final boolean experimentalAuto, endpointPreparation, queuedReception, nativeUrbReception, explicitSetInterfaceAlt0, sonyReadback;
     private final String operation, planHash;
     private final String challenge = UUID.randomUUID().toString();
     private final long created, heartbeatNotBefore;
@@ -69,6 +69,8 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
         this.ownerIdentity = ownerIdentity;
         maximumMillis = plan == null ? limits.maximumMillis() : plan.maximumMillis;
         endpointPreparation = plan == null && limits.prepareEndpoint;
+        explicitSetInterfaceAlt0 = plan == null && limits.explicitSetInterfaceAlt0;
+        sonyReadback = plan == null && limits.sonyTsOutputReadback;
         queuedReception = plan == null && limits.readApi == Tbs5530TsSmoke.ReadApi.QUEUED_USB_REQUEST_8X4096;
         nativeUrbReception = plan == null && info.martinmarinov.drivers.usb.tbs5530.Tbs5530AutonomousPlans.nativeUrb(limits.readApi);
         experimentalAuto = plan != null && plan.tuneParameters != null
@@ -78,7 +80,9 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
         if (heartbeatNotBefore < 0 || heartbeatNotBefore > created || created - heartbeatNotBefore >= 300000)
             throw new IOException("Invalid session heartbeat origin");
         operation = plan == null ? "TS_SMOKE" : plan.operation.name();
-        String transcript = plan == null ? (nativeUrbReception ? "TBS5530-TS-SMOKE/v6|generation="
+        String transcript = plan == null ? (sonyReadback ? "TBS5530-TS-SMOKE/v8|generation="
+                : explicitSetInterfaceAlt0 ? "TBS5530-TS-SMOKE/v7|generation="
+                : nativeUrbReception ? "TBS5530-TS-SMOKE/v6|generation="
                 : queuedReception ? "TBS5530-TS-SMOKE/v5|generation=" : "TBS5530-TS-SMOKE/v4|generation=") + generation
                 + "|OUT=40/8A/0/0/0a00|timeoutMs=2000|BulkIN=82|bytes=" + limits.maxBytes
                 + "|reads=" + limits.maxReads + "|durationMs=" + limits.durationMillis
@@ -87,6 +91,9 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
                 : queuedReception ? "|readApi=USB_REQUEST_QUEUE_8X4096_API26|queueDepth=8|drainMaxMs=1000" : "|readApi=USBDEVFS_BULK_ERRNO")
                 + (endpointPreparation ? "|prepare=USBDEVFS_CLEAR_HALT:82|prepareMaxMs=5000"
                 + "|prepareSource=tbsdtv/linux_media@2ce787de9f6e81b4294692a45de15596ae2e1322:usb-urb.c:usb_urb_init:220" : "")
+                + (explicitSetInterfaceAlt0 ? "|EXPLICIT_SET_INTERFACE_ALT0|api=UsbDeviceConnection.setInterface(UsbInterface)"
+                + "|config=1|interface=0|alt=0|speed=HIGH|outstandingURB=0|calls=1|beforeFirstSubmit=true|observationMaxMs=2000|K36_AUTO" : "")
+                + (sonyReadback ? "|SONY_TS_OUTPUT_READBACK|" + info.martinmarinov.drivers.usb.tbs5530.Tbs5530SonyTsOutputReadback.layout() : "")
                 + "|RF_IN_CONFIRMED|LOCK_REQUIRED|retry=0"
                 : plan.getApprovalTranscript();
         planHash = plan == null ? hash(transcript) : plan.getSha256();
@@ -97,6 +104,8 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
             json.put("endpoint_preparation", endpointPreparation);
             if (queuedReception) json.put("queued_reception", true);
             if (nativeUrbReception) json.put("native_urb_reception", true);
+            if (explicitSetInterfaceAlt0) json.put("explicit_set_interface_alt0", true);
+            if (sonyReadback) json.put("sony_ts_output_readback",true);
             json.put("start_margin_ms", START_MARGIN_MS);
             json.put("operation", operation); json.put("generation", generation);
             json.put("created_elapsed_ms", created); json.put("max_session_ms", 300000); json.put("heartbeat_ms", 2000);
@@ -128,6 +137,8 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
                     || endpointPreparation && !permit.getBoolean("explicit_endpoint_preparation")
                     || queuedReception && !permit.getBoolean("explicit_queued_reception")
                     || nativeUrbReception && !permit.getBoolean("explicit_native_urb_reception")
+                    || explicitSetInterfaceAlt0 && !Boolean.TRUE.equals(permit.opt("explicit_set_interface_alt0"))
+                    || sonyReadback && !Boolean.TRUE.equals(permit.opt("explicit_sony_ts_output_readback"))
                     || !challenge.equals(permit.getString("challenge")) || !planHash.equals(permit.getString("plan_sha256"))
                                         || !operation.equals(permit.getString("operation")) || permit.getLong("generation") != generation
                     || !permit.getBoolean("explicit_control_approval") || !permit.getBoolean("physical_current")) {
@@ -185,6 +196,12 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
     }
     public boolean nativeUrbReceptionApproved() {
         try { requireCurrent(); return nativeUrbReception; } catch (IOException error) { return false; }
+    }
+    public boolean explicitSetInterfaceAlt0Approved() {
+        try { requireCurrent(); return explicitSetInterfaceAlt0; } catch (IOException error) { return false; }
+    }
+    public boolean sonyTsOutputReadbackApproved() {
+        try { requireCurrent(); return sonyReadback; } catch(IOException error) { return false; }
     }
     public boolean endpointPreparationApproved() {
         try { requireCurrent(); return endpointPreparation; } catch (IOException error) { return false; }

@@ -1,5 +1,157 @@
 # Architecture decision record (ADR)
 
+## ADR-041 — Cô lập phép đo RSSI trước khi suy khác init BDA/VM là nguyên nhân Android
+
+**Date:** 2026-11-11, phiên 10:11
+
+**Status:** Đã đối chiếu offline và kiểm 52 tests. Không sửa runtime hoặc chạy phần cứng. Mới đề xuất kế hoạch tách monitor; chưa authorized/implemented/verified một variant live. Giữ Phase 3.1/ROOT_CAUSE_UNRESOLVED.
+
+**Context:** BDA cold2 nhận payload, VM 014626 báo host BABBLE ngay Bulk đầu. Cần so firmware/config/pipe/tuner/output theo đúng epoch và completion, không replay mọi request khác hoặc đoán buffer từ actual.
+
+**Evidence:** Cùng firmware hash và operational descriptors/config/alt/endpoint. Tuner init 25 operations và tune 11 operations khớp từng byte/thứ tự; cùng manual PLP0 và programmed output chính. BDA có hai firmware epochs, board 040x/B7 và drive 55/54 khác VM; chưa chứng minh hiệu lực hoặc an toàn replay. BDA first Bulk nhận 8192 byte/status=0 trong 2,291 ms; VM BABBLE/0 byte trong 0,258 ms. Requested size của hai USBPcap vẫn UNKNOWN; queue khác tại completion đầu chưa là proof nguyên nhân.
+
+**Decision:** Xem RSSI là thao tác có ghi, không là read-only monitor. VM có năm complete RSSI windows trước Bulk và một window ngang lỗi, tuner 0x88 last-write=04, repeater đóng lại sau submit 39,378 ms. BDA trước Bulk giữ 0x88=00; source TBS/CoreELEC/C/Go cùng có đường RSSI ghi 04. Ưu tiên chuẩn bị một kế hoạch M tách monitor khỏi Bulk đầu, kiểm fake giữ lock/heartbeat/deadline trước bất kỳ hardware mới; không đổi production từ correlation.
+
+**Counter-evidence:** BDA có Bulk thành công trong ba RSSI windows hậu Bulk, nên repeater mở không tự chứng minh lỗi. Android lịch sử không có RSSI 0x88=04 và vẫn -75; khác biệt VM này không giải thích được một mình lỗi Android. Không bỏ các phản chứng để gọi RSSI là root cause.
+
+**Safety / rollback:** Chỉ file offline và hồ sơ thay đổi, không cần hardware rollback. Không B7/040x/double-A0 replay, đổi drive hoặc tăng buffer/timeout. Live grants và physical epochs cũ không mở lại. Chỉ báo đề xuất variant, không yêu cầu người dùng cắm tuner ở lượt này.
+
+**Validation / records:** 20 comparison + 21 decoder + 11 raw parser tests PASS; TShark boundary và TSDuck offline exit 0, input hashes đúng. TS BDA có 3054 TEI/164350 packets, không chứng nhận sạch. Báo cáo/JSON/source provenance ở bundle `phase31-bda-vm-offline-20261111-101351-3dad820b` dưới D:\TSDuck; xem [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md). Không stage/commit/push hoặc sync references.
+
+## ADR-040 — Giữ riêng lỗi host sớm, cancellation guest và raw xHCI chưa đặt final status
+
+**Date:** 2026-11-11, phép đo 01:46
+
+**Status:** Phép quan sát nhiều lớp đã thực hiện, thu/hash/review và cleanup. TS vẫn 0 byte; chưa fix Android hoặc xác định root cause. Giữ Phase 3.1/ROOT_CAUSE_UNRESOLVED.
+
+**Context:** M late K36 khóa nhưng guest trước đây chỉ ghi cancellation. Cần biết lỗi đã xuất hiện ở Windows physical host hay chỉ trong guest/proxy, đồng thời không nhầm raw trace fields với final completion.
+
+**Decision:** Báo từng lớp bằng status/actual/requested và thời điểm của chính lớp đó. Run 014626 có host BABBLE_DETECTED tại Bulk đầu, rồi cancellation; guest có tám cancellations -2, raw xHCI urb.status=-115 trước USB core cập nhật. Không dùng cancellation hoặc raw field để phủ định host fault; không ghép clock hoặc IRP/URB 1:1. Chỉ ghi kết luận review riêng, giữ terminals bảo thủ và raw bất biến.
+
+**Evidence:** Firmware được nạp một lần đúng 132 controls/image hash, operational không A0. K36 lock status=31, receive_timeout và 0 byte. Windows có 36 completions gồm một BABBLE và 35 CANCELED theo WDK local, mọi actual=0. Completion đầu mất 0,258 ms; cancellations sau khoảng 10 giây. Guest có tám submit 65536 byte/tám completion -2, actual=0; raw xHCI đủ 8/8. EP0 có 706 controls setup/payload/order khớp, mọi status=0, còn 335 controls sau lỗi host đầu. Có 74 file guest hash khớp, coverage/drop/loss review có giới hạn và cleanup=true; người dùng đã rút.
+
+**Source semantics:** WDK 10.0.19041, usb.h:304/339 định nghĩa 0xC0000012/0xC0010000. Upstream Linux v6.8, SHA `e8f897f4afef0031fe618a8e94127a0934896aba`, đặt trace giveback trước USB-core final status. Không gọi đây là chứng nhận source đầy đủ của Ubuntu hoặc bằng chứng từ máy phân tích tín hiệu điện.
+
+**Limits / next:** Không suy host BABBLE thành lỗi silicon/CRC/cable/FIFO, không gọi cả hai phía 0 byte là FIFO-empty. Đối chiếu offline init/pipe/Bulk đầu với Windows BDA nhận TS trước khi đề xuất hardware khác. Không tự cấp thêm firmware, FIFO/drive/GPIO/controller/driver change hoặc snapshot/reset VM. Source Android/M không đổi trong phép đo.
+
+**Validation / rollback:** Guest full Linux fake 58/58 PASS. Parent có 89 grant, 19 process, 32 adapter, 61 channel, 17 runtime và 19 parser checks PASS. Hardware helper FINISHED nghĩa đã ghi phép đo, không phải TS_PASS; receive result=1. Hai phase đã drain, outstanding=0 và chỉ tài nguyên own bị gỡ. Raw/report/grants ở D:\TSDuck; xem [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md). Không commit/push.
+
+## ADR-039 — Điều phối quan sát có gate thật trước firmware, không dùng recorder lỗi để kết luận tuner
+
+**Date:** 2026-11-10, phiên 19:32 → 2026-11-11 00:28
+
+**Status:** Đã authorized và triển khai; tests fixture PASS. Live đã tới capture/default admission nhưng dừng trước firmware vì guest readiness chưa đạt. Phép đo firmware/TS nhiều lớp còn BLOCKED; Phase 3.1 giữ nguyên.
+
+**Context:** ADR-038 chỉ có policy và feasibility. Người dùng yêu cầu làm hết kế hoạch và đã duyệt exact scope: UAC, capture new devices trên đúng một hub, temporary target filter/usbmon, một bootstrap 132 giao dịch nếu default và M late receive hữu hạn. Cần biến chuẩn bị thành bộ đo có STOP, bằng chứng và cleanup, không mở rộng hardware plan.
+
+**Decision:** Giữ M late/module/controller/K36/manual PLP0/8×65536 và giới hạn receive 10 giây/16 MiB, observer 90 giây/64 MiB, session 5 phút, heartbeat 2 giây. Tách grant phiên khỏi consume từng attempt; source manifest, boot, descriptor và physical epoch phải khớp. Default cần host raw admission và cả hai observers ready trước first write; operational chỉ sau firmware132/hash/drain, không A0 hoặc firmware path mới. Missing/unknown capture vẫn INCONCLUSIVE.
+
+**Transport:** Dùng một kênh SSH protocol hữu hạn cho heartbeat/STOP/status trong phase, không lặp SSH/SCP ngắn đang receive. LF, sequence đúng, trả lời trong 1500 ms, chỉ input từ host gia hạn heartbeat và guest watchdog độc lập. Lỗi protocol đóng đầu vào, không mở thêm reader hoặc nuôi lease. Command hữu hạn đóng stdin, SSH không tương tác dùng `-n`; không bypass strict host keys.
+
+**Physical workflow:** Xác nhận đã rút/ngắt nguồn và giữ rút trước arm. Chỉ báo cắm sau Windows recorder ready; liên tục quan sát vắng mặt → default mới, không chờ form trả lời sau cắm mới chạy. Giữ epoch qua preflight chưa cắm và cold/operational; chỉ tạo epoch mới khi có xác nhận recovery vật lý mới. Không xóa ledger hoặc tiếp tục upload chưa chắc chắn.
+
+**Validation/result:** 83 coordinator/grant, 19 process integration, 28 adapter, 61 channel và 19 parser checks PASS; 80 PULSE strict SSH fixture và 16 command chỉ đọc PASS. Windows/guest worker suites PASS riêng. Run 002355 nhận default nhưng guest OBSERVER_NOT_READY, chưa runtime/firmware; cleanup true, người dùng đã rút lại. Đây là gate hoạt động, không phải tuner FAIL hoặc Android fix.
+
+**Rollback / reopen:** Chỉ gỡ file/hardlink/filter/module/trace instance của lượt sau drain; giữ nguyên raw, terminal, ledger và mọi lần fail. Không snapshot/reset/poweroff VM, driver/controller change hoặc detach về BDA tự động. Sửa guest startup bằng nguyên nhân có bằng chứng và fixture trước grant mới; không chỉ tăng timeout hoặc bỏ ready. Xem [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md) và [bộ quan sát](../../tools/observation/README.md).
+
+## ADR-038 — Chuẩn bị quan sát hai phía host/guest, không tạo phép đọc FX2 chưa chứng minh
+
+**Date:** 2026-11-10, phiên 18:46
+
+**Status:** Proposed/prepared, chưa authorized hoặc executable cho live. Không mở phase mới, thay driver hoặc tạo hardware result.
+
+**Context:** Bảy programmed output bytes khớp nhưng Android vẫn 0 byte; Windows thiếu post-lock snapshot tương đương. Rà đủ 11 FX2 handlers không tìm được contract đọc trực tiếp các peripheral cần đo; A0 RAM contract, B8 state-consuming và I²C staging không thay thế phép đọc đó.
+
+**Decision:** Không tạo request A0/GPIO hoặc firmware mới. Chuẩn bị quan sát Windows USBPcap, guest usbmon và raw xHCI trace trong cùng một lượt, giữ M late/source/module/controller/timing/PLP/queue. Kết quả chỉ khoanh đường host/guest, không chứng minh Android kernel hoặc tín hiệu điện/FIFO.
+
+**Evidence contract:** Raw giveback có status nhưng print format mặc định không in field đó; phải giữ binary/raw report. Filter phải target-only và theo identity mới qua re-enumeration; extcap capture-all mặc định true không được coi là an toàn. Dùng instance riêng, cap thời gian/dung lượng và watchdog; không xoá global trace buffers. Không ghép clocks hoặc URB 1:1 khi chưa có liên hệ được chứng minh.
+
+**Admission/cleanup:** Cần bộ điều phối observer/STOP và end-to-end fake tests đạt trước live. Sau đó mới xin consent riêng cho handoff, temporary filter/usbmon khi cần, một bootstrap đủ 132 giao dịch và receive hữu hạn. Observer mất phải STOP qua guard; không force-close/unload/detach trước drain, không reset VM hoặc retry consumed epoch. Snapshots luôn bị cấm.
+
+**Validation:** 64 FX2 offline tests và 36 policy tests PASS, read-only host/guest inventory đã kiểm; chưa bật tracing/capture hoặc load module. Một policy test fail trước đó được giữ và đã sửa missing-operational admission. Policy chỉ kiểm dữ kiện, không phải executor hoặc grant.
+
+**Next / rollback:** Hoàn thiện observer coordinator, target filter proof và tests tích hợp trước khi báo cắm tuner. Người dùng giữ tuner rút khỏi mọi host; không cần cài phần mềm hoặc đổi controller lúc này. Vì chưa mutation, không có host/module rollback để thực hiện. Xem [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md), bundle `phase31-observation-ready-20261110-185020-78ccd455` ngoài Git.
+
+## ADR-037 — Phase 3.1: so readback theo thời điểm, không biến writes giống nhau thành fix
+
+**Date:** 2026-11-10, phiên 18:02
+
+**Status:** Đã kiểm bằng raw offline và 38 tests; không thay driver, không hardware run mới. Giữ Phase 3.1, ROOT_CAUSE_UNRESOLVED.
+
+**Context:** Hai snapshot Sony Android đã khớp init nhưng TS vẫn 0 byte. Cần đối chiếu Windows có payload để tìm khác biệt có giá trị, tránh so một lần Windows đọc trước ghi với Android đọc sau ghi rồi kết luận cấu hình sai.
+
+**Decision:** Khi đối chiếu, giữ READ và WRITE riêng, cùng epoch/bank/owner và chỉ dùng completion đã hoàn tất trước mốc Bulk. Read trước lần write cuối không là final readback, kể cả giá trị giống nhau. Write hoặc pointer đang chờ không được tính là snapshot trước Bulk; requested UNKNOWN không được lấy từ actual hoặc ETW của epoch khác.
+
+**Evidence:** Windows last-write C4/C6/80/81/95/A9/33 là `29/01/28/00/15/00/01`, giống Android. Windows không có readback đủ bảy byte sau lock; C6=00, 80=3F, 95=3D và 33=01 là các lần đọc trước write cuối. C4/A9 có read sau write nhưng trước lock. Bảy byte này không cung cấp fix có căn cứ; drive 96/97 chỉ khác writes, actual PLP/L1 và pin/FIFO vẫn UNKNOWN.
+
+**Safety boundary:** Không thêm B7/04xx, A0 read hoặc đổi FIFO/clock từ suy luận source. Request `0x81` trả byte `00` chỉ là software bit IRAM `20.7`, không phải FIFO flags. Static async/WORDWIDE không chứng minh wiring hoặc runtime FX2 config. Chỉ lập kế hoạch quan sát FX2/host có nguồn và consent riêng trước hardware, không dùng sự đồng ý phân tích offline làm quyền thao tác tuner.
+
+**Validation / records:** Hash lại pcap/Android evidence, xuất TShark 4.6.9, 6751 controls không warnings; 21 decoder + 17 comparison tests PASS, 17 targets/69 READ-WRITE events. Không build lại APK hoặc chạy lại JVM/Android. Báo cáo/JSON/CSV ở bundle `phase31-windows-sony-20261110-180339-9e246085` ngoài Git; xem [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md). Không stage/commit/push hoặc sync references.
+
+**Reopen trigger:** Chỉ xem xét thay đổi port khi có register semantics đúng chip/bo hoặc bằng chứng runtime mới phân biệt được producer/FIFO/host. Khi cơ chế đọc chưa được chứng minh, ghi BLOCKED thay vì phát lệnh đoán hoặc lặp lại cùng candidate.
+
+## ADR-036 — Phase 3.1: chỉ đọc Sony output bằng kế hoạch debug hữu hạn, không suy cấu hình thành TS
+
+**Date:** 2026-11-10, phiên 16:10
+
+**Status:** Đã triển khai, kiểm phần mềm và đo hai snapshot thật. Readback khớp init nhưng native vẫn -75/actual 0; chưa xác định nguyên nhân gốc hoặc đạt TS_SMOKE_PASS.
+
+**Context:** B alt0 trước đã trả true nhưng không có TS. Cần phân biệt demod báo khóa với cấu hình output thực sự được giữ, trước khi đổi drive, PLP hoặc FIFO một cách thiếu căn cứ. Source read không tự chứng nhận phép đọc không có tác dụng phụ trên silicon.
+
+**Decision:** Thêm option debug `SONY_TS_OUTPUT_READBACK`, mặc định OFF, chỉ cho chip `0x197`, K36 AUTO, native 8×4096, High-Speed và owner độc quyền; không có URB đã thử hoặc đang chờ. Không ghép alt0, endpoint preparation, 8192 hoặc ControlPlaneOnly. Root grant ràng exact layout; hai permit stage/plan/owner dùng một lần cho AFTER_LOCK và BEFORE_FIRST_URB. Mỗi stage chỉ 20 EP0: sync bank20/10, chọn bank00, đọc C4/C6/80/81/95/A9/33, restore bank20 rồi đọc sync lần nữa. Không gọi helper RMW vì helper còn ghi cấu hình; không scan hoặc đọc đồng thời với Bulk.
+
+**Source limits:** Pin TBS `2ce787de9f6e81b4294692a45de15596ae2e1322`, CoreELEC `072f8e99e0ac66d88d7278784e922e08e8253210`, community `c5fa27eecbe80633cbb365cc44656daea1c0e2e3`. MaskFF không có read ẩn. C3/96/97/D9, actual PLP/L1 là NOT_AVAILABLE. Read81 chỉ có nguồn ở nhánh serial; thiếu proof an toàn trên parallel đã được nêu trước consent. Mọi snapshot là NONATOMIC, bank PLAN_INFERRED, side-effect-free UNKNOWN.
+
+**Failure/cleanup:** Consume/audit/deadline/owner/permission phải đạt trước dispatch. Short/error hoặc bank không chắc chắn làm session fail-stop; không gửi restore/retry mới sau I/O fault, không Bulk. Thành công chỉ chứng nhận restore transfer đủ độ dài. Lock đổi cũng dừng trước Bulk. Giữ timeout từng lệnh 2000 ms, guard stage 5000 ms, heartbeat 2 giây, runtime ADB 1500 ms và session tối đa 5 phút; không force-close syscall đang chạy.
+
+**Observed result:** Hai stage đủ 20/20, sync `26` trước/sau, cùng bảy byte `29/01/28/00/15/00/01`, khớp init. Native vẫn tám URB -75/actual 0 và sample 0 byte; đã drain, không outstanding/quarantine hoặc USB fd còn giữ. Chỉ một firmware bootstrap đủ 132 giao dịch; handoff cùng physical epoch không A0. Các preflight chưa grant giữ nguyên scope và không I/O; sửa CLEAR_TOP + SINGLE_TOP cho preflight nằm dưới workflow đã drain, không CLEAR_TASK hoặc nới guard.
+
+**Validation:** Có 578 JVM tests, debug/release/lint, AndroidTest build và 24 fake Android tests PASS khi màn hình thức; giữ riêng 3 lifecycle failures khi Dozing/FOREGROUND_LOST. Helper Sony scope 8/8 và exact layout, 57 kiểm launch/82 kiểm heartbeat trên PS7/5.1 PASS; ba release jars không có monitor debug. Có 16 raw files đã hash Android-host khớp; không đưa raw/firmware/grant vào Git.
+
+**Alternatives / reopen trigger:** Không đọc thanh ghi thiếu nguồn, replay drive/GPIO hoặc tăng buffer để đoán. Bằng chứng mới chỉ làm yếu giả thuyết bảy byte chưa áp dụng hoặc bị 8A đổi. Bước kế tiếp là đối chiếu raw Windows hiện có và khoanh TS pin/clock → FIFO; mọi phép ghi mới hoặc đổi host cần quyết định riêng. Tắt option trả đường nhận về baseline; release không đổi. Xem [RESEARCH.md](RESEARCH.md) và [TEST-MATRIX.md](TEST-MATRIX.md).
+
+## ADR-035 — Phase 3.1: launch correlation và cleanup proof tách khỏi grant phần cứng
+
+**Date:** 2026-11-10, phiên 12:09
+
+**Status:** Lifecycle implementation đã kiểm bằng JVM, build/lint, instrumentation và helper→Android không I/O; B setInterface thật đã chạy nhưng không sửa EOVERFLOW. Không mở phase mới hoặc báo ROOT_CAUSE_CONFIRMED/TS_SMOKE_PASS.
+
+**Context:** SingleTop có thể đưa instance cũ ra trước mà không tạo challenge mới. Nhánh runtime=null chỉ ghi DRAIN_NOT_CERTIFIED dù chưa cấp tài nguyên, và helper có thể bỏ qua report terminal khi policy state còn WAIT_REENUMERATION. Các lỗi này thuộc bộ điều phối, khác lỗi native URB -75 của tuner.
+
+**Decision:** Mỗi lệnh helper có launch token riêng, không dùng làm physical recovery epoch. Challenge/grant/report ràng token và mode. Activity chỉ tạo phiên kế tiếp sau cleanup/audit thành công; token đã dùng trong lifecycle hoặc pending cleanup không được replay. CLEAR_TOP + SINGLE_TOP dùng để định tuyến về đúng Activity qua preflight; không CLEAR_TASK, force-stop, xóa dữ liệu hoặc ledger.
+
+**Cleanup contract:** NO_RESOURCES_ACQUIRED chỉ được chứng nhận trước acquisition, khi runtime/owner/permission registrations/descriptor/capture đều vắng. Sau acquisition phải cancel/drain, đợi runtime kết thúc và chứng minh không pending/quarantine/cleanup fault. Typed terminal report có terminal=true và cleanup_path, không dùng tên state làm bằng chứng duy nhất. Lỗi audit không được biến thành cleanup PASS hoặc quyền mở phiên mới.
+
+**No-I/O validation:** Mode ControlPlaneOnly là quyền kiểm bộ điều phối, không quyền tuner. Nó từ chối firmware/physical epoch/permission/mirror, cấm tạo USB manager/runtime và chặn owner/approval/firmware boundaries trong session. Helper giữ 1500 ms, heartbeat 2 giây, deadline ≤5 phút; STOP không renew expiry. Hai phiên thật CONTROL_PLANE_COMPLETE, hardware history SHA không đổi và app không USB fd đã xác minh. Fake không thay thế runtime evidence này.
+
+**Hardware result:** Sau quyền B mới, bootstrap full 132 trong 3230 ms rồi operational không A0. setInterface một lần trả true, descriptor/endpoint không đổi và outstanding=0. Tám URB vẫn -75/actual 0, sample 0 byte; report terminal và drain=8/8/outstanding=0/quarantine=false. Vì A/B khác APK lifecycle và physical epochs, chỉ kết luận explicit setInterface đơn lẻ không đủ sửa trên cấu hình đã đo. Không đưa cờ vào release hoặc bật mặc định.
+
+**Validation:** JVM 565/565, debug/release/lint PASS; 5 lifecycle/16 approval Android PASS; 57 launch/terminal và 82 heartbeat checks PASS. Không nâng toolchain/dependency hoặc sửa references. Một instrumentation crash report khi ADB offline không có stack app xác minh được; kết quả sau khôi phục được giữ riêng, không xóa thất bại cũ.
+
+**Alternatives / reopen trigger:** Không tắt grant/heartbeat, tự tạo recovery epoch, xóa/rearm ledger, tăng buffer/timeout hoặc reset để ép chạy. Nếu muốn TS, chọn phép đọc output Sony có nguồn và consent riêng; không coi B không cải thiện là bo/FIFO hỏng hoặc mọi lỗi host đã loại.
+
+**Records / rollback:** Tắt diagnostic option trả hành vi receive về baseline; release không đổi. Raw/grants/firmware ngoài Git trong bundle `phase31-lifecycle-20261110-121354-96284261`. Các lượt thật đã drain và rời workflow, tuner giữ tablet; không tự chuyển host hoặc chạy thêm. [Hướng dẫn](../../README.md#kiểm-việc-khởi-chạy-và-heartbeat-mà-không-truy-cập-tuner), chưa stage/commit/push.
+
+## ADR-034 — Phase 3.1: tách TS_LOCK khỏi FIFO và kiểm Android alt0 bằng một option debug riêng
+
+**Date:** 2026-11-10
+
+**Status:** Mã và kiểm thử offline đã đạt; Android A mới xác nhận -75/0 byte. B đầu chưa tới API vì heartbeat guard dừng frontend init, không phải kết quả âm của setInterface. Nguyên nhân gốc vẫn chưa xác nhận; không mở phase mới hoặc coi firmware/lock là TS_SMOKE_PASS.
+
+**Context:** Raw Windows và Linux M đều có readback Sony bank20/10=26 trước Bulk; Linux giữ bit TS_LOCK trong pending mà không byte USB. Windows manual PLP0 giống M. Android đã có bank9C/10 giống Windows mà vẫn -75, nên khác biệt source/drive/GPIO chưa đủ quan hệ nhân quả. Mapping actual selected DVB-T2 PLP/L1-post và tín hiệu TS trên bo còn thiếu.
+
+**Decision:** Giữ các write producer/board hiện hành. Thêm `EXPLICIT_SET_INTERFACE_ALT0` debug-only, mặc định OFF, ràng riêng vào immutable grant/plan và native8×4096/K36 AUTO. Chỉ gọi API một lần sau exact identity/operational profile/High-Speed/OS permission/claimed exclusive owner và chưa có URB. False/exception/disconnect hoặc profile thay đổi phải dừng trước Bulk; không retry, CLEAR_HALT, setConfiguration, reset, force claim, upload lại firmware hoặc ảnh hưởng driver khác.
+
+**Evidence and validation:** Focused JVM 60 và regression 559 PASS; debug/release/lint, hai APK androidTest build và tablet fake 4+16 PASS. Release jar không có lớp diagnostic. Decoder 21 tests, pipeline giả 16 checks, callback 820, receiver 80 và FX2 64 tests PASS có phạm vi. A thật khóa K36, 190 EP0, tám REAP -75/actual0, outstanding=0/quarantine=false và drain. B đầu chỉ có 150 EP0 full-length, cùng prefix A, rồi HOST_HEARTBEAT_INVALID trước setInterface/native. Không dùng mock hoặc B chưa gọi API để bác bỏ candidate.
+
+**Host helper and trade-off:** Giữ runtime ADB 1500 ms, heartbeat freshness 2 giây và expiry không renew. Đường lấy giờ rồi gửi heartbeat qua hai round trips có cửa timestamp cũ; một-call publication đã kiểm fake, không phải causal fix của tuner. Runtime xác nhận app UID bị chặn đọc `/proc/uptime`; bản sửa cuối đọc ở shell UID rồi truyền positional argument vào app UID, 82 checks PASS trên PS7/PS5.1 nhưng runtime mới chưa xác minh. Chỉ exact readonly trace/hash sau terminal/drain mới có export budget 10 giây; runtime không fallback hoặc retry.
+
+**Final safety gate:** Workflow chuẩn bị B thay thế chưa có grant nhưng report là DRAIN_NOT_CERTIFIED; giữ nguyên giới hạn này, không tự suy từ EP0=0 rằng có thể clear task hoặc tiếp tục. Script đã dừng trước NEW_TASK/CLEAR_TASK/B2. setInterface vẫn HARDWARE_NOT_RUN. Cần bằng chứng cleanup/lifecycle trước bất kỳ phép live mới; không tự tạo fresh challenge như cách rearm history.
+
+**Alternatives / reopen trigger:** Không replay B7/04xx hoặc drive54→55 khi BOARD_MAPPING_UNKNOWN. Không quét PLP/buffer/timeout, không đổi controller hoặc load O-C nguyên trạng. Chỉ thêm lượt B trên attachment mới nếu được duyệt sau khi guard/helper đạt. Nếu có byte, kiểm MPEG-TS/PAT/PMT/CRC/TEI/CC; muốn xác nhận causal fix vẫn cần tái lập có đối chứng.
+
+**Rollback / records:** Cờ OFF trả đường debug về baseline; release giữ nguyên. Không xóa/rearm consumed ledger. Raw/grants/firmware ngoài Git; hai lượt đã drain trước rời workflow. Xem [hướng dẫn](../../README.md#chẩn-đoán-android-chọn-lại-interface-0alt-0), [công cụ offline](../../tools/ts-state/README.md) và bundle `D:\TSDuck\reports\phase31-state-20261110-100952-10a3635f`. Không stage/commit/push.
+
 ## ADR-033 — Phase 3.1: tách original, M và hai cửa cold/operational; timing sớm là thí nghiệm riêng
 
 **Date:** 2026-11-09 → 2026-11-10

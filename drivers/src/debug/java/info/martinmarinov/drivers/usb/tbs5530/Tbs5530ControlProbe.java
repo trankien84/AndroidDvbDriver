@@ -23,18 +23,23 @@ public final class Tbs5530ControlProbe {
     private final Authorization authorization;
     private final Gate gate;
     private final Tbs5530Frontend frontend;
-    private boolean executing;
+    private final Tbs5530ControlIo ownedIo;
+    private boolean executing, observing, knownStatusBank20, readbackCreated;
+    private int verifiedChipId = -1;
+    private Tbs5530OperationalHandoff handoff;
 
     public Tbs5530ControlProbe(Tbs5530OperationalHandoff owner, Authorization authorization, Tbs5530Frontend.Clock clock)
             throws IOException {
         this(owner.session(), owner.session().getGeneration(), owner.controlIo(), authorization, clock);
         if (!owner.operationalOwner()) throw new IOException("Fresh operational session required");
+        handoff = owner;
     }
     Tbs5530ControlProbe(Tbs5530Session session, long generation, Tbs5530ControlIo io,
                        Authorization authorization, Tbs5530Frontend.Clock clock) throws IOException {
         this.session = Objects.requireNonNull(session); this.generation = generation;
         this.authorization = Objects.requireNonNull(authorization);
-        gate = new Gate(Objects.requireNonNull(io));
+        ownedIo = Objects.requireNonNull(io);
+        gate = new Gate(ownedIo);
         frontend = new Tbs5530Frontend(new Tbs5530Bridge(gate, session, generation), session, generation, clock);
     }
     public Tbs5530Frontend.Plan planProbe() throws IOException { return frontend.planProbe(); }
@@ -49,18 +54,40 @@ public final class Tbs5530ControlProbe {
     }
     public Tbs5530Frontend.Plan planPollStatus(int maximumSamples) throws IOException { return frontend.planPollStatus(maximumSamples); }
     public Tbs5530Frontend.State state() { return frontend.getState(); }
-    public void cancel() { frontend.cancel(); session.requestCancellation(generation, false); }
+    public void cancel() { knownStatusBank20 = false; frontend.cancel(); session.requestCancellation(generation, false); }
+    public synchronized Tbs5530SonyTsOutputReadback sonyOutputReadback(Tbs5530SonyTsOutputReadback.Authorization permit,
+                                                                    Tbs5530SonyTsOutputReadback.Clock clock) throws IOException {
+        if (handoff == null || readbackCreated || executing || observing || !knownStatusBank20 || verifiedChipId != 0x197)
+            throw new IOException("A completed exact CXD6802 locked status plan is required");
+        handoff.requireSonyReadbackOwner(); readbackCreated = true;
+        return new Tbs5530SonyTsOutputReadback(session,generation,ownedIo,permit,new Tbs5530SonyTsOutputReadback.EntryGuard() {
+            public void requireEntry(Tbs5530SonyTsOutputReadback.Stage stage) throws IOException {
+                requireCurrent();
+                if (!knownStatusBank20 || observing || stage == Tbs5530SonyTsOutputReadback.Stage.AFTER_LOCK && session.isStreaming()
+                        || stage == Tbs5530SonyTsOutputReadback.Stage.BEFORE_FIRST_URB && !session.isStreaming())
+                    throw new IOException("Readback bank/stage provenance unavailable");
+                observing = true;
+            }
+            public void requireCurrent() throws IOException {
+                session.requireUsable(generation); handoff.requireSonyReadbackOwner();
+                if (executing || verifiedChipId != 0x197 || frontend.getState() != Tbs5530Frontend.State.DVBT2_LOCKED)
+                    throw new IOException("Readback owner or frontend changed");
+            }
+            public void bankUnknown() { knownStatusBank20 = false; }
+            public void bank20Restored() { knownStatusBank20 = true; observing = false; }
+        },clock);
+    }
 
     public synchronized Tbs5530Frontend.Result execute(Tbs5530Frontend.Plan plan) throws IOException {
         Objects.requireNonNull(plan);
-        if (executing) throw new IOException("Control program already running");
+        if (executing || observing) throw new IOException("Control program or readback already running");
         if (plan.generation != generation) throw new IOException("Stale approval plan");
         session.requireUsable(generation);
         authorization.requireCurrent();
         if (needsRf(plan) && !authorization.rfInConfirmed()) throw new IOException("AWAITING_RF_IN_CONNECTION");
         requireExperimentalConsent(plan);
         authorization.consume(plan);
-        executing = true;
+        executing = true; knownStatusBank20 = false;
         gate.begin(plan);
         try {
             Tbs5530Frontend.Result result = frontend.execute(plan);
@@ -76,6 +103,10 @@ public final class Tbs5530ControlProbe {
                 case STATUS: case POLL_STATUS: session.frontendLock(generation, result.status.locked); break;
                 default: throw new AssertionError(result.operation);
             }
+            verifiedChipId = result.chipId;
+            knownStatusBank20 = (result.operation == Tbs5530Frontend.Operation.STATUS || result.operation == Tbs5530Frontend.Operation.POLL_STATUS)
+                    && result.status != null && result.status.locked;
+            if (handoff != null) handoff.programCompleted(plan);
             return result;
         } catch (IOException | RuntimeException error) {
             frontend.cancel(); session.failed(generation, error); throw error;

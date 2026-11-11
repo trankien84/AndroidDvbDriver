@@ -53,6 +53,21 @@ public final class Tbs5530Phase31PlanFixture {
         probe.execute(probe.planTune(new Tbs5530DvbT2TuneParameters(594_000_000L, 8_000_000, 42)));
         probe.execute(probe.planPollStatus(1)); return probe;
     }
+    public static Tbs5530SonyTsOutputReadback.Plan sonyPlan(Tbs5530SonyTsOutputReadback.Stage stage) throws java.io.IOException {
+        Tbs5530SonyTsOutputReadback monitor = new Tbs5530SonyTsOutputReadback(new Tbs5530Session(),1,
+                (t,r,v,i,b,o,l,timeout) -> { throw new AssertionError("Permit fixture must never transfer"); },
+                new Tbs5530SonyTsOutputReadback.Authorization() {
+                    public void requireCurrent() { throw new AssertionError("No device authorization"); }
+                    public void consume(Tbs5530SonyTsOutputReadback.Plan plan) { throw new AssertionError("No device authorization"); }
+                    public void audit(String b,int o,int t,int r,int l,int result) { throw new AssertionError("No device authorization"); }
+                },new Tbs5530SonyTsOutputReadback.EntryGuard() {
+                    public void requireEntry(Tbs5530SonyTsOutputReadback.Stage value) { throw new AssertionError("No USB owner"); }
+                    public void requireCurrent() { throw new AssertionError("No USB owner"); }
+                    public void bankUnknown() { throw new AssertionError("No USB owner"); }
+                    public void bank20Restored() { throw new AssertionError("No USB owner"); }
+                },() -> 0);
+        return monitor.plan(stage);
+    }
     public static Tbs5530Frontend.Plan tune(boolean auto) throws Exception {
         Tbs5530Session session = new Tbs5530Session();
         long token = session.requestPermission(); session.permissionResult(token, true);

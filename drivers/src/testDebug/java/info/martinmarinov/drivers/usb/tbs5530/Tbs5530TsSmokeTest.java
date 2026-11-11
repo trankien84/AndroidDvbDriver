@@ -19,7 +19,11 @@ public class Tbs5530TsSmokeTest {
         final long token;
         final Tbs5530TsSmoke smoke;
         int consumes, selects, reads, count = 188 * 3, audits, requested, timeoutRequested;
-        boolean rf = true, consent = true, failAudit, endpointApproved, failPreparation, nativeApproved;
+        boolean rf = true, consent = true, failAudit, endpointApproved, failPreparation, nativeApproved, explicitAlt0Approved;
+        boolean sonyApproved, failSony;
+        int sonyCalls;
+        long sonyNanos;
+        Tbs5530ExplicitInterfaceSelection interfaceGate;
         int preparations, errno = -1;
         long preparationNanos;
         long nanos;
@@ -35,6 +39,7 @@ public class Tbs5530TsSmokeTest {
                 assertArrayEquals(new byte[]{10, 0}, bytes); selects++; return length;
             }, session, token);
             Tbs5530BulkTransport bulk = new Tbs5530BulkTransport(session, token, owner, () -> { }, (bytes, length, timeout) -> {
+                if (interfaceGate != null) interfaceGate.read(() -> 0);
                 assertTrue(timeout > 0 && timeout <= 2000); reads++; requested = length; timeoutRequested = timeout;
                 System.arraycopy(stream, 0, bytes, 0, Math.min(length, stream.length));
                 if (duringRead != null) duringRead.run(); nanos += 100_000_000L; return count;
@@ -46,6 +51,13 @@ public class Tbs5530TsSmokeTest {
                     (bytes, length) -> { if (observer != null) observer.accept(bytes, length); });
         }
         public boolean nativeUrbReceptionApproved() { return nativeApproved && consent && rf; }
+        public boolean explicitSetInterfaceAlt0Approved() { return explicitAlt0Approved && consent && rf; }
+        public boolean sonyTsOutputReadbackApproved() { return sonyApproved && consent && rf; }
+        public void beforeFirstBulk() throws IOException {
+            assertEquals(1, consumes); assertEquals(1, selects); assertEquals(0, reads);
+            assertTrue(session.isStreaming()); sonyCalls++; nanos += sonyNanos;
+            if (failSony) throw new IOException("Synthetic readback failure, no Bulk");
+        }
         public boolean endpointPreparationApproved() { return endpointApproved && consent && rf; }
         public void consume(Tbs5530TsSmoke.Limits limits, long generation) throws IOException {
             requireCurrent(generation); if (consumes++ != 0) throw new IOException("consumed");
@@ -58,6 +70,74 @@ public class Tbs5530TsSmokeTest {
             if ("BULK_READ_INTENT".equals(event) && beforeBulk != null) beforeBulk.run();
         }
         Tbs5530TsSmoke.Limits limits() { return new Tbs5530TsSmoke.Limits(564, 2, 1000, 500); }
+    }
+    @Test public void sonyReadbackIsOffByDefaultAndRestrictedToUnmodifiedNative4096Baseline() throws Exception {
+        Tbs5530TsSmoke.Limits off = new Tbs5530TsSmoke.Limits(65536,16,5000,500,4096,false,Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096);
+        assertFalse(off.sonyTsOutputReadback);
+        Tbs5530TsSmoke.Limits on = sonyLimits(); assertTrue(on.sonyTsOutputReadback);
+        assertEquals(off.maximumMillis()+5000,on.maximumMillis());
+        assertThrows(IllegalArgumentException.class,() -> new Tbs5530TsSmoke.Limits(65536,16,5000,500,8192,false,Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X8192,false,true));
+        assertThrows(IllegalArgumentException.class,() -> new Tbs5530TsSmoke.Limits(65536,16,5000,500,4096,true,Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096,false,true));
+        assertThrows(IllegalArgumentException.class,() -> new Tbs5530TsSmoke.Limits(65536,16,5000,500,4096,false,Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096,true,true));
+        assertThrows(IllegalArgumentException.class,() -> new Tbs5530TsSmoke.Limits(65536,16,5000,501,4096,false,Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096,false,true));
+    }
+    private static Tbs5530TsSmoke.Limits sonyLimits() {
+        return new Tbs5530TsSmoke.Limits(65536,16,5000,500,4096,false,Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096,false,true);
+    }
+    @Test public void sonyReadbackNeedsDistinctApprovalBeforeStreamSelection() throws Exception {
+        Fixture f = new Fixture(true,Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096); f.nativeApproved=true;
+        assertThrows(IOException.class,() -> f.smoke.run(sonyLimits()));
+        assertEquals(0,f.consumes);assertEquals(0,f.selects);assertEquals(0,f.sonyCalls);assertEquals(0,f.reads);f.session.close();
+    }
+    @Test public void sonyReadbackRunsAfterStreamSelectionBeforeBulkAndDoesNotUseReceiveWindow() throws Exception {
+        Fixture f = new Fixture(true,Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096); f.nativeApproved=true;f.sonyApproved=true;f.count=4096;f.sonyNanos=4_000_000_000L;
+        f.smoke.run(sonyLimits());assertEquals(1,f.sonyCalls);assertEquals(16,f.reads);assertEquals(1,f.selects);assertEquals(0,f.preparations);assertEquals(500,f.timeoutRequested);
+        assertEquals(1,f.owner.releases);assertEquals(1,f.owner.closes);
+    }
+    @Test public void sonyReadbackFailureStopsBeforeBulkAndDrainsWithoutRetry() throws Exception {
+        Fixture f = new Fixture(true,Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096);f.nativeApproved=true;f.sonyApproved=true;f.failSony=true;
+        assertThrows(IOException.class,() -> f.smoke.run(sonyLimits()));assertEquals(1,f.sonyCalls);assertEquals(0,f.reads);assertEquals(1,f.selects);
+        assertEquals(1,f.owner.releases);assertEquals(1,f.owner.closes);assertThrows(IOException.class,() -> f.smoke.run(sonyLimits()));assertEquals(1,f.sonyCalls);
+    }
+    @Test public void explicitAlt0NeedsOwnApprovalBeforeAttemptOrAnyStreamVendorWrite() throws Exception {
+        Fixture f = new Fixture(true, Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096); f.nativeApproved = true;
+        Tbs5530TsSmoke.Limits limits = new Tbs5530TsSmoke.Limits(65536,16,5000,500,4096,false,
+                Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096,true);
+        assertThrows(IOException.class, () -> f.smoke.run(limits));
+        assertEquals(0, f.consumes); assertEquals(0, f.selects); assertEquals(0, f.reads);
+        f.session.close(); assertEquals(1, f.owner.closes);
+    }
+    @Test public void explicitAlt0FalseExceptionDetachDrainOnceAndCannotRestartOrUploadFirmware() throws Exception {
+        for (int fault = 0; fault < 3; fault++) {
+            Fixture f = new Fixture(true, Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096);
+            f.nativeApproved = true; f.explicitAlt0Approved = true;
+            Tbs5530ExplicitInterfaceSelectionTest.Port p = new Tbs5530ExplicitInterfaceSelectionTest.Port();
+            if (fault == 0) p.result = false;
+            if (fault == 1) p.runtimeFailure = new IllegalStateException("Fake API failure");
+            if (fault == 2) p.during = () -> p.present = false;
+            f.interfaceGate = p.gate(true);
+            Tbs5530TsSmoke.Limits limits = new Tbs5530TsSmoke.Limits(65536,16,5000,500,4096,false,
+                    Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096,true);
+            assertThrows(IOException.class, () -> f.smoke.run(limits));
+            assertEquals(1, f.consumes); assertEquals(1, p.calls); assertEquals(0, f.reads); assertEquals(1, f.selects);
+            assertEquals(0, f.preparations); assertEquals(1, f.owner.releases); assertEquals(1, f.owner.closes);
+            assertThrows(IOException.class, () -> f.smoke.run(limits)); assertEquals(1, p.calls); assertEquals(1, f.selects);
+            f.session.close(); assertEquals(1, f.owner.closes);
+        }
+    }
+    @Test public void explicitAlt0SuccessSelectsOnceAndKeepsOrdinaryBoundedCleanup() throws Exception {
+        Fixture f = new Fixture(true, Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096);
+        f.nativeApproved = true; f.explicitAlt0Approved = true; f.count = 4096;
+        Tbs5530ExplicitInterfaceSelectionTest.Port p = new Tbs5530ExplicitInterfaceSelectionTest.Port(); f.interfaceGate = p.gate(true);
+        assertEquals(Tbs5530Session.State.READY, f.session.getState()); assertFalse(f.session.isStreaming());
+        f.beforeBulk = () -> {
+            assertEquals(Tbs5530Session.State.READY, f.session.getState());
+            assertTrue(f.session.isStreaming()); assertTrue(f.session.isInterfaceClaimed());
+        };
+        f.duringRead = f.beforeBulk;
+        f.smoke.run(new Tbs5530TsSmoke.Limits(65536,16,5000,500,4096,false,Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096,true));
+        assertEquals(1, p.calls); assertEquals(16, f.reads); assertEquals(1, f.selects); assertEquals(0, f.preparations);
+        assertEquals(1, f.owner.releases); assertEquals(1, f.owner.closes);
     }
     @Test public void confirmedLockRfAndApprovalAllowExactlyOneStreamSelectThenBoundedBulk() throws Exception {
         Fixture f = new Fixture(true); Tbs5530TsSmoke.Result result = f.smoke.run(f.limits());

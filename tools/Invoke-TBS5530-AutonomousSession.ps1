@@ -17,18 +17,31 @@ param(
     [switch]$ProofOfGuardPassed,
     [switch]$AutoUsbPermission,
     [switch]$ControlMirror,
+    [switch]$ExplicitSetInterfaceAlt0,
+    [switch]$SonyTsOutputReadback,
+    [switch]$ControlPlaneOnly,
     [string]$AndroidCliPath,
     [string]$OutputDirectory = 'D:\TSDuck\logs'
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if (-not $GrantBoundedSession -or -not $ProofOfGuardPassed) { throw 'BLOCKED: cần quyền phiên bounded và kết quả proof-of-guard trước khi chạy thật.' }
+if ($SonyTsOutputReadback -and ($Profile -cne 'EXPERIMENTAL_DIAGNOSTIC' -or $ReadApi -cne 'NATIVE_USBFS_URB_8X4096' -or
+    $ExplicitSetInterfaceAlt0 -or $ControlPlaneOnly -or -not $ControlMirror)) {
+    throw 'BLOCKED: SONY_TS_OUTPUT_READBACK cần native4096/experimental/mirror, không ghép alt0 hoặc control-plane-only.'
+}
+if ($ControlPlaneOnly -and ($FirmwarePath -or $PhysicalRecoveryEpoch -or $PhysicalRecoveryConfirmed -or $AutoUsbPermission -or $ControlMirror)) {
+    throw 'BLOCKED: control-plane-only không nhận firmware, physical epoch, USB permission hoặc mirror.'
+}
 if ($PhysicalRecoveryEpoch) {
     if (-not $PhysicalRecoveryConfirmed -or $PhysicalRecoveryEpoch -cnotmatch '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$' -or
         $PhysicalRecoveryEpoch -ceq '00000000-0000-0000-0000-000000000000') {
         throw 'BLOCKED: physical recovery epoch phải là GUID cố định do operator cấp cho sự kiện đã được người dùng xác nhận.'
     }
 } elseif ($PhysicalRecoveryConfirmed) { throw 'BLOCKED: xác nhận physical recovery thiếu epoch; không tự tạo GUID.' }
+if ($ExplicitSetInterfaceAlt0 -and ($Profile -cne 'EXPERIMENTAL_DIAGNOSTIC' -or $ReadApi -cne 'NATIVE_USBFS_URB_8X4096')) {
+    throw 'BLOCKED: EXPLICIT_SET_INTERFACE_ALT0 cần EXPERIMENTAL_DIAGNOSTIC và native baseline 8x4096; không ghép 8192.'
+}
 if (-not (Test-Path -LiteralPath $AdbPath -PathType Leaf)) { throw 'Không tìm thấy ADB đã chọn.' }
 if ($ReadApi -ne 'SYNC_NATIVE_ERRNO' -and $Profile -ne 'EXPERIMENTAL_DIAGNOSTIC') { throw 'BLOCKED: diagnostic receive chỉ thuộc EXPERIMENTAL_DIAGNOSTIC.' }
 $package = 'info.martinmarinov.dvbdriver'
@@ -45,7 +58,63 @@ if ($AutoUsbPermission) {
     if (-not (Test-Path -LiteralPath $AndroidCliPath -PathType Leaf)) { throw 'USER_ACTION_REQUIRED: Android CLI không khả dụng.' }
     if (-not (Test-Path -LiteralPath $OutputDirectory -PathType Container)) { throw 'Thiếu thư mục log ngoài Git.' }
 }
-function Invoke-PinnedAdb([string[]]$DeviceArguments, [string]$InputText = '', [bool]$PreserveOutput = $false) {
+$script:adbStage = 'INITIAL_IDENTITY'
+function Get-TBS5530AdbFailure {
+    param(
+        [ValidateSet('START_FAILED', 'TIMEOUT', 'NONZERO_EXIT')][string]$Kind,
+        [ValidatePattern('^[A-Z][A-Z0-9_]{0,63}$')][string]$Stage,
+        [ValidatePattern('^[A-Z][A-Z0-9_]{0,63}$')][string]$Operation,
+        [ValidateSet(1500, 10000)][int]$TimeoutMillis = 1500
+    )
+    return "FAIL-STOP: ADB $Kind; stage=$Stage; operation=$Operation; timeout_ms=$TimeoutMillis; không reconnect/fallback."
+}
+function Test-TBS5530DrainedTerminal([object]$Report) {
+    if ($null -eq $Report) { return $false }
+    foreach ($field in @('cleanup', 'state', 'result')) { if ($null -eq $Report.PSObject.Properties[$field]) { return $false } }
+    if ($Report.cleanup -cne 'DRAIN_CONFIRMED' -or $Report.result -isnot [string] -or [string]::IsNullOrWhiteSpace($Report.result)) { return $false }
+    $typed = $null -ne $Report.PSObject.Properties['terminal'] -or $null -ne $Report.PSObject.Properties['cleanup_path']
+    if ($typed) {
+        if ($null -eq $Report.PSObject.Properties['terminal'] -or $Report.terminal -isnot [bool] -or $Report.terminal -cne $true -or
+            $null -eq $Report.PSObject.Properties['cleanup_path'] -or $Report.cleanup_path -cnotin @('NO_RESOURCES_ACQUIRED','RUNTIME_DRAIN_CONFIRMED') -or
+            $Report.state -cnotin @('WAIT_DEVICE','NEED_ANDROID_USB_PERMISSION','FX2_DEFAULT','FIRMWARE_BOOTSTRAP','WAIT_REENUMERATION',
+                'OPERATIONAL','FRONTEND_INIT','LOCK_CONFIRMED','TS_CAPTURE','REPORT','ERROR_UNCERTAIN')) { return $false }
+        if ($Report.cleanup_path -ceq 'NO_RESOURCES_ACQUIRED' -and
+            ($null -eq $Report.PSObject.Properties['firmware'] -or $null -ne $Report.firmware -or
+             $null -eq $Report.PSObject.Properties['native_urb'] -or $null -ne $Report.native_urb)) { return $false }
+    } elseif ($Report.state -cnotin @('REPORT', 'ERROR_UNCERTAIN')) { return $false }
+    if ($null -ne $Report.PSObject.Properties['native_urb'] -and $null -ne $Report.native_urb) {
+        $urb = $Report.native_urb
+        if ($null -eq $urb.PSObject.Properties['outstanding'] -or $null -eq $urb.PSObject.Properties['quarantined'] -or
+            ($urb.outstanding -isnot [long] -and $urb.outstanding -isnot [int]) -or
+            $urb.outstanding -ne 0 -or $urb.quarantined -isnot [bool] -or $urb.quarantined -cne $false) { return $false }
+    }
+    return $true
+}
+function Get-TBS5530AdbDeadline([string]$Operation, [string[]]$DeviceArguments, [object]$DrainedReport, [string]$Session) {
+    if ($null -eq $DrainedReport) { return 1500 }
+    if (-not (Test-TBS5530DrainedTerminal $DrainedReport) -or $Session -cnotmatch '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$') {
+        throw 'FAIL-STOP: export chỉ được đọc sau terminal report và drain đã xác minh.'
+    }
+    $remote = 'files/autonomous-v1-' + $Session + '/control-ep0.jsonl'
+    $expected = if ($Operation -ceq 'CONTROL_TRACE_READ') { @('exec-out', 'run-as', 'info.martinmarinov.dvbdriver', 'cat', $remote) }
+        elseif ($Operation -ceq 'CONTROL_TRACE_HASH') { @('shell', 'run-as', 'info.martinmarinov.dvbdriver', 'sha256sum', $remote) }
+        else { throw 'FAIL-STOP: deadline export không áp dụng cho thao tác runtime.' }
+    if ($DeviceArguments.Count -ne $expected.Count) { throw 'FAIL-STOP: export không đúng read-only allowlist.' }
+    for ($i = 0; $i -lt $expected.Count; $i++) {
+        if ($DeviceArguments[$i] -cne $expected[$i]) { throw 'FAIL-STOP: export không đúng read-only allowlist.' }
+    }
+    return 10000
+}
+function ConvertTo-TBS5530WindowsArgument([string]$Value) {
+    $escaped = [regex]::Replace($Value, '(\\*)"', '$1$1\"')
+    $escaped = [regex]::Replace($escaped, '(\\+)$', '$1$1')
+    return '"' + $escaped + '"'
+}
+function Invoke-PinnedAdb([string[]]$DeviceArguments, [string]$InputText = '', [bool]$PreserveOutput = $false,
+    [ValidatePattern('^[A-Z][A-Z0-9_]{0,63}$')][string]$Operation = 'UNCLASSIFIED', [object]$DrainedReport = $null) {
+    $sessionId = if ($null -eq $DrainedReport) { '' } else { $challenge.session }
+    $timeoutMillis = Get-TBS5530AdbDeadline $Operation $DeviceArguments $DrainedReport $sessionId
+    if ($null -ne $DrainedReport -and $InputText) { throw 'FAIL-STOP: export read-only không nhận payload.' }
     $psi = [Diagnostics.ProcessStartInfo]::new()
     $psi.FileName = $AdbPath; $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
     $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
@@ -53,16 +122,20 @@ function Invoke-PinnedAdb([string[]]$DeviceArguments, [string]$InputText = '', [
     if ($psi.PSObject.Properties.Name -contains 'ArgumentList') {
         foreach ($argument in $arguments) { $psi.ArgumentList.Add($argument) }
     } else {
-        foreach ($argument in $arguments) { if ($argument.Contains('"')) { throw 'Unsupported quoted ADB argument.' } }
-        $psi.Arguments = ($arguments | ForEach-Object { '"' + $_ + '"' }) -join ' '
+        $psi.Arguments = ($arguments | ForEach-Object { ConvertTo-TBS5530WindowsArgument $_ }) -join ' '
     }
     $process = [Diagnostics.Process]::new(); $process.StartInfo = $psi
     try {
-        if (-not $process.Start()) { throw 'ADB start failed.' }
+        try { if (-not $process.Start()) { throw 'Start returned false' } }
+        catch { throw (Get-TBS5530AdbFailure 'START_FAILED' $script:adbStage $Operation $timeoutMillis) }
         $output = $process.StandardOutput.ReadToEndAsync(); $errorText = $process.StandardError.ReadToEndAsync()
         if ($InputText) { $process.StandardInput.Write($InputText) }; $process.StandardInput.Close()
-        if (-not $process.WaitForExit(1500)) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue; throw 'FAIL-STOP: ADB timeout, không reconnect/fallback.' }
-        if ($process.ExitCode -ne 0) { throw 'FAIL-STOP: ADB không hoàn tất trên serial đã pin.' }
+        $exited = if ($timeoutMillis -eq 1500) { $process.WaitForExit(1500) } else { $process.WaitForExit(10000) }
+        if (-not $exited) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            throw (Get-TBS5530AdbFailure 'TIMEOUT' $script:adbStage $Operation $timeoutMillis)
+        }
+        if ($process.ExitCode -ne 0) { throw (Get-TBS5530AdbFailure 'NONZERO_EXIT' $script:adbStage $Operation $timeoutMillis) }
         $text = $output.GetAwaiter().GetResult()
         if ($PreserveOutput) { return $text }
         return $text.Trim()
@@ -81,16 +154,42 @@ function Get-TBS5530AutonomousExitCode([object]$Report) {
         $Report.state -ceq 'REPORT' -and $Report.structure_confirmed -eq $true -and $Report.ts_smoke_pass -eq $true) { return 0 }
     return 1
 }
+function Test-TBS5530LaunchChallenge([object]$Value, [string]$Launch, [bool]$ControlOnly, [long]$Now) {
+    if ($null -eq $Value -or $Launch -cnotmatch '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$' -or
+        $Launch -ceq '00000000-0000-0000-0000-000000000000') { return $false }
+    foreach ($field in @('launch_token','control_plane_only','live_ready','created_elapsed_ms','policy')) {
+        if ($null -eq $Value.PSObject.Properties[$field]) { return $false }
+    }
+    return $Value.policy -ceq 'TBS5530-AUTONOMOUS/v1' -and $Value.launch_token -ceq $Launch -and
+        $Value.control_plane_only -is [bool] -and $Value.control_plane_only -eq $ControlOnly -and
+        $Value.live_ready -is [bool] -and $Value.live_ready -eq (-not $ControlOnly) -and
+        ($Value.created_elapsed_ms -is [long] -or $Value.created_elapsed_ms -is [int]) -and
+        $Now -ge $Value.created_elapsed_ms -and $Now - $Value.created_elapsed_ms -lt 10000
+}
+function Get-TBS5530ControlPlaneExitCode([object]$Report, [string]$Launch) {
+    if (-not (Test-TBS5530DrainedTerminal $Report)) { return 1 }
+    foreach ($field in @('launch_token','control_plane_only','grant_accepted','cleanup_path','interface_selection','control_mirror_records','ts_bytes','ts_smoke_pass')) {
+        if ($null -eq $Report.PSObject.Properties[$field]) { return 1 }
+    }
+    if ($Report.launch_token -ceq $Launch -and $Report.result -ceq 'CONTROL_PLANE_COMPLETE' -and
+        $Report.control_plane_only -is [bool] -and $Report.control_plane_only -ceq $true -and
+        $Report.grant_accepted -is [bool] -and $Report.grant_accepted -ceq $true -and
+        $Report.cleanup_path -ceq 'NO_RESOURCES_ACQUIRED' -and $null -eq $Report.interface_selection -and
+        ($Report.control_mirror_records -is [int] -or $Report.control_mirror_records -is [long]) -and $Report.control_mirror_records -eq 0 -and
+        ($Report.ts_bytes -is [int] -or $Report.ts_bytes -is [long]) -and $Report.ts_bytes -eq 0 -and
+        $Report.ts_smoke_pass -is [bool] -and $Report.ts_smoke_pass -ceq $false) { return 0 }
+    return 1
+}
 function Assert-Identity {
-    if ((Invoke-PinnedAdb @('get-state')) -cne 'device' -or
-        (Invoke-PinnedAdb @('shell', 'getprop', 'ro.product.model')) -cne $ExpectedModel -or
-        [int](Invoke-PinnedAdb @('shell', 'getprop', 'ro.build.version.sdk')) -ne $ExpectedApi -or
-        [int](Invoke-PinnedAdb @('shell', 'settings', 'get', 'global', 'boot_count')) -ne $ExpectedBootCount) {
+    if ((Invoke-PinnedAdb @('get-state') -Operation DEVICE_STATE) -cne 'device' -or
+        (Invoke-PinnedAdb @('shell', 'getprop', 'ro.product.model') -Operation MODEL_READ) -cne $ExpectedModel -or
+        [int](Invoke-PinnedAdb @('shell', 'getprop', 'ro.build.version.sdk') -Operation API_READ) -ne $ExpectedApi -or
+        [int](Invoke-PinnedAdb @('shell', 'settings', 'get', 'global', 'boot_count') -Operation BOOT_READ) -ne $ExpectedBootCount) {
         throw 'FAIL-STOP: serial/model/API/boot thay đổi; không cấp lại quyền.'
     }
 }
 function Get-Elapsed {
-    $text = Invoke-PinnedAdb @('shell', 'cat', '/proc/uptime')
+    $text = Invoke-PinnedAdb @('shell', 'cat', '/proc/uptime') -Operation UPTIME_READ
     $seconds = [double]::Parse(($text -split ' ')[0], [Globalization.CultureInfo]::InvariantCulture)
     return [long][Math]::Floor($seconds * 1000)
 }
@@ -98,14 +197,98 @@ function Write-PrivateJson([string]$Path, [object]$Value) {
     if ($Path -notmatch '^files/autonomous-v1-[a-f0-9-]{36}/(?:grant|heartbeat|permission-ui)\.json$') { throw 'Invalid private session path.' }
     # .hosttmp must not collide with Android AtomicFile .new/.bak recovery names.
     $command = 'cat > ' + $Path + '.hosttmp && mv ' + $Path + '.hosttmp ' + $Path
-    Invoke-PinnedAdb @('shell', 'run-as', $package, 'sh', '-c', "'$command'") ($Value | ConvertTo-Json -Compress -Depth 8) | Out-Null
+    Invoke-PinnedAdb @('shell', 'run-as', $package, 'sh', '-c', "'$command'") ($Value | ConvertTo-Json -Compress -Depth 8) -Operation PRIVATE_JSON_WRITE | Out-Null
 }
-function Exchange-Heartbeat([long]$Now) {
-    $command = 'cat > ' + $heartbeatPath + '.hosttmp && mv ' + $heartbeatPath + '.hosttmp ' + $heartbeatPath +
-        '; printf "{\"report\":"; if [ -f ' + $directory + '/report.json ]; then cat ' + $directory + '/report.json; else printf null; fi' +
-        '; printf ",\"permission\":"; if [ -f ' + $directory + '/permission.json ]; then cat ' + $directory + '/permission.json; else printf null; fi; printf "}"'
-    $beat = @{ session = $challenge.session; elapsed_ms = $Now; stop = $false } | ConvertTo-Json -Compress
-    return (Invoke-PinnedAdb @('shell','run-as',$package,'sh','-c',"'$command'") $beat | ConvertFrom-Json)
+function New-TBS5530HeartbeatCommand([string]$Session, [long]$Created, [long]$Expires, [switch]$Stop, [switch]$PublishGrant) {
+    if ($Stop -and $PublishGrant) { throw 'FAIL-STOP: không publish grant trong STOP.' }
+    if ($Session -cnotmatch '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$' -or
+        $Created -lt 0 -or $Created -gt [long]::MaxValue - 300000 -or $Expires -le $Created -or $Expires -gt $Created + 300000) {
+        throw 'FAIL-STOP: heartbeat scope/deadline không hợp lệ.'
+    }
+    # The adb shell UID reads the clock; run-as only publishes app-private files in the same call.
+    $template = @'
+set -eu
+[ "$#" -eq 1 ] || exit 64
+uptime=$1
+seconds=${uptime%%.*}
+fraction=${uptime#*.}
+case $seconds in ""|*[!0-9]*|0[0-9]*) exit 64;; esac
+case $fraction in ""|*[!0-9]*) exit 64;; esac
+[ "$seconds.$fraction" = "$uptime" ] || exit 64
+[ "${#seconds}" -le 10 ] || exit 64
+fraction=${fraction}000
+fraction=${fraction%"${fraction#???}"}
+now=${seconds}${fraction}
+while [ "${now#0}" != "$now" ]; do now=${now#0}; done
+[ -n "$now" ] || now=0
+# Compare decimal strings without relying on Android shell integer width.
+ge() {
+    a=$1 b=$2
+    [ "${#a}" -ge "${#b}" ] || return 1
+    [ "${#a}" -eq "${#b}" ] || return 0
+    while [ -n "$a" ]; do
+        ac=${a%"${a#?}"} bc=${b%"${b#?}"}
+        [ "$ac" -ge "$bc" ] || return 1
+        [ "$ac" -eq "$bc" ] || return 0
+        a=${a#?} b=${b#?}
+    done
+    return 0
+}
+ge "$now" @CREATED@ || exit 65
+expired=false
+if ge "$now" @EXPIRES@; then expired=true; fi
+if [ "@STOP@" = true ] || [ "$expired" = false ]; then
+    if [ "@GRANT@" = true ]; then
+        [ ! -e files/autonomous-v1-@SESSION@/grant.json ] || exit 66
+        (set -C; cat > files/autonomous-v1-@SESSION@/grant.json.hosttmp) || exit 66
+    fi
+    printf "{\"session\":\"@SESSION@\",\"elapsed_ms\":%s,\"stop\":@STOP@}" "$now" > files/autonomous-v1-@SESSION@/heartbeat.json.hosttmp
+    mv files/autonomous-v1-@SESSION@/heartbeat.json.hosttmp files/autonomous-v1-@SESSION@/heartbeat.json
+    if [ "@GRANT@" = true ]; then mv files/autonomous-v1-@SESSION@/grant.json.hosttmp files/autonomous-v1-@SESSION@/grant.json; fi
+fi
+printf "{\"elapsed_ms\":%s,\"expired\":%s,\"report\":" "$now" "$expired"
+if [ -f files/autonomous-v1-@SESSION@/report.json ]; then cat files/autonomous-v1-@SESSION@/report.json; else printf null; fi
+printf ",\"permission\":"
+if [ -f files/autonomous-v1-@SESSION@/permission.json ]; then cat files/autonomous-v1-@SESSION@/permission.json; else printf null; fi
+printf ",\"control_plane\":"
+if [ -f files/autonomous-v1-@SESSION@/control-plane.json ]; then cat files/autonomous-v1-@SESSION@/control-plane.json; else printf null; fi
+printf "}"
+'@
+    $inner = $template.Replace('@SESSION@', $Session).Replace('@CREATED@', $Created.ToString([Globalization.CultureInfo]::InvariantCulture)).
+        Replace('@EXPIRES@', $Expires.ToString([Globalization.CultureInfo]::InvariantCulture)).Replace('@STOP@', $Stop.IsPresent.ToString().ToLowerInvariant()).
+        Replace('@GRANT@', $PublishGrant.IsPresent.ToString().ToLowerInvariant()).Replace("`r`n", "`n")
+    $quote = [string][char]39
+    $splice = $quote + [char]34 + $quote + [char]34 + $quote
+    $quotedInner = $quote + $inner.Replace($quote, $splice) + $quote
+    $outer = @'
+set -eu
+IFS=" " read -r uptime idle < /proc/uptime
+exec run-as info.martinmarinov.dvbdriver sh -c @INNER@ heartbeat "$uptime"
+'@
+    return $outer.Replace('@INNER@', $quotedInner).Replace("`r`n", "`n")
+}
+function Read-TBS5530HeartbeatReply([string]$Text, [long]$RoundTripMillis, [long]$Created, [long]$Expires,
+    [ValidatePattern('^[A-Z][A-Z0-9_]{0,63}$')][string]$Stage = 'HEARTBEAT') {
+    if ($RoundTripMillis -lt 0 -or $RoundTripMillis -ge 1500) {
+        throw "FAIL-STOP: heartbeat reply vượt call budget 1500ms; stage=$Stage; elapsed_ms=$RoundTripMillis."
+    }
+    try { $reply = $Text | ConvertFrom-Json } catch { throw 'FAIL-STOP: heartbeat reply JSON không hợp lệ.' }
+    foreach ($field in @('elapsed_ms','expired','report','permission')) {
+        if ($null -eq $reply -or $null -eq $reply.PSObject.Properties[$field]) { throw 'FAIL-STOP: heartbeat reply thiếu trường bắt buộc.' }
+    }
+    if (($reply.elapsed_ms -isnot [long] -and $reply.elapsed_ms -isnot [int]) -or $reply.elapsed_ms -lt $Created -or
+        $reply.expired -isnot [bool] -or $reply.expired -ne ($reply.elapsed_ms -ge $Expires)) {
+        throw 'FAIL-STOP: heartbeat reply clock/expiry không hợp lệ.'
+    }
+    return $reply
+}
+function Exchange-Heartbeat([switch]$Stop, [object]$Grant = $null) {
+    $command = New-TBS5530HeartbeatCommand $challenge.session ([long]$challenge.created_elapsed_ms) $expiry -Stop:$Stop -PublishGrant:($null -ne $Grant)
+    $grantText = if ($null -eq $Grant) { '' } else { $Grant | ConvertTo-Json -Compress -Depth 8 }
+    if ($grantText.Length -gt 16384) { throw 'FAIL-STOP: grant vượt giới hạn.' }
+    $call = [Diagnostics.Stopwatch]::StartNew()
+    $text = Invoke-PinnedAdb @('shell', $command) $grantText -Operation HEARTBEAT_EXCHANGE
+    return Read-TBS5530HeartbeatReply $text $call.ElapsedMilliseconds ([long]$challenge.created_elapsed_ms) $expiry -Stage $script:adbStage
 }
 function Update-UsbPermission([object]$pending, [long]$now) {
     if (-not $AutoUsbPermission) { return }
@@ -131,15 +314,16 @@ function Update-UsbPermission([object]$pending, [long]$now) {
             $layoutPath = Join-Path $OutputDirectory ('permission-' + $uiRequest.request_token + '.json')
             if (-not (Test-Path -LiteralPath $layoutPath) -or (Get-Item $layoutPath).Length -gt 1048576) { throw 'USER_ACTION_REQUIRED: hierarchy thiếu hoặc vượt giới hạn.' }
             $windows = Get-Content -LiteralPath $layoutPath -Raw -Encoding utf8 | ConvertFrom-Json
-            $foreground = Invoke-PinnedAdb @('shell', 'dumpsys', 'activity', 'activities')
+            $foreground = Invoke-PinnedAdb @('shell', 'dumpsys', 'activity', 'activities') -Operation UI_FOREGROUND_READ
             $resumed = ($foreground -split "`n" | Where-Object { $_ -match 'mResumedActivity:' }) -join "`n"
             $selector = Get-TBS5530UsbPermissionButton $windows $resumed
-            if (-not $selector -or -not (Test-TBS5530SingleUsbInventory (Invoke-PinnedAdb @('shell', 'dumpsys', 'usb')))) {
+            if (-not $selector -or -not (Test-TBS5530SingleUsbInventory (Invoke-PinnedAdb @('shell', 'dumpsys', 'usb') -Operation USB_INVENTORY_READ))) {
                 $uiHandled.Add($uiRequest.request_token) | Out-Null
                 Write-Warning 'USER_ACTION_REQUIRED: hierarchy không xác nhận đúng USB permission/TBS5530; không bấm tự động hoặc chọn Always. Giữ heartbeat trong TTL để xử lý UI đã xác minh.'
                 return
             }
-            Write-PrivateJson $heartbeatPath @{ session = $challenge.session; elapsed_ms = (Get-Elapsed); stop = $false }
+            $uiBeat = Exchange-Heartbeat
+            if ($uiBeat.expired) { throw 'FAIL-STOP: session đã hết hạn trước thao tác UI.' }
             $script:uiPhase = 'TAP'
             $script:uiJob = Start-TBS5530PermissionProcess $AndroidCliPath @('--sdk=D:\Android\Sdk', 'input', "--device=$Serial", 'tap', '--match=single', '--wait=0', $selector)
         } finally { $job.Process.Dispose() }
@@ -160,13 +344,14 @@ if ($FirmwarePath) {
     }
 }
 if ($AutoUsbPermission) {
+    $script:adbStage = 'PERMISSION_PREFLIGHT'
     $preflightToken = [guid]::NewGuid().ToString()
-    Invoke-PinnedAdb @('shell', 'am', 'start', '-n', "$package/.Tbs5530PermissionPreflightActivity", '--es', 'preflight_token', $preflightToken) | Out-Null
+    Invoke-PinnedAdb @('shell', 'am', 'start', '--activity-clear-top', '--activity-single-top', '-n', "$package/.Tbs5530PermissionPreflightActivity", '--es', 'preflight_token', $preflightToken) -Operation PREFLIGHT_LAUNCH | Out-Null
     $preflightWatch = [Diagnostics.Stopwatch]::StartNew()
     $permissionReady = $false; $preflightUiTried = $false
     while ($preflightWatch.Elapsed.TotalSeconds -lt 60) {
         $command = 'if [ -f files/permission-preflight.json ]; then cat files/permission-preflight.json; fi'
-        $text = Invoke-PinnedAdb @('shell', 'run-as', $package, 'sh', '-c', "'$command'")
+        $text = Invoke-PinnedAdb @('shell', 'run-as', $package, 'sh', '-c', "'$command'") -Operation PREFLIGHT_STATUS_READ
         if ($text) {
             $preflight = $text | ConvertFrom-Json
             if ($preflight.preflight_token -ceq $preflightToken -and $preflight.mode -ceq 'PERMISSION_ONLY') {
@@ -180,10 +365,10 @@ if ($AutoUsbPermission) {
                     try {
                         if ($job.Process.WaitForExit(10000) -and $job.Process.ExitCode -eq 0 -and (Test-Path -LiteralPath $layoutPath)) {
                             $windows = Get-Content -LiteralPath $layoutPath -Raw -Encoding utf8 | ConvertFrom-Json
-                            $foreground = Invoke-PinnedAdb @('shell','dumpsys','activity','activities')
+                            $foreground = Invoke-PinnedAdb @('shell','dumpsys','activity','activities') -Operation UI_FOREGROUND_READ
                             $resumed = ($foreground -split "`n" | Where-Object { $_ -match 'mResumedActivity:' }) -join "`n"
                             $selector = Get-TBS5530UsbPermissionButton $windows $resumed
-                            if ($selector -and (Test-TBS5530SingleUsbInventory (Invoke-PinnedAdb @('shell','dumpsys','usb')))) {
+                            if ($selector -and (Test-TBS5530SingleUsbInventory (Invoke-PinnedAdb @('shell','dumpsys','usb') -Operation USB_INVENTORY_READ))) {
                                 $tap = Start-TBS5530PermissionProcess $AndroidCliPath @('--sdk=D:\Android\Sdk','input',"--device=$Serial",'tap','--match=single','--wait=0',$selector)
                                 try { if (-not $tap.Process.WaitForExit(10000) -or $tap.Process.ExitCode -ne 0) { throw 'USER_ACTION_REQUIRED: không xác nhận được thao tác UI.' } }
                                 finally { Stop-TBS5530PermissionProcess $tap }
@@ -199,39 +384,62 @@ if ($AutoUsbPermission) {
     Assert-Identity
 }
 $watch.Restart()
-$launch = @('shell', 'am', 'start', '-n', "$package/.Tbs5530AutonomousDiagnosticActivity", '--es', 'read_api', $ReadApi)
+$script:adbStage = 'SESSION_LAUNCH'
+$launchToken = [guid]::NewGuid().ToString()
+$launch = @('shell', 'am', 'start', '--activity-clear-top', '--activity-single-top', '-n', "$package/.Tbs5530AutonomousDiagnosticActivity", '--es', 'read_api', $ReadApi,
+    '--es', 'launch_token', $launchToken, '--ez', 'control_plane_only', ([bool]$ControlPlaneOnly).ToString().ToLowerInvariant())
 if ($ControlMirror) { $launch += @('--ez', 'control_mirror', 'true') }
-Invoke-PinnedAdb $launch | Out-Null
+if ($ExplicitSetInterfaceAlt0) { $launch += @('--ez', 'explicit_set_interface_alt0', 'true') }
+if ($SonyTsOutputReadback) { $launch += @('--ez','sony_ts_output_readback','true') }
+$launchResult = Invoke-PinnedAdb $launch -Operation SESSION_LAUNCH
+$launchEvidence = Join-Path $OutputDirectory ('phase31-launch-' + $launchToken + '.txt')
+if (Test-Path -LiteralPath $launchEvidence) { throw 'Không ghi đè evidence đã có.' }
+$launchResult | Set-Content -LiteralPath $launchEvidence -Encoding utf8
+$script:adbStage = 'SESSION_CHALLENGE'
 $challenge = $null
 while ($watch.Elapsed.TotalSeconds -lt 10) {
     try {
-        $challenge = Invoke-PinnedAdb @('shell', 'run-as', $package, 'cat', 'files/autonomous-v1-challenge.json') | ConvertFrom-Json
+        $challenge = Invoke-PinnedAdb @('shell', 'run-as', $package, 'cat', 'files/autonomous-v1-challenge.json') -Operation CHALLENGE_READ | ConvertFrom-Json
         $now = Get-Elapsed
-        if ($challenge.policy -ceq 'TBS5530-AUTONOMOUS/v1' -and $now -ge $challenge.created_elapsed_ms -and $now - $challenge.created_elapsed_ms -lt 10000) { break }
+        if (Test-TBS5530LaunchChallenge $challenge $launchToken ([bool]$ControlPlaneOnly) $now) { break }
         $challenge = $null
-    } catch { $challenge = $null }
+    } catch {
+        if ($_.Exception.Message.StartsWith('FAIL-STOP: ADB ')) { Write-Warning $_.Exception.Message }
+        $challenge = $null
+    }
     Start-Sleep -Milliseconds 200
 }
-if ($null -eq $challenge -or -not $challenge.live_ready -or $challenge.session -notmatch '^[a-f0-9-]{36}$' -or
+if (-not (Test-TBS5530LaunchChallenge $challenge $launchToken ([bool]$ControlPlaneOnly) (Get-Elapsed)) -or $challenge.session -notmatch '^[a-f0-9-]{36}$' -or
     $challenge.model -cne $ExpectedModel -or $challenge.api -ne $ExpectedApi -or $challenge.boot_count -ne $ExpectedBootCount -or
     $challenge.host_profile -cne $expectedHostProfile -or
     $challenge.vid -ne 29516 -or $challenge.pid -ne 21808 -or $challenge.firmware_sha256 -cne $firmwareSha -or
     $challenge.firmware_protocol -cne 'TBS_SOURCE_DUAL_RESET' -or $challenge.ts_variant -cne $ReadApi -or
     $challenge.control_mirror -ne [bool]$ControlMirror -or
+    $challenge.explicit_set_interface_alt0 -isnot [bool] -or $challenge.explicit_set_interface_alt0 -ne [bool]$ExplicitSetInterfaceAlt0 -or
+    $challenge.sony_ts_output_readback -isnot [bool] -or $challenge.sony_ts_output_readback -ne [bool]$SonyTsOutputReadback -or
     $challenge.retry -ne 0 -or $challenge.max_upload_per_attachment -ne 1) { throw 'BLOCKED: challenge mới không khớp allowlist.' }
+if ($SonyTsOutputReadback) {
+    $layout = 'chip=0197|SLVT=64|entryBank=20|sync=20:10:1|select=00|reads=C4:1,C6:1,80:1,81:1,95:1,A9:1,33:1' +
+        '|restore=20|sync=20:10:1|timeoutMs=2000|maxMs=5000|NO_CONFIG_WRITE|NO_URB_PENDING|retry=0' +
+        '|bankProvenance=PLAN_INFERRED|snapshot=NONATOMIC|read81=SOURCE_SERIAL_RMW_NOT_PARALLEL_PROOF' +
+        '|source=TBS:2ce787de9f6e81b4294692a45de15596ae2e1322,CoreELEC:072f8e99e0ac66d88d7278784e922e08e8253210,Community:c5fa27eecbe80633cbb365cc44656daea1c0e2e3'
+    if ($challenge.sony_readback_layout -cne $layout) { throw 'BLOCKED: Sony readback layout không khớp source/allowlist đã duyệt.' }
+}
 $directory = 'files/autonomous-v1-' + $challenge.session
 if ($FirmwarePath) {
     # push only to app-private scratch through run-as; never bundle firmware or touch legacy stores.
     $encoded = [Convert]::ToBase64String([IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $FirmwarePath)))
     $command = 'base64 -d > ' + $directory + '/firmware.bin'
-    Invoke-PinnedAdb @('shell', 'run-as', $package, 'sh', '-c', "'$command'") $encoded | Out-Null
+    $script:adbStage = 'FIRMWARE_STAGING'
+    Invoke-PinnedAdb @('shell', 'run-as', $package, 'sh', '-c', "'$command'") $encoded -Operation FIRMWARE_PRIVATE_STAGE | Out-Null
 }
+$script:adbStage = 'PRE_GRANT_IDENTITY'
 Assert-Identity
 $now = Get-Elapsed
 $expiry = [Math]::Min([long]$challenge.created_elapsed_ms + 300000, $now + $DurationSeconds * 1000L)
 $grant = @{}
 $challenge.PSObject.Properties | ForEach-Object { $grant[$_.Name] = $_.Value }
-$grant.profile = $Profile; $grant.bounded_user_authorization = $true; $grant.rf_in_confirmed = $true
+$grant.profile = $Profile; $grant.bounded_user_authorization = $true; $grant.rf_in_confirmed = -not $ControlPlaneOnly
 $grant.expires_elapsed_ms = $expiry
 if ($PhysicalRecoveryEpoch) {
     $grant.physical_recovery_epoch = $PhysicalRecoveryEpoch
@@ -241,43 +449,78 @@ $heartbeatPath = $directory + '/heartbeat.json'
 $granted = $false
 $exitCode = 1
 $terminalReport = $null
+$controlReadyBeats = 0
+$controlStopSent = $false
 try {
-    Write-PrivateJson $heartbeatPath @{ session = $challenge.session; elapsed_ms = $now; stop = $false }
-    Write-PrivateJson ($directory + '/grant.json') $grant; $granted = $true
+    $script:adbStage = 'SESSION_GRANT'
+    $initialBeat = Exchange-Heartbeat -Grant $grant
+    if ($initialBeat.expired) { throw 'FAIL-STOP: session hết hạn trước grant.' }
+    $granted = $true
+    $script:adbStage = 'SESSION_RUNNING'
     while ($watch.Elapsed.TotalSeconds -lt $DurationSeconds) {
-        $now = Get-Elapsed
-        if ($now -ge $expiry) { break }
-        $exchange = Exchange-Heartbeat $now
-        Update-UsbPermission $exchange.permission $now
+        $exchange = if ($controlStopSent) { Exchange-Heartbeat -Stop } else { Exchange-Heartbeat }
         if ($null -ne $exchange.report) {
             $parsed = $exchange.report
-            if ($parsed.cleanup -ceq 'DRAIN_CONFIRMED' -or $parsed.result -ceq 'CLEANUP_UNCERTAIN_NO_FORCE_CLOSE') {
+            if ((Test-TBS5530DrainedTerminal $parsed) -or $parsed.result -ceq 'CLEANUP_UNCERTAIN_NO_FORCE_CLOSE') {
                 $terminalReport = $parsed
-                $exitCode = Get-TBS5530AutonomousExitCode $parsed
+                $exitCode = if ($ControlPlaneOnly) { Get-TBS5530ControlPlaneExitCode $parsed $launchToken } else { Get-TBS5530AutonomousExitCode $parsed }
                 $parsed | ConvertTo-Json -Depth 12 -Compress
                 break
             }
         }
+        if ($exchange.expired) { break }
+        if ($ControlPlaneOnly -and -not $controlStopSent -and $null -ne $exchange.PSObject.Properties['control_plane'] -and $null -ne $exchange.control_plane) {
+            $ready = $exchange.control_plane
+            if ($ready.session -cne $challenge.session -or $ready.launch_token -cne $launchToken -or
+                $ready.ready -cne $true -or $ready.device_io_forbidden -cne $true) { throw 'FAIL-STOP: control-plane receipt không khớp phiên.' }
+            $controlReadyBeats++
+            if ($controlReadyBeats -ge 3) { Exchange-Heartbeat -Stop | Out-Null; $controlStopSent = $true }
+        }
+        Update-UsbPermission $exchange.permission $exchange.elapsed_ms
         Start-Sleep -Milliseconds 100
     }
 } finally {
     Stop-TBS5530PermissionProcess $uiJob
     if ($granted) {
-        try { Write-PrivateJson $heartbeatPath @{ session = $challenge.session; elapsed_ms = (Get-Elapsed); stop = $true } }
-        catch { Write-Warning 'Host không còn liên lạc; Android phải fail-stop sau heartbeat 2 giây. Không reconnect.' }
+        $script:adbStage = 'SESSION_STOP'
+        try { Exchange-Heartbeat -Stop | Out-Null }
+        catch {
+            if ($_.Exception.Message.StartsWith('FAIL-STOP: ADB ')) { Write-Warning $_.Exception.Message }
+            Write-Warning 'Host không còn liên lạc; Android phải fail-stop sau heartbeat 2 giây. Không reconnect.'
+        }
     }
 }
 if ($null -eq $terminalReport) { throw 'FAIL-STOP: deadline hoặc kết thúc không có terminal report đã xác minh.' }
-if ($ControlMirror -and $terminalReport.cleanup -ceq 'DRAIN_CONFIRMED') {
+if ($terminalReport.launch_token -cne $launchToken -or $terminalReport.control_plane_only -isnot [bool] -or
+    $terminalReport.control_plane_only -ne [bool]$ControlPlaneOnly) { throw 'FAIL-STOP: terminal report không khớp launch hiện hành.' }
+if ($ControlPlaneOnly) {
+    $evidence = Join-Path $OutputDirectory ('phase31-control-plane-' + $challenge.session + '.json')
+    if (Test-Path -LiteralPath $evidence) { throw 'Không ghi đè evidence đã có.' }
+    $terminalReport | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $evidence -Encoding utf8
+}
+if ($SonyTsOutputReadback) {
+    if ($terminalReport.sony_ts_output_readback.enabled -cne $true) { throw 'FAIL-STOP: report Sony readback không khớp grant.' }
+    $evidence = Join-Path $OutputDirectory ('phase31-sony-output-' + $challenge.session + '.json')
+    if (Test-Path -LiteralPath $evidence) { throw 'Không ghi đè evidence đã có.' }
+    $terminalReport | ConvertTo-Json -Depth 16 | Set-Content -LiteralPath $evidence -Encoding utf8
+}
+if ($ExplicitSetInterfaceAlt0) {
+    if ($terminalReport.explicit_set_interface_alt0 -cne $true) { throw 'FAIL-STOP: report không khớp option alt0.' }
+    $evidence = Join-Path $OutputDirectory ('phase31-interface-' + $challenge.session + '.json')
+    if (Test-Path -LiteralPath $evidence) { throw 'Không ghi đè evidence đã có.' }
+    $terminalReport | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $evidence -Encoding utf8
+}
+if ($ControlMirror -and (Test-TBS5530DrainedTerminal $terminalReport)) {
+    $script:adbStage = 'EVIDENCE_EXPORT'
     if ($terminalReport.control_mirror -cne 'SYNCED_CLOSED') { throw 'FAIL-STOP: EP0 transcript chưa được ghi bền.' }
     $local = Join-Path $OutputDirectory ('phase31-control-' + $challenge.session)
     if (Test-Path -LiteralPath $local) { throw 'Không ghi đè evidence đã có.' }
     New-Item -ItemType Directory -Path $local | Out-Null
     $remote = $directory + '/control-ep0.jsonl'
-    $text = Invoke-PinnedAdb @('exec-out', 'run-as', $package, 'cat', $remote) '' $true
+    $text = Invoke-PinnedAdb @('exec-out', 'run-as', $package, 'cat', $remote) '' $true -Operation CONTROL_TRACE_READ -DrainedReport $terminalReport
     $trace = Join-Path $local 'control-ep0.jsonl'
     [IO.File]::WriteAllText($trace, $text, [Text.UTF8Encoding]::new($false))
-    $sourceHash = Get-TBS5530Sha256Token (Invoke-PinnedAdb @('shell', 'run-as', $package, 'sha256sum', $remote))
+    $sourceHash = Get-TBS5530Sha256Token (Invoke-PinnedAdb @('shell', 'run-as', $package, 'sha256sum', $remote) -Operation CONTROL_TRACE_HASH -DrainedReport $terminalReport)
     $hash = (Get-FileHash -LiteralPath $trace -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($sourceHash -cne $hash) { throw 'FAIL-STOP: hash Android/host EP0 transcript không khớp.' }
     @{ run_id=$challenge.session; layer='ANDROID_APP_OBSERVED'; sha256=$hash; bytes=(Get-Item -LiteralPath $trace).Length;

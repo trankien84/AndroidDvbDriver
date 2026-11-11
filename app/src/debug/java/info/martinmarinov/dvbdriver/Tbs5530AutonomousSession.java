@@ -22,7 +22,13 @@ final class Tbs5530AutonomousSession {
     final Tbs5530AutonomousPolicy policy;
     final Tbs5530AutonomousPlans golden;
     final Tbs5530TsSmoke.ReadApi readApi;
-    final boolean controlMirrorEnabled;
+    final boolean controlMirrorEnabled, explicitSetInterfaceAlt0, controlPlaneOnly, sonyTsOutputReadback;
+    final String launchToken;
+    final java.util.Map<Tbs5530SonyTsOutputReadback.Stage,Tbs5530SonyTsOutputReadback.Snapshot> sonySnapshots = new java.util.EnumMap<>(Tbs5530SonyTsOutputReadback.Stage.class);
+    private boolean sonyAuthorizationIssued;
+    private int sonyStages;
+    volatile boolean terminal;
+    volatile String cleanupPath = "NOT_CERTIFIED";
     volatile Tbs5530ControlMirror controlMirror;
     private final JSONObject challenge = new JSONObject();
     private final File root;
@@ -50,15 +56,45 @@ final class Tbs5530AutonomousSession {
         this(context, requestedApi, false);
     }
     Tbs5530AutonomousSession(Context context, String requestedApi, boolean mirror) throws IOException {
+        this(context, requestedApi, mirror, false);
+    }
+    Tbs5530AutonomousSession(Context context, String requestedApi, boolean mirror, boolean explicitAlt0) throws IOException {
+        this(context, requestedApi, mirror, explicitAlt0, null, false);
+    }
+    Tbs5530AutonomousSession(Context context, String requestedApi, boolean mirror, boolean explicitAlt0,
+                            String launchToken, boolean controlOnly) throws IOException {
+        this(context,requestedApi,mirror,explicitAlt0,launchToken,controlOnly,false);
+    }
+    Tbs5530AutonomousSession(Context context, String requestedApi, boolean mirror, boolean explicitAlt0,
+                            String launchToken, boolean controlOnly, boolean sonyReadback) throws IOException {
         this(context, requestedApi, Build.MODEL, Build.VERSION.SDK_INT,
-                Settings.Global.getInt(context.getContentResolver(), "boot_count", -1), mirror);
+                Settings.Global.getInt(context.getContentResolver(), "boot_count", -1), mirror, explicitAlt0, launchToken, controlOnly, sonyReadback);
     }
     Tbs5530AutonomousSession(Context context, String requestedApi, String model, int api, int boot) throws IOException {
         this(context, requestedApi, model, api, boot, false);
     }
     Tbs5530AutonomousSession(Context context, String requestedApi, String model, int api, int boot, boolean mirror) throws IOException {
-        controlMirrorEnabled = mirror;
+        this(context, requestedApi, model, api, boot, mirror, false);
+    }
+    Tbs5530AutonomousSession(Context context, String requestedApi, String model, int api, int boot, boolean mirror, boolean explicitAlt0) throws IOException {
+        this(context, requestedApi, model, api, boot, mirror, explicitAlt0, null, false);
+    }
+    Tbs5530AutonomousSession(Context context, String requestedApi, String model, int api, int boot, boolean mirror,
+                            boolean explicitAlt0, String launch, boolean controlOnly) throws IOException {
+        this(context,requestedApi,model,api,boot,mirror,explicitAlt0,launch,controlOnly,false);
+    }
+    Tbs5530AutonomousSession(Context context, String requestedApi, String model, int api, int boot, boolean mirror,
+                            boolean explicitAlt0, String launch, boolean controlOnly, boolean sonyReadback) throws IOException {
+        sonyTsOutputReadback=sonyReadback;
+        if (sonyReadback && (controlOnly || explicitAlt0 || !mirror || !"NATIVE_USBFS_URB_8X4096".equals(requestedApi)))
+            throw new IOException("Sony readback requires native4096/mirror and forbids other endpoint experiments");
+        if (launch != null && !Tbs5530AutonomousLaunch.valid(launch)) throw new IOException("Invalid launch correlation");
+        if (controlOnly && (launch == null || mirror)) throw new IOException("Control-plane validation requires a launch correlation and no USB mirror");
+        launchToken = launch; controlPlaneOnly = controlOnly;
+        controlMirrorEnabled = mirror; explicitSetInterfaceAlt0 = explicitAlt0;
         readApi = requestedApi == null ? Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO : Tbs5530TsSmoke.ReadApi.valueOf(requestedApi);
+        if (explicitAlt0 && readApi != Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096)
+            throw new IOException("EXPLICIT_SET_INTERFACE_ALT0 cannot be combined with another receive variant");
         hostProfile = Tbs5530VerifiedHost.profile(model, api);
         historyPrefix = Tbs5530VerifiedHost.historyPrefix(hostProfile);
         contextForLedger = context.getApplicationContext();
@@ -86,8 +122,12 @@ final class Tbs5530AutonomousSession {
                     .put("firmware_sha256", Tbs5530FirmwareValidation.SHA256).put("firmware_protocol", "TBS_SOURCE_DUAL_RESET")
                     .put("created_elapsed_ms", policy.created()).put("max_session_ms", 300000).put("heartbeat_ms", 2000)
                     .put("golden_sha256", Tbs5530AutonomousPlans.hash(Tbs5530AutonomousPlans.dryRun().toString()))
-                    .put("live_ready", true).put("retry", 0).put("max_upload_per_attachment", 1)
-                    .put("ts_variant", readApi.name()).put("control_mirror", controlMirrorEnabled);
+                    .put("live_ready", !controlPlaneOnly).put("retry", 0).put("max_upload_per_attachment", 1)
+                    .put("ts_variant", readApi.name()).put("control_mirror", controlMirrorEnabled)
+                    .put("explicit_set_interface_alt0", explicitSetInterfaceAlt0);
+            if (launchToken != null) challenge.put("launch_token", launchToken).put("control_plane_only", controlPlaneOnly);
+            challenge.put("sony_ts_output_readback",sonyTsOutputReadback);
+            if (sonyTsOutputReadback) challenge.put("sony_readback_layout",Tbs5530SonyTsOutputReadback.layout());
             Tbs5530DurableFile.write(new File(root, PREFIX + "-challenge.json"), challenge.toString().getBytes(StandardCharsets.UTF_8));
         } catch (org.json.JSONException error) { throw new IOException(error); }
     }
@@ -113,17 +153,27 @@ final class Tbs5530AutonomousSession {
                 if (!challenge.get(key).toString().equals(grant.get(key).toString())) throw new IOException("Grant scope mismatch: " + key);
             }
             if (grant.optBoolean("control_mirror", false) != controlMirrorEnabled) throw new IOException("Control mirror scope mismatch");
-            if (!grant.getBoolean("bounded_user_authorization") || !grant.getBoolean("rf_in_confirmed")
+            if (!Boolean.valueOf(explicitSetInterfaceAlt0).equals(grant.opt("explicit_set_interface_alt0")))
+                throw new IOException("EXPLICIT_SET_INTERFACE_ALT0 grant scope mismatch");
+            if (!Boolean.valueOf(sonyTsOutputReadback).equals(grant.opt("sony_ts_output_readback"))
+                    || sonyTsOutputReadback && !Tbs5530SonyTsOutputReadback.layout().equals(grant.opt("sony_readback_layout")))
+                throw new IOException("SONY_TS_OUTPUT_READBACK grant scope mismatch");
+            if (launchToken != null && (!launchToken.equals(grant.opt("launch_token"))
+                    || !Boolean.valueOf(controlPlaneOnly).equals(grant.opt("control_plane_only"))))
+                throw new IOException("Launch correlation or control-plane scope mismatch");
+            if (!grant.getBoolean("bounded_user_authorization") || (!controlPlaneOnly && !grant.getBoolean("rf_in_confirmed"))
                     || grant.getInt("max_upload_per_attachment") != 1 || grant.getInt("retry") != 0)
                 throw new IOException("Missing bounded session authorization");
             recoveryEpoch = grant.optString("physical_recovery_epoch", "");
             recoveryConfirmed = grant.optBoolean("physical_recovery_confirmed", false);
+            if (controlPlaneOnly && (!recoveryEpoch.isEmpty() || recoveryConfirmed || grant.optBoolean("rf_in_confirmed", false)))
+                throw new IOException("Control-plane validation cannot authorize a physical attachment");
             Tbs5530AutonomousAttachmentLedger.requireRecoveryEpoch(recoveryEpoch, recoveryConfirmed);
             expires = grant.getLong("expires_elapsed_ms");
             Tbs5530AutonomousPolicy.Profile profile = Tbs5530AutonomousPolicy.Profile.valueOf(grant.getString("profile"));
-            if (readApi != Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO && profile != Tbs5530AutonomousPolicy.Profile.EXPERIMENTAL_DIAGNOSTIC)
+            if ((sonyTsOutputReadback || readApi != Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO) && profile != Tbs5530AutonomousPolicy.Profile.EXPERIMENTAL_DIAGNOSTIC)
                 throw new IOException("Diagnostic receive requires experimental session profile");
-            policy.grant(profile, expires, heartbeat());
+            policy.grant(profile, expires, heartbeat(), explicitSetInterfaceAlt0);
             if (controlMirrorEnabled) controlMirror = new Tbs5530ControlMirror(directory, id, recoveryEpoch,
                     hostProfile + ":" + BuildConfig.SOURCE_GIT_SHA, SystemClock::elapsedRealtimeNanos);
             grantText = text; accepted = true;
@@ -141,14 +191,28 @@ final class Tbs5530AutonomousSession {
         if (!accepted || !grantText.equals(read(new File(directory, "grant.json"), 16384))) throw new IOException("Grant changed or unavailable");
         policy.heartbeat(heartbeat()); policy.requireSession();
     }
+    void requireDeviceIo() throws IOException {
+        if (controlPlaneOnly) throw new IOException("Control-plane validation forbids device I/O");
+    }
+    boolean accepted() { return accepted; }
+    void controlPlaneReady() throws IOException {
+        require();
+        if (!controlPlaneOnly) throw new IOException("Not a control-plane validation session");
+        try {
+            write("control-plane.json", new JSONObject().put("session", id).put("launch_token", launchToken)
+                    .put("ready", true).put("device_io_forbidden", true).toString());
+        } catch (org.json.JSONException error) { throw new IOException(error); }
+    }
     void owner(String identity, long token, Boundary guard) throws IOException {
-        require(); policy.bindOwner(identity, token); owner = identity; generation = token; boundary = guard;
+        requireDeviceIo(); require(); policy.bindOwner(identity, token); owner = identity; generation = token; boundary = guard;
     }
     Tbs5530OperationalApproval approval(Tbs5530Frontend.Plan plan, Tbs5530TsSmoke.Limits limits) throws IOException {
-        require(); boundary.require();
+        requireDeviceIo(); require(); boundary.require();
         if (plan != null) golden.require(plan); else {
             Tbs5530AutonomousPlans.requireTs(limits);
-            if (limits.readApi != readApi || limits.readApi != Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO && !policy.experimental())
+            if (limits.readApi != readApi || limits.explicitSetInterfaceAlt0 != explicitSetInterfaceAlt0
+                    || limits.sonyTsOutputReadback != sonyTsOutputReadback
+                    || limits.readApi != Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO && !policy.experimental())
                 throw new IOException("Foreign or non-experimental receive variant");
         }
         if (plan != null && plan.generation != generation) throw new IOException("Foreign plan generation");
@@ -165,6 +229,8 @@ final class Tbs5530AutonomousSession {
                             .put("explicit_experimental_auto_plp", true).put("explicit_endpoint_preparation", false)
                             .put("explicit_queued_reception", policy.experimental() && readApi == Tbs5530TsSmoke.ReadApi.QUEUED_USB_REQUEST_8X4096)
                             .put("explicit_native_urb_reception", policy.experimental() && Tbs5530AutonomousPlans.nativeUrb(readApi))
+                            .put("explicit_set_interface_alt0", policy.experimental() && explicitSetInterfaceAlt0)
+                            .put("explicit_sony_ts_output_readback", policy.experimental() && sonyTsOutputReadback)
                             .put("approved_maximum_ms", maximum).put("expires_elapsed_ms", expires)
                             .put("heartbeat_elapsed_ms", heartbeat()).toString();
                 } catch (org.json.JSONException error) { throw new IOException(error); }
@@ -186,7 +252,40 @@ final class Tbs5530AutonomousSession {
                 plan, limits, generation, owner, policy.created());
         value.rfIn(true); return value;
     }
+    Tbs5530SonyTsOutputReadback.Authorization sonyAuthorization() throws IOException {
+        requireDeviceIo(); require(); boundary.require();
+        if (!sonyTsOutputReadback || !policy.experimental() || owner == null || sonyAuthorizationIssued)
+            throw new IOException("One explicit Sony readback authorization required");
+        sonyAuthorizationIssued=true;
+        return new Tbs5530SonyTsOutputReadback.Authorization() {
+            private Tbs5530SonyReadbackApproval active;
+            public void requireCurrent() throws IOException {
+                Tbs5530AutonomousSession.this.require(); boundary.require(); policy.requireOwner(owner,generation,true);
+                if (!sonyTsOutputReadback || !policy.experimental()) throw new IOException("Sony readback authorization revoked");
+            }
+            public void consume(Tbs5530SonyTsOutputReadback.Plan plan) throws IOException {
+                requireCurrent();
+                Tbs5530SonyTsOutputReadback.Stage expected=sonyStages==0?Tbs5530SonyTsOutputReadback.Stage.AFTER_LOCK:Tbs5530SonyTsOutputReadback.Stage.BEFORE_FIRST_URB;
+                if (sonyStages>=2 || plan.stage!=expected || plan.generation!=generation
+                        || !Tbs5530SonyTsOutputReadback.transcript(expected,generation).equals(plan.getApprovalTranscript()))
+                    throw new IOException("Foreign, reordered or exhausted Sony snapshot plan");
+                sonyStages++;
+                active=new Tbs5530SonyReadbackApproval(plan,owner,new Tbs5530SonyReadbackApproval.Port() {
+                    public void requireCurrent() throws IOException { Tbs5530AutonomousSession.this.require(); boundary.require(); policy.requireOwner(owner,generation,true); }
+                    public void consume(String attempt,String hash,long maximum) throws IOException { policy.consume(attempt,hash,maximum); }
+                    public void write(String name,String text) throws IOException { Tbs5530AutonomousSession.this.write(name,text); }
+                    public long now() { return SystemClock.elapsedRealtime(); }
+                });
+                active.consume(plan);
+            }
+            public void audit(String b,int ordinal,int type,int request,int length,int result) throws IOException {
+                requireCurrent(); if(active==null)throw new IOException("No consumed Sony snapshot permit");
+                active.audit(b,ordinal,type,request,length,result);
+            }
+        };
+    }
     void consumeFirmwareAttachment(String attachment) throws IOException {
+        requireDeviceIo();
         synchronized (Tbs5530AutonomousSession.class) {
             require();
             try { policy.requireUploadStartBudget(); }
@@ -218,10 +317,10 @@ final class Tbs5530AutonomousSession {
         return new Tbs5530OneShotBootstrap.Guard() {
             // General transition/observation checks must not require the released upload attachment.
             public void requireCurrent() throws IOException { require(); }
-            public void requireStartBudget() throws IOException { require(); physical.require(); }
-            public void requireWrite(int ordinal) throws IOException { require(); physical.require(); }
-            public void requireNative(int ordinal) throws IOException { require(); physical.require(); policy.uploadNative(ordinal); }
-            public void requireDispatch(int ordinal) throws IOException { require(); physical.require(); policy.uploadDispatch(ordinal); }
+            public void requireStartBudget() throws IOException { requireDeviceIo(); require(); physical.require(); }
+            public void requireWrite(int ordinal) throws IOException { requireDeviceIo(); require(); physical.require(); }
+            public void requireNative(int ordinal) throws IOException { requireDeviceIo(); require(); physical.require(); policy.uploadNative(ordinal); }
+            public void requireDispatch(int ordinal) throws IOException { requireDeviceIo(); require(); physical.require(); policy.uploadDispatch(ordinal); }
             public String runEpoch() { return id; }
         };
     }
@@ -300,11 +399,59 @@ final class Tbs5530AutonomousSession {
         if (error instanceof RuntimeException) return "RuntimeException";
         return "Throwable";
     }
+    static JSONObject interfaceSelectionMetrics(Tbs5530ExplicitInterfaceSelection.Snapshot value) throws org.json.JSONException {
+        if (value == null) return null;
+        return new JSONObject().put("option", Tbs5530ExplicitInterfaceSelection.OPTION)
+                .put("evidence_layer", "ANDROID_APP_OBSERVED").put("clock", "ANDROID_ELAPSED_REALTIME_NS")
+                .put("api", "UsbDeviceConnection.setInterface(UsbInterface)").put("state", value.state)
+                .put("api_calls", value.apiCalled ? 1 : 0).put("api_result", value.apiResult == null ? JSONObject.NULL : value.apiResult)
+                .put("started_ns", value.startedNanos < 0 ? JSONObject.NULL : value.startedNanos)
+                .put("returned_ns", value.returnedNanos < 0 ? JSONObject.NULL : value.returnedNanos)
+                .put("outstanding_before", value.outstandingBefore < 0 ? JSONObject.NULL : value.outstandingBefore)
+                .put("outstanding_after", value.outstandingAfter < 0 ? JSONObject.NULL : value.outstandingAfter)
+                .put("before", interfaceObservation(value.before)).put("after", interfaceObservation(value.after));
+    }
+    private static Object interfaceObservation(Tbs5530ExplicitInterfaceSelection.Observation value) throws org.json.JSONException {
+        if (value == null) return JSONObject.NULL;
+        return new JSONObject().put("descriptor_sha256", value.descriptorHash).put("configuration_descriptor", 1)
+                .put("interface_metadata", value.interfaceId).put("alternate_metadata", value.alternateSetting)
+                .put("endpoint", 0x82).put("max_packet_size", value.streamPacketSize).put("negotiated_usb_speed", value.negotiatedUsbSpeed);
+    }
+    void recordSonySnapshot(Tbs5530SonyTsOutputReadback.Snapshot snapshot) throws IOException {
+        if (snapshot==null)throw new IOException("Missing Sony snapshot");
+        synchronized(sonySnapshots){sonySnapshots.put(snapshot.stage,snapshot);}
+        try { write("sony-readback-"+snapshot.stage.name().toLowerCase(java.util.Locale.ROOT)+".json",sonySnapshot(snapshot).toString()); }
+        catch(org.json.JSONException error){throw new IOException(error);}
+    }
+    private static JSONObject sonySnapshot(Tbs5530SonyTsOutputReadback.Snapshot snapshot) throws org.json.JSONException {
+        return new JSONObject().put("stage",snapshot.stage.name()).put("plan_sha256",snapshot.planSha256)
+                .put("evidence_layer","ANDROID_APP_OBSERVED").put("clock","ANDROID_ELAPSED_REALTIME_NS")
+                .put("started_ns",snapshot.startedNanos).put("ended_ns",snapshot.endedNanos)
+                .put("sync_before",snapshot.syncBefore<0?JSONObject.NULL:snapshot.syncBefore)
+                .put("sync_after",snapshot.syncAfter<0?JSONObject.NULL:snapshot.syncAfter)
+                .put("bank_provenance","PLAN_INFERRED").put("snapshot_atomic",false)
+                .put("restore_transfer_confirmed",snapshot.restoreTransferConfirmed).put("complete",snapshot.complete)
+                .put("intent_transfers",snapshot.intentTransfers).put("attempted_transfers",snapshot.attemptedTransfers).put("completed_transfers",snapshot.completedTransfers)
+                .put("outcome",snapshot.outcome).put("registers",new JSONObject(snapshot.registers))
+                .put("C3","NOT_AVAILABLE_SOURCE_WRITES_ONLY").put("96_97","NOT_AVAILABLE_SOURCE_WRITES_ONLY")
+                .put("D9","NOT_AVAILABLE_SOURCE_WRITES_ONLY").put("actual_selected_plp","NOT_AVAILABLE")
+                .put("l1_post_valid","NOT_AVAILABLE").put("read_side_effect_free","UNKNOWN")
+                .put("read_81_provenance","SOURCE_SERIAL_RMW_NOT_PARALLEL_READ_PROOF");
+    }
+    private JSONObject sonyMetrics() throws org.json.JSONException {
+        org.json.JSONArray snapshots=new org.json.JSONArray();
+        synchronized(sonySnapshots){for(Tbs5530SonyTsOutputReadback.Snapshot snapshot:sonySnapshots.values())snapshots.put(sonySnapshot(snapshot));}
+        return new JSONObject().put("option",Tbs5530SonyTsOutputReadback.OPTION).put("enabled",sonyTsOutputReadback)
+                .put("maximum_snapshots",2).put("snapshots",snapshots).put("during_pending","NOT_AVAILABLE_NO_CONCURRENT_I2C");
+    }
     void report(String result, long bytes, long packets, int errno) throws IOException {
         try {
             JSONObject json = new JSONObject().put("policy", Tbs5530AutonomousPolicy.VERSION).put("state", policy.state().name())
                     .put("result", result).put("ts_bytes", bytes).put("ts_packets", packets).put("last_errno", errno < 0 ? JSONObject.NULL : errno)
                     .put("cleanup", cleanupConfirmed ? "DRAIN_CONFIRMED" : "DRAIN_NOT_CERTIFIED")
+                    .put("cleanup_path", cleanupPath).put("terminal", terminal)
+                    .put("launch_token", launchToken == null ? JSONObject.NULL : launchToken)
+                    .put("control_plane_only", controlPlaneOnly).put("grant_accepted", accepted)
                     .put("base_git_sha", BuildConfig.SOURCE_GIT_SHA)
                     .put("ts_variant", readApi.name()).put("host_profile", hostProfile).put("retry", 0).put("redacted", true)
                     .put("control_mirror", controlMirror == null ? "OFF" : controlMirror.durable() ? "SYNCED_CLOSED" : "NOT_CERTIFIED")
@@ -334,6 +481,9 @@ final class Tbs5530AutonomousSession {
             Tbs5530TsSmoke.Result ts = tsResult;
             boolean synchronous = readApi == Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO;
             Tbs5530OperationalHandoff.NativeReceiveSnapshot urb = nativeReceiveSnapshot;
+            json.put("explicit_set_interface_alt0", explicitSetInterfaceAlt0);
+            json.put("sony_ts_output_readback",sonyMetrics());
+            json.put("interface_selection", urb == null ? JSONObject.NULL : interfaceSelectionMetrics(urb.interfaceSelection));
             boolean urbKnown = urb != null && urb.completionKnown() && !urb.quarantined;
             json.put("native_urb", urb == null ? JSONObject.NULL : new JSONObject()
                     .put("attempted", urb.attempted).put("submitted", urb.submitted).put("completed", urb.completed)

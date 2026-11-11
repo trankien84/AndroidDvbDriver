@@ -32,6 +32,60 @@ public class Tbs5530AutonomousApprovalTest {
                     .put("expires_elapsed_ms", 301000).put("heartbeat_elapsed_ms", 1000);
         }
     }
+    @Test public void sonyReceiveScopeHasDistinctTranscriptAndCannotReuseOrdinaryNativePermit() throws Exception {
+        Storage store=new Storage();
+        Tbs5530TsSmoke.Limits sony=new Tbs5530TsSmoke.Limits(65536,16,5000,500,4096,false,Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096,false,true);
+        Tbs5530TsSmoke.Limits ordinary=new Tbs5530TsSmoke.Limits(65536,16,5000,500,4096,false,Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096);
+        Tbs5530OperationalApproval approval=new Tbs5530OperationalApproval(store,() -> 1000,null,sony,1);
+        store.authorize();store.permit.put("explicit_native_urb_reception",true);approval.rfIn(true);
+        assertTrue(store.permit.getString("transcript").startsWith("TBS5530-TS-SMOKE/v8|"));
+        assertTrue(store.permit.getString("transcript").contains("read81=SOURCE_SERIAL_RMW_NOT_PARALLEL_PROOF"));
+        assertFalse(approval.eligible());assertFalse(approval.sonyTsOutputReadbackApproved());
+        store.permit.put("explicit_sony_ts_output_readback","true");assertFalse(approval.eligible());
+        store.permit.put("explicit_sony_ts_output_readback",true);assertTrue(approval.eligible());assertTrue(approval.sonyTsOutputReadbackApproved());
+        assertThrows(IOException.class,() -> approval.consume(ordinary,1));approval.consume(sony,1);
+        assertThrows(IOException.class,() -> approval.consume(sony,1));
+        store.permit.put("explicit_sony_ts_output_readback",false);assertThrows(IOException.class,approval::requireCurrent);
+    }
+    @Test public void sonyRootScopeIsDefaultOffAndRejectsChangedOrCombinedExperimentalGrant() throws Exception {
+        android.content.Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
+        Tbs5530AutonomousSession off=new Tbs5530AutonomousSession(context,"SYNC_NATIVE_ERRNO","SM-X926B",36,46);assertFalse(off.sonyTsOutputReadback);
+        assertThrows(IOException.class,() -> new Tbs5530AutonomousSession(context,"NATIVE_USBFS_URB_8X4096","SM-X926B",36,46,false,false,null,false,true));
+        assertThrows(IOException.class,() -> new Tbs5530AutonomousSession(context,"NATIVE_USBFS_URB_8X4096","SM-X926B",36,46,true,true,null,false,true));
+        assertThrows(IOException.class,() -> new Tbs5530AutonomousSession(context,"NATIVE_USBFS_URB_8X8192","SM-X926B",36,46,true,false,null,false,true));
+        assertThrows(IOException.class,() -> new Tbs5530AutonomousSession(context,"NATIVE_USBFS_URB_8X4096","SM-X926B",36,46,true,false,"33333333-3333-4333-8333-333333333333",true,true));
+        Tbs5530AutonomousSession on=new Tbs5530AutonomousSession(context,"NATIVE_USBFS_URB_8X4096","SM-X926B",36,46,true,false,null,false,true);
+        JSONObject grant=new JSONObject(Tbs5530AutonomousSession.read(new java.io.File(context.getFilesDir(),"autonomous-v1-challenge.json"),16384));
+        grant.put("profile","EXPERIMENTAL_DIAGNOSTIC").put("bounded_user_authorization",true).put("rf_in_confirmed",true)
+                .put("expires_elapsed_ms",on.policy.created()+300000).put("physical_recovery_epoch","44444444-4444-4444-8444-444444444444").put("physical_recovery_confirmed",true);
+        String layout=grant.getString("sony_readback_layout");
+        grant.put("sony_ts_output_readback",false);on.write("grant.json",grant.toString());assertThrows(IOException.class,on::acceptGrant);
+        grant.put("sony_ts_output_readback",true).put("sony_readback_layout",layout+"MUTATED");on.write("grant.json",grant.toString());assertThrows(IOException.class,on::acceptGrant);
+        grant.put("sony_readback_layout",layout);on.write("grant.json",grant.toString());
+        on.write("heartbeat.json",new JSONObject().put("session",on.id).put("elapsed_ms",android.os.SystemClock.elapsedRealtime()).put("stop",false).toString());
+        on.policy.foreground(true);on.acceptGrant();on.require();assertEquals(0,on.controlMirror.count());
+        String ledger=Tbs5530AutonomousSession.read(new java.io.File(on.directory,"ledger.jsonl"),4096);assertFalse(ledger.contains("ATTEMPT_CONSUMED"));assertFalse(ledger.contains("FIRMWARE_CONSUMED"));
+        grant.put("sony_ts_output_readback",false);on.write("grant.json",grant.toString());assertThrows(IOException.class,on::require);on.policy.stop();on.controlMirror.finish();
+    }
+    @Test public void sonyStagePermitBindsPlanIdentityConsumesOnceAndFailsClosedOnClockOrOwnerLoss() throws Exception {
+        info.martinmarinov.drivers.usb.tbs5530.Tbs5530SonyTsOutputReadback.Plan plan=info.martinmarinov.drivers.usb.tbs5530.Tbs5530Phase31PlanFixture.sonyPlan(info.martinmarinov.drivers.usb.tbs5530.Tbs5530SonyTsOutputReadback.Stage.AFTER_LOCK);
+        final class Port implements Tbs5530SonyReadbackApproval.Port {
+            final Map<String,String> files=new HashMap<>();long now=1000;int consumes;boolean current=true;
+            public void requireCurrent() throws IOException {if(!current)throw new IOException("Synthetic owner loss");}
+            public void consume(String attempt,String hash,long maximum) {assertEquals(plan.getSha256(),hash);assertEquals(5000,maximum);consumes++;}
+            public void write(String name,String text) {files.put(name,text);}
+            public long now(){return now;}
+        }
+        Port port=new Port();String owner="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        Tbs5530SonyReadbackApproval approval=new Tbs5530SonyReadbackApproval(plan,owner,port);assertEquals(1,port.files.size());
+        assertThrows(IOException.class,() -> approval.audit("SONY_READBACK_INTENT",1,64,144,3,0));
+        assertThrows(IOException.class,() -> approval.consume(info.martinmarinov.drivers.usb.tbs5530.Tbs5530Phase31PlanFixture.sonyPlan(plan.stage)));assertEquals(0,port.consumes);
+        approval.consume(plan);assertEquals(1,port.consumes);assertThrows(IOException.class,() -> approval.consume(plan));
+        approval.audit("SONY_READBACK_INTENT",1,64,144,3,Integer.MIN_VALUE);approval.audit("SONY_READBACK_COMPLETE",1,64,144,3,3);assertEquals(2,port.files.size());
+        assertThrows(IOException.class,() -> approval.audit("SONY_READBACK_INTENT",21,64,144,3,0));
+        port.now=11000;assertThrows(IOException.class,approval::requireCurrent);port.now=999;assertThrows(IOException.class,approval::requireCurrent);
+        port.now=1000;port.current=false;assertThrows(IOException.class,approval::requireCurrent);assertEquals(1,port.consumes);
+    }
     @Test public void queueNeedsItsOwnExplicitScopeAndDifferentTranscript() throws Exception {
         Storage store = new Storage();
         Tbs5530TsSmoke.Limits limits = new Tbs5530TsSmoke.Limits(65536, 16, 5000, 500, 4096, false,
@@ -78,6 +132,45 @@ public class Tbs5530AutonomousApprovalTest {
         assertThrows(IOException.class, () -> a.consume(large, 1));
         assertThrows(IOException.class, () -> b.consume(small, 1));
         b.consume(large, 1); assertThrows(IOException.class, () -> b.consume(large, 1));
+    }
+    @Test public void explicitAlt0NeedsSeparatePlanPermitAndExactBaseline() throws Exception {
+        Storage offStore = new Storage(), onStore = new Storage();
+        Tbs5530TsSmoke.Limits off = new Tbs5530TsSmoke.Limits(65536,16,5000,500,4096,false,Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096);
+        Tbs5530TsSmoke.Limits on = new Tbs5530TsSmoke.Limits(65536,16,5000,500,4096,false,Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096,true);
+        Tbs5530OperationalApproval a = new Tbs5530OperationalApproval(offStore,() -> 1000,null,off,1);
+        Tbs5530OperationalApproval b = new Tbs5530OperationalApproval(onStore,() -> 1000,null,on,1);
+        offStore.authorize(); onStore.authorize();
+        offStore.permit.put("explicit_native_urb_reception",true); onStore.permit.put("explicit_native_urb_reception",true);
+        a.rfIn(true); b.rfIn(true);
+        assertTrue(a.eligible()); assertFalse(a.explicitSetInterfaceAlt0Approved());
+        assertNotEquals(a.planSha256(),b.planSha256());
+        assertTrue(onStore.permit.getString("transcript").startsWith("TBS5530-TS-SMOKE/v7|"));
+        assertTrue(onStore.permit.getString("transcript").contains("EXPLICIT_SET_INTERFACE_ALT0"));
+        onStore.permit.remove("explicit_set_interface_alt0"); assertFalse(b.eligible());
+        onStore.permit.put("explicit_set_interface_alt0","true"); assertFalse(b.eligible());
+        onStore.permit.put("explicit_set_interface_alt0",true); assertTrue(b.eligible()); assertTrue(b.explicitSetInterfaceAlt0Approved());
+        assertThrows(IOException.class,() -> b.consume(off,1)); assertThrows(IOException.class,() -> a.consume(on,1));
+        b.consume(on,1); assertThrows(IOException.class,() -> b.consume(on,1));
+        onStore.permit.put("explicit_set_interface_alt0",false); assertThrows(IOException.class,b::requireCurrent);
+    }
+    @Test public void explicitAlt0DefaultOffGrantMismatchAndMutationCannotAuthorizeUsb() throws Exception {
+        android.content.Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        Tbs5530AutonomousSession off = new Tbs5530AutonomousSession(context,"SYNC_NATIVE_ERRNO","SM-X926B",36,46);
+        assertFalse(off.explicitSetInterfaceAlt0);
+        assertThrows(IOException.class,() -> new Tbs5530AutonomousSession(context,"NATIVE_USBFS_URB_8X8192","SM-X926B",36,46,false,true));
+        Tbs5530AutonomousSession on = new Tbs5530AutonomousSession(context,"NATIVE_USBFS_URB_8X4096","SM-X926B",36,46,false,true);
+        JSONObject grant = new JSONObject(Tbs5530AutonomousSession.read(new java.io.File(context.getFilesDir(),"autonomous-v1-challenge.json"),16384));
+        grant.put("profile","EXPERIMENTAL_DIAGNOSTIC").put("bounded_user_authorization",true).put("rf_in_confirmed",true)
+                .put("expires_elapsed_ms",on.policy.created()+300000).put("physical_recovery_epoch","33333333-3333-4333-8333-333333333333")
+                .put("physical_recovery_confirmed",true).put("explicit_set_interface_alt0",false);
+        on.write("grant.json",grant.toString()); assertThrows(IOException.class,on::acceptGrant);
+        grant.put("explicit_set_interface_alt0",true); on.write("grant.json",grant.toString());
+        on.write("heartbeat.json",new JSONObject().put("session",on.id).put("elapsed_ms",android.os.SystemClock.elapsedRealtime()).put("stop",false).toString());
+        on.policy.foreground(true); on.acceptGrant(); on.require();
+        String ledger = Tbs5530AutonomousSession.read(new java.io.File(on.directory,"ledger.jsonl"),4096);
+        assertTrue(ledger.contains("EXPLICIT_SET_INTERFACE_ALT0")); assertFalse(ledger.contains("ATTEMPT_CONSUMED")); assertFalse(ledger.contains("FIRMWARE_CONSUMED"));
+        grant.put("explicit_set_interface_alt0",false); on.write("grant.json",grant.toString()); assertThrows(IOException.class,on::require);
+        on.policy.stop();
     }
     @Test public void controlMirrorIsOffByDefaultAndMustMatchImmutableGrantBeforeAnyUsb() throws Exception {
         android.content.Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();

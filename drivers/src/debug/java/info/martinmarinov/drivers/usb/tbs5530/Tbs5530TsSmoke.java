@@ -24,12 +24,17 @@ public final class Tbs5530TsSmoke {
         default boolean endpointPreparationApproved() { return false; }
         default boolean queuedReceptionApproved() { return false; }
         default boolean nativeUrbReceptionApproved() { return false; }
+        default boolean explicitSetInterfaceAlt0Approved() { return false; }
+        default boolean sonyTsOutputReadbackApproved() { return false; }
+        default void beforeFirstBulk() throws IOException { throw new IOException("Readback hook unavailable"); }
     }
     public static final class Limits {
         public final int maxBytes, maxReads, durationMillis, readTimeoutMillis, readChunkBytes;
-        public final boolean prepareEndpoint;
+        public final boolean prepareEndpoint, explicitSetInterfaceAlt0, sonyTsOutputReadback;
         public final ReadApi readApi;
-        public long maximumMillis() { return durationMillis + 2000L + (prepareEndpoint ? 5000L : 0) + (readApi != ReadApi.SYNC_NATIVE_ERRNO ? 1000L : 0); }
+        public long maximumMillis() { return durationMillis + 2000L + (prepareEndpoint ? 5000L : 0)
+                + (explicitSetInterfaceAlt0 ? 2000L : 0) + (sonyTsOutputReadback ? Tbs5530SonyTsOutputReadback.MAXIMUM_MILLIS : 0)
+                + (readApi != ReadApi.SYNC_NATIVE_ERRNO ? 1000L : 0); }
         public Limits(int maxBytes, int maxReads, int durationMillis, int readTimeoutMillis) {
             this(maxBytes, maxReads, durationMillis, readTimeoutMillis, 4096);
         }
@@ -42,7 +47,24 @@ public final class Tbs5530TsSmoke {
         }
         public Limits(int maxBytes, int maxReads, int durationMillis, int readTimeoutMillis, int readChunkBytes,
                       boolean prepareEndpoint, ReadApi readApi) {
+            this(maxBytes, maxReads, durationMillis, readTimeoutMillis, readChunkBytes, prepareEndpoint, readApi, false);
+        }
+        public Limits(int maxBytes, int maxReads, int durationMillis, int readTimeoutMillis, int readChunkBytes,
+                      boolean prepareEndpoint, ReadApi readApi, boolean explicitSetInterfaceAlt0) {
+            this(maxBytes,maxReads,durationMillis,readTimeoutMillis,readChunkBytes,prepareEndpoint,readApi,explicitSetInterfaceAlt0,false);
+        }
+        public Limits(int maxBytes, int maxReads, int durationMillis, int readTimeoutMillis, int readChunkBytes,
+                      boolean prepareEndpoint, ReadApi readApi, boolean explicitSetInterfaceAlt0, boolean sonyReadback) {
             this.readApi = Objects.requireNonNull(readApi);
+            this.explicitSetInterfaceAlt0 = explicitSetInterfaceAlt0; sonyTsOutputReadback=sonyReadback;
+            if (sonyReadback && (explicitSetInterfaceAlt0 || prepareEndpoint || readApi != ReadApi.NATIVE_USBFS_URB_8X4096
+                    || maxBytes != 65536 || maxReads != 16 || durationMillis != 5000 || readTimeoutMillis != 500 || readChunkBytes != 4096))
+                throw new IllegalArgumentException("Sony readback requires the exact native4096 baseline without endpoint changes");
+            if (explicitSetInterfaceAlt0 && (readApi != ReadApi.NATIVE_USBFS_URB_8X4096 || prepareEndpoint
+                    || maxBytes != 65536 || maxReads != 16 || durationMillis != 5000
+                    || readTimeoutMillis != 500 || readChunkBytes != 4096)) {
+                throw new IllegalArgumentException("EXPLICIT_SET_INTERFACE_ALT0 requires the exact native 8x4096 baseline");
+            }
             if (readApi == ReadApi.QUEUED_USB_REQUEST_8X4096 && (readChunkBytes != 4096 || maxBytes % 4096 != 0)) {
                 throw new IllegalArgumentException("Queued variant requires complete 4096-byte slots");
             }
@@ -127,6 +149,11 @@ public final class Tbs5530TsSmoke {
         if (readApi.isNativeUrb() && !permission.nativeUrbReceptionApproved()) {
             throw new IOException("Exact native usbfs URB diagnostic approval required");
         }
+        if (limits.explicitSetInterfaceAlt0 && !permission.explicitSetInterfaceAlt0Approved()) {
+            throw new IOException("Exact EXPLICIT_SET_INTERFACE_ALT0 diagnostic approval required");
+        }
+        if (limits.sonyTsOutputReadback && !permission.sonyTsOutputReadbackApproved())
+            throw new IOException("Exact SONY_TS_OUTPUT_READBACK diagnostic approval required");
         permission.consume(limits, generation);
         long started = clock.nanos(), dataStarted = started;
         boolean endpointPrepared = false;
@@ -155,6 +182,14 @@ public final class Tbs5530TsSmoke {
             bridge.selectTerrestrialStream();
             permission.audit("STREAM_SELECT_COMPLETE", 0, 2);
             session.streamingStarted(generation);
+            if (limits.sonyTsOutputReadback) {
+                permission.audit("SONY_READBACK_BEFORE_FIRST_URB_INTENT",0,0);
+                permission.beforeFirstBulk();
+                permission.requireCurrent(generation); requireLocked();
+                if (!permission.sonyTsOutputReadbackApproved()) throw new IOException("Sony readback grant revoked");
+                permission.audit("SONY_READBACK_BEFORE_FIRST_URB_COMPLETE",0,0);
+                dataStarted = clock.nanos();
+            }
             byte[] buffer = new byte[Math.min(limits.readChunkBytes, limits.maxBytes)];
             while (bytes < limits.maxBytes && reads < limits.maxReads) {
                 permission.requireCurrent(generation); requireLocked();

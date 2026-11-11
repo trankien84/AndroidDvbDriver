@@ -59,10 +59,16 @@ public final class Tbs5530AutonomousPolicy {
         foreground = value;
     }
     public synchronized void grant(Profile value, long deadline, long beat) throws IOException {
+        grant(value, deadline, beat, false);
+    }
+    public synchronized void grant(Profile value, long deadline, long beat, boolean explicitSetInterfaceAlt0) throws IOException {
+        if (explicitSetInterfaceAlt0 && value != Profile.EXPERIMENTAL_DIAGNOSTIC)
+            throw new IOException("EXPLICIT_SET_INTERFACE_ALT0 requires an experimental grant");
         long now = time();
         if (granted || stopped || !foreground || value == null || deadline <= now || deadline > created + MAX_SESSION_MS
                 || beat < created || beat > now || now - beat >= HEARTBEAT_MS) throw new IOException("Invalid single session grant");
-        ledger.check(); ledger.append("SESSION_GRANTED", "SESSION", value.name());
+        ledger.check(); ledger.append("SESSION_GRANTED", "SESSION", value.name()
+                + (explicitSetInterfaceAlt0 ? "|EXPLICIT_SET_INTERFACE_ALT0" : ""));
         granted = true; profile = value; expires = deadline; heartbeat = beat;
     }
     public synchronized void heartbeat(long value) throws IOException {

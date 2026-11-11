@@ -29,6 +29,21 @@ public class Tbs5530AutonomousPolicyTest {
         void fx2() throws IOException { grant(); policy.observe("ATTACHMENT", 1, true, Tbs5530OperationalProfile.Kind.FX2_DEFAULT); }
         void beat(long delta) throws IOException { now += delta; policy.heartbeat(now); }
     }
+    @Test public void explicitInterfaceGrantIsExperimentalSingleUseAndNeverRearmsFirmware() throws Exception {
+        Rig denied = new Rig();
+        assertThrows(IOException.class, () -> denied.policy.grant(Tbs5530AutonomousPolicy.Profile.AUTO_VERIFIED,301000,1000,true));
+        assertTrue(denied.audit.isEmpty());
+        Rig r = new Rig(); r.policy.grant(Tbs5530AutonomousPolicy.Profile.EXPERIMENTAL_DIAGNOSTIC,301000,1000,true);
+        r.policy.observe("ATTACHMENT",1,true,Tbs5530OperationalProfile.Kind.OPERATIONAL_CANDIDATE); r.policy.bindOwner(OWNER,1);
+        r.policy.consume(ATTEMPT,PLAN,10000);
+        assertThrows(IOException.class, () -> r.policy.beginUpload(ATTEMPT));
+        r.policy.failUncertain();
+        assertThrows(IOException.class, () -> r.policy.consume(ATTEMPT,PLAN,10000));
+        assertThrows(IOException.class, () -> r.policy.beginUpload(ATTEMPT));
+        assertThrows(IOException.class, () -> r.policy.grant(Tbs5530AutonomousPolicy.Profile.EXPERIMENTAL_DIAGNOSTIC,301000,1000,true));
+        assertEquals(Tbs5530AutonomousPolicy.State.ERROR_UNCERTAIN,r.policy.state());
+        assertEquals(2,r.audit.size());
+    }
     @Test public void challengeAndIntentsAreNotAuthorization() throws Exception {
         Rig r = new Rig(); assertThrows(IOException.class, r.policy::requireSession);
         assertTrue(r.audit.isEmpty()); assertEquals(Tbs5530AutonomousPolicy.State.WAIT_DEVICE, r.policy.state());

@@ -20,9 +20,12 @@ import java.io.IOException;
 /** Debug-only bounded session. Launch intents publish a challenge, never consent. */
 public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
     private final Handler ui = new Handler(Looper.getMainLooper());
-    private final Object reservation = new Object();
-    private final Tbs5530PermissionState permission = new Tbs5530PermissionState();
-    private final Tbs5530AttachPermissionWindow attachPermissionWindow = new Tbs5530AttachPermissionWindow();
+    private Object reservation = new Object();
+    private Tbs5530PermissionState permission = new Tbs5530PermissionState();
+    private Tbs5530AttachPermissionWindow attachPermissionWindow = new Tbs5530AttachPermissionWindow();
+    private final Tbs5530AutonomousLaunch launches = new Tbs5530AutonomousLaunch();
+    private Intent pendingLaunch;
+    private long workflowGeneration;
     private boolean attachPromptPaused;
     private Tbs5530AutonomousSession session;
     private Tbs5530AndroidRuntime runtime;
@@ -30,24 +33,32 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
     private Tbs5530AndroidUsbFacade.Manager manager;
     private Tbs5530OperationalHandoff handoff;
     private Tbs5530AndroidBootstrap bootstrap;
+    private Tbs5530SonyTsOutputReadback sonyReadback;
     private Tbs5530UsbBinding.Registration events, permissionRequest;
     private Tbs5530UsbBinding.Device selected;
     private volatile Tbs5530OperationalApproval approval;
     private volatile boolean foreground, stopped, busy, waitingGrant = true, reserved;
     private boolean uploaded;
+    private volatile boolean cleanupFault;
     private TextView status;
     private volatile String result = "WAIT_HOST_SESSION_GRANT";
     private long bytes, packets;
     private int errno = -1;
     private final Runnable tick = new Runnable() {
         public void run() {
-            if (status != null) status.setText((session == null ? "NOT_STARTED" : session.policy.state().name()) + "\n" + result);
+            if (status != null) status.setText((session == null ? "NOT_STARTED" : session.policy.state().name()) + "\n" + result
+                    + "\nChọn lại interface 0/alt 0: " + (session != null && session.explicitSetInterfaceAlt0 ? "đã yêu cầu quyền riêng" : "TẮT"));
             if (stopped) return;
             try {
                 if (waitingGrant) {
-                    if (foreground && session.grantAvailable()) { session.acceptGrant(); waitingGrant = false; startDiscovery(); }
+                    if (foreground && session.grantAvailable()) {
+                        session.acceptGrant(); waitingGrant = false;
+                        if (session.controlPlaneOnly) { session.controlPlaneReady(); result = "CONTROL_PLANE_READY"; }
+                        else startDiscovery();
+                    }
                 } else {
                     session.require();
+                    if (session.controlPlaneOnly) { session.controlPlaneReady(); ui.postDelayed(this, 200); return; }
                     if (attachPromptPaused && !foreground && !attachPermissionAllowed()) {
                         stop("ATTACH_PERMISSION_UI_TIMEOUT"); return;
                     }
@@ -60,7 +71,11 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
                     }
                     if (!busy && foreground && !permission.pending()) discover();
                 }
-            } catch (IOException | RuntimeException error) { fail(error); }
+            } catch (IOException | RuntimeException error) {
+                if (session != null && session.controlPlaneOnly && session.accepted() && "Host stopped session".equals(error.getMessage()))
+                    stop("CONTROL_PLANE_COMPLETE");
+                else fail(error);
+            }
             if (!stopped) ui.postDelayed(this, 200);
         }
     };
@@ -74,24 +89,62 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
             // A cold attach launch can deliver OS permission, but must never mint an autonomous session.
             stopped = true; result = "ATTACH_ONLY_NO_SESSION"; finish(); return;
         }
-        try { session = new Tbs5530AutonomousSession(this, getIntent().getStringExtra("read_api"),
-                getIntent().getBooleanExtra("control_mirror", false)); }
+        try { beginSession(getIntent()); }
         catch (IOException | RuntimeException error) {
             if (session != null) session.failure(error);
-            stopped = true; result = "DRY_RUN_OR_IDENTITY_BLOCKED"; status.setText(result);
+            stop("DRY_RUN_OR_IDENTITY_BLOCKED"); status.setText(result);
         }
+    }
+    private void beginSession(Intent intent) throws IOException {
+        String token = intent.getStringExtra(Tbs5530AutonomousLaunch.TOKEN);
+        launches.begin(token);
+        ui.removeCallbacksAndMessages(null); workflowGeneration++;
+        permission = new Tbs5530PermissionState(); attachPermissionWindow = new Tbs5530AttachPermissionWindow();
+        reservation = new Object(); pendingLaunch = null; attachPromptPaused = false;
+        runtime = null; facade = null; manager = null; handoff = null; bootstrap = null; sonyReadback = null;
+        events = null; permissionRequest = null; selected = null; approval = null;
+        uploaded = false; stopped = false; busy = false; waitingGrant = true; reserved = false; cleanupFault = false;
+        bytes = 0; packets = 0; errno = -1; result = "WAIT_HOST_SESSION_GRANT";
+        session = null;
+        session = new Tbs5530AutonomousSession(this, intent.getStringExtra("read_api"),
+                intent.getBooleanExtra("control_mirror", false), intent.getBooleanExtra("explicit_set_interface_alt0", false),
+                token, intent.getBooleanExtra(Tbs5530AutonomousLaunch.CONTROL_ONLY, false),
+                intent.getBooleanExtra("sony_ts_output_readback",false));
+        setIntent(new Intent(intent));
+        if (foreground) { session.policy.foreground(true); ui.post(tick); }
+    }
+    private void finishPendingLaunch() {
+        if (pendingLaunch == null || !foreground || !launches.cleaned()) return;
+        Intent next = pendingLaunch; pendingLaunch = null;
+        try { beginSession(next); }
+        catch (IOException | RuntimeException error) { stop("FRESH_LAUNCH_REFUSED"); result = "FRESH_LAUNCH_REFUSED"; status.setText(result); }
     }
     @Override protected void onResume() {
         super.onResume();
         if (attachPromptPaused && !stopped && !attachPermissionAllowed()) stop("ATTACH_PERMISSION_UI_TIMEOUT");
         foreground = true; attachPromptPaused = false;
+        finishPendingLaunch();
         if (session != null) session.policy.foreground(true);
         ui.removeCallbacks(tick); if (!stopped) ui.post(tick);
     }
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
-        // Never replace the launch intent or read_api: attachment delivery is not a new session.
-        if (UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(intent.getAction()) && !waitingGrant && !stopped) {
+        if (!UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(intent.getAction())) {
+            String token = intent.getStringExtra(Tbs5530AutonomousLaunch.TOKEN);
+            if (token == null) return;
+            try {
+                if (launches.matches(token)) return;
+                launches.requireFresh(token);
+                if (pendingLaunch != null) throw new IOException("Another launch is already awaiting cleanup");
+                pendingLaunch = new Intent(intent);
+                if (!stopped) stop("HOST_REQUESTED_NEW_SESSION");
+                finishPendingLaunch();
+            } catch (IOException | RuntimeException error) { result = "FRESH_LAUNCH_REFUSED"; status.setText(result); }
+            return;
+        }
+        // USB attachment delivery must never replace the session or its grant.
+        if (session != null && session.controlPlaneOnly) return;
+        if (!waitingGrant && !stopped) {
             try {
                 UsbDevice actual = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
                 Tbs5530UsbBinding.Device fresh = single();
@@ -135,13 +188,15 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
     }
     @Override protected void onDestroy() { if (!stopped) stop("DESTROYED"); super.onDestroy(); }
     private void startDiscovery() throws IOException {
+        session.requireDeviceIo(); launches.acquiring();
+        final long workflow = workflowGeneration;
         if (!Tbs5530DiagnosticController.reserveOperational(reservation)) throw new IOException("Another debug owner exists");
         reserved = true; runtime = new Tbs5530AndroidRuntime();
         manager = Tbs5530AutonomousAndroidAccess.manager(getApplicationContext());
         facade = new Tbs5530AndroidUsbFacade(getApplicationContext(), manager);
         events = facade.listen(new Tbs5530UsbBinding.Events() {
             public void attached(Tbs5530UsbBinding.Device device) {
-                if (stopped || !target(device) || selected == null) return;
+                if (workflow != workflowGeneration || stopped || !target(device) || selected == null) return;
                 Tbs5530OneShotBootstrap.Snapshot current = bootstrap == null ? null : bootstrap.snapshot();
                 boolean knownTransition = current != null && !bootstrap.cleanupPending()
                         && Tbs5530AutonomousPolicy.bootstrapTransitionKnown(current.state,
@@ -153,7 +208,7 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
                 } else if (!current.pending && !knownTransition) fail("UNEXPECTED_ATTACH_EVENT");
             }
             public void detached(Tbs5530UsbBinding.Device device) {
-                if (!stopped && selected != null && selected.equals(device) && bootstrap == null) {
+                if (workflow == workflowGeneration && !stopped && selected != null && selected.equals(device) && bootstrap == null) {
                     permission.invalidate(); fail("USB_DETACHED");
                 }
             }
@@ -185,8 +240,9 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
         Tbs5530PermissionState.Attempt attempt = permission.attempt();
         publishPermission(); result = "USER_ACTION_REQUIRED";
         permission.dispatched(attempt);
+        final long workflow = workflowGeneration;
         permissionRequest = facade.requestPermission(device, attempt.token, (correlation, actual, allowed) -> ui.post(() -> {
-            if (stopped) return;
+            if (workflow != workflowGeneration || stopped) return;
             Tbs5530PermissionState.Callback decision = permission.callback(correlation, attempt.generation, actual, allowed);
             if (decision == Tbs5530PermissionState.Callback.IGNORED) return;
             try {
@@ -199,7 +255,7 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
         }));
     }
     private void discover() throws IOException {
-        session.require(); if (!foreground || busy || permission.pending()) return;
+        session.requireDeviceIo(); session.require(); if (!foreground || busy || permission.pending()) return;
         Tbs5530UsbBinding.Device device = single();
         if (device == null) {
             if (selected != null) { permission.invalidate(); throw new IOException("Attachment disappeared"); }
@@ -331,8 +387,13 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
                 Tbs5530Frontend.Result lock = execute(probe, probe.planPollStatus(3));
                 if (lock.status == null || !lock.status.locked) throw new IOException("No confirmed lock");
                 session.policy.transition(Tbs5530AutonomousPolicy.State.LOCK_CONFIRMED);
+                if(session.sonyTsOutputReadback) {
+                    sonyReadback=probe.sonyOutputReadback(session.sonyAuthorization(),SystemClock::elapsedRealtimeNanos);
+                    observeSony(Tbs5530SonyTsOutputReadback.Stage.AFTER_LOCK);
+                    handoff.sonyReadbackHook(()->observeSony(Tbs5530SonyTsOutputReadback.Stage.BEFORE_FIRST_URB));
+                }
                 Tbs5530TsSmoke.Limits limits = new Tbs5530TsSmoke.Limits(65536, 16, 5000, 500,
-                        Tbs5530AutonomousPlans.chunkBytes(session.readApi), false, session.readApi);
+                        Tbs5530AutonomousPlans.chunkBytes(session.readApi), false, session.readApi, session.explicitSetInterfaceAlt0, session.sonyTsOutputReadback);
                 approval = session.approval(null, limits); session.policy.transition(Tbs5530AutonomousPolicy.State.TS_CAPTURE);
                 Tbs5530TsSmoke.Result ts;
                 try (Tbs5530AutonomousCapture raw = new Tbs5530AutonomousCapture(session.directory, limits.maxBytes)) {
@@ -366,6 +427,15 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
             }
         });
     }
+    private void observeSony(Tbs5530SonyTsOutputReadback.Stage stage) throws IOException {
+        if(sonyReadback==null)throw new IOException("Sony snapshot observer unavailable");
+        Tbs5530SonyTsOutputReadback.Plan plan=sonyReadback.plan(stage);
+        try { sonyReadback.execute(plan); }
+        finally {
+            Tbs5530SonyTsOutputReadback.Snapshot snapshot=sonyReadback.snapshot();
+            if(snapshot!=null && snapshot.stage==stage)session.recordSonySnapshot(snapshot);
+        }
+    }
     private void preserveNativeReceiveSnapshot() {
         if (session != null && handoff != null) session.nativeReceiveSnapshot = handoff.nativeReceiveSnapshot();
     }
@@ -397,7 +467,7 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
         stopped = true; result = reason; ui.removeCallbacks(tick);
         attachPermissionWindow.close(); permission.cancel();
         try { closePermissionRequest(); if (session != null) publishPermission(); }
-        catch (IOException error) { if (session != null) session.failure(error); result = "PERMISSION_AUDIT_OR_CLEANUP_UNCERTAIN"; }
+        catch (IOException error) { cleanupFault = true; if (session != null) session.failure(error); result = "PERMISSION_AUDIT_OR_CLEANUP_UNCERTAIN"; }
         if (session != null) {
             if ("NONE".equals(session.stopReason) && session.policy.state() != Tbs5530AutonomousPolicy.State.REPORT) {
                 session.failureStage = session.policy.state().name(); session.stopReason = reason;
@@ -409,7 +479,24 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
         if (bootstrap != null) bootstrap.close();
         if (handoff != null) handoff.revoke();
         if (runtime == null) {
-            if (session != null) try { session.report(result, bytes, packets, errno); } catch (IOException error) { result = "AUDIT_UNAVAILABLE"; }
+            int resources = reserved ? 1 : 0;
+            resources |= busy ? 2 : 0;
+            resources |= manager != null || facade != null ? 4 : 0;
+            resources |= bootstrap != null || handoff != null ? 8 : 0;
+            resources |= events != null || permissionRequest != null || selected != null ? 16 : 0;
+            resources |= approval != null || uploaded ? 32 : 0;
+            resources |= session != null && (session.capture != null || session.initialRawObserved || session.nativeReceiveSnapshot != null) ? 64 : 0;
+            boolean clean = launches.certifyNoResources(resources | (cleanupFault ? 128 : 0));
+            if (session != null) try {
+                if (clean && session.controlMirror != null) session.controlMirror.finish();
+                session.cleanupConfirmed = clean; session.terminal = true;
+                session.cleanupPath = clean ? "NO_RESOURCES_ACQUIRED" : "NOT_CERTIFIED";
+                session.report(result, bytes, packets, errno);
+            } catch (IOException error) {
+                launches.runtimeCleanup(false); session.cleanupConfirmed = false; session.cleanupPath = "AUDIT_FAILED";
+                result = "AUDIT_UNAVAILABLE";
+            }
+            if (clean && launches.cleaned()) ui.post(this::finishPendingLaunch);
             return;
         }
         runtime.execute(() -> {
@@ -423,6 +510,7 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
                 closePermissionRequest(); if (events != null) events.close();
                 if (session != null) { refreshPermissionReceipt(); session.report(result, bytes, packets, errno); }
             } catch (IOException | RuntimeException error) {
+                cleanupFault = true;
                 if (session != null) { session.failure(error); session.policy.failUncertain(); try { session.report("CLEANUP_OR_AUDIT_UNCERTAIN", bytes, packets, errno); } catch (IOException ignored) { } }
             } finally {
                 runtime.close();
@@ -431,22 +519,29 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
                     try {
                         boolean terminated = runtime.awaitTermination(15, java.util.concurrent.TimeUnit.SECONDS);
                         if (terminated) preserveNativeReceiveSnapshot();
-                        boolean drained = terminated
+                        boolean drained = terminated && !cleanupFault
                                 && (handoff == null || !handoff.pending() && handoff.cleanupFailure() == null)
                                 && (bootstrap == null || !bootstrap.cleanupPending() && "NONE".equals(bootstrap.snapshot().cleanupFailure))
                                 && (session == null || session.nativeReceiveSnapshot == null
                                 || !session.nativeReceiveSnapshot.quarantined && session.nativeReceiveSnapshot.outstanding == 0);
                         if (session != null) {
                             if (bootstrap != null) session.bootstrapSnapshot = bootstrap.snapshot();
-                            session.cleanupConfirmed = drained;
+                            session.cleanupConfirmed = drained; session.terminal = true;
+                            session.cleanupPath = drained ? "RUNTIME_DRAIN_CONFIRMED" : "NOT_CERTIFIED";
                             if (drained && session.controlMirror != null) session.controlMirror.finish();
                             if (!drained) session.policy.failUncertain();
                             refreshPermissionReceipt();
                             session.report(drained ? result : "CLEANUP_UNCERTAIN_NO_FORCE_CLOSE", bytes, packets, errno);
                         }
                         if (drained && reserved) { Tbs5530DiagnosticController.releaseOperational(reservation); reserved = false; }
-                    } catch (IOException error) { result = "AUDIT_UNAVAILABLE"; }
-                    catch (InterruptedException error) { Thread.currentThread().interrupt(); }
+                        launches.runtimeCleanup(drained);
+                        if (drained) ui.post(this::finishPendingLaunch);
+                    } catch (IOException error) {
+                        cleanupFault = true; launches.runtimeCleanup(false);
+                        if (session != null) session.cleanupConfirmed = false;
+                        result = "AUDIT_UNAVAILABLE";
+                    }
+                    catch (InterruptedException error) { launches.runtimeCleanup(false); Thread.currentThread().interrupt(); }
                 }, "tbs5530-autonomous-drain").start();
             }
         });

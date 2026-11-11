@@ -30,6 +30,42 @@ Lệnh release dùng một worker vì đã quan sát lỗi khóa thư mục nati
 
 Các lệnh trên chỉ build/kiểm thử phần mềm, không tải firmware, không ghi USB hoặc kiểm chứng tuner thật. TBS5530 chưa được triển khai. Kết quả và giới hạn mới nhất nằm trong [STATUS.md](docs/project/STATUS.md) và [TEST-MATRIX.md](docs/project/TEST-MATRIX.md).
 
+## Chẩn đoán Android: chọn lại interface 0/alt 0
+
+`EXPLICIT_SET_INTERFACE_ALT0` chỉ có trong đường chẩn đoán debug, mặc định **TẮT**. Khi được cấp quyền riêng, ứng dụng gọi đúng một lần `UsbDeviceConnection.setInterface(UsbInterface)` trên interface đã claim bằng `force=false`, ngay trước lần nhận Bulk đầu tiên. Cờ không thay cấu hình, reset, CLEAR_HALT hoặc thêm lệnh vendor; release và các driver khác giữ nguyên.
+
+Host helper `tools\Invoke-TBS5530-AutonomousSession.ps1` nhận `-ExplicitSetInterfaceAlt0` cùng `-Profile EXPERIMENTAL_DIAGNOSTIC -ReadApi NATIVE_USBFS_URB_8X4096`. Cần quyền phiên mới và proof-of-guard như trước; intent chỉ yêu cầu lựa chọn, không cấp quyền. Không ghép cờ này với phép thử 8192 byte. Challenge, grant bất biến và hash kế hoạch riêng đều ràng lựa chọn; giao diện hiển thị cờ đang tắt hay đã yêu cầu quyền.
+
+Trước API, ứng dụng kiểm quyền USB của Android, đúng `734c:5530`, raw descriptor operational config 1/interface 0/alt 0/EP82, High-Speed, owner độc quyền còn hoạt động, K36 AUTO đã khóa và chưa có URB được gửi hoặc đang chờ. API trả `false`, ném exception, mất quyền hoặc rời thiết bị đều dừng trước Bulk, không retry/rearm hoặc nạp firmware lần hai; cleanup drain/quarantine giữ nguyên.
+
+`report.json` chứa thời gian `ANDROID_ELAPSED_REALTIME_NS`, metadata interface/raw descriptor trước và sau, kết quả API và số URB. Đây là `ANDROID_APP_OBSERVED`, không phải packet trên dây hoặc bằng chứng thiết bị đã phát TS. Nếu không thể quan sát sau lỗi, trường tương ứng là `null`, không giả định bằng 0. Helper lưu report ngoài Git dưới thư mục log đã chọn. Kiểm offline/build không xác nhận Android hardware hoặc `TS_SMOKE_PASS`.
+
+Host helper đọc `/proc/uptime` bằng UID của ADB shell, truyền thời gian qua positional argument rồi dùng `run-as` ghi heartbeat trong app-private bằng đổi tên file, tất cả trong cùng một lệnh ADB. UID ứng dụng không cần đọc `/proc/uptime`; không dùng timestamp lấy từ vòng gọi trước. Giới hạn mỗi lệnh runtime vẫn 1500 ms, heartbeat vẫn 2 giây và phiên tối đa 5 phút; hết hạn không gia hạn file, STOP vẫn được ghi. Chỉ đọc hoặc hash `control-ep0.jsonl` sau report terminal đã xác nhận `DRAIN_CONFIRMED`, không URB pending/quarantine, mới dùng giới hạn export 10 giây. Export thất bại không biến phép nhận lỗi thành PASS. Kiểm fake offline: `tools\Test-TBS5530-Heartbeat.ps1` và `tools\Test-TBS5530-AutonomousSession.ps1`, không gọi ADB.
+
+Nguồn API: [Android USB API](https://developer.android.com/reference/android/hardware/usb/UsbDeviceConnection#setInterface(android.hardware.usb.UsbInterface)) và [AOSP Android 16 r1](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/core/java/android/hardware/usb/UsbDeviceConnection.java). AOSP tách `claimInterface(intf, false)` khỏi `setInterface(intf)`; việc claim không chứng minh đã gọi API chọn alt.
+
+### Kiểm việc khởi chạy và heartbeat mà không truy cập tuner
+
+Helper gắn một `launch_token` mới vào mỗi lệnh mở phiên. Token này chỉ dùng để ghép lệnh với challenge mới, không phải quyền USB hoặc physical recovery epoch. Activity chỉ tạo phiên tiếp theo sau khi phiên trước đã dọn tài nguyên và ghi được report; challenge cũ, intent gắn USB và token đã dùng không cấp quyền mới. Không xóa hoặc tạo lại ledger để sửa lỗi khởi chạy.
+
+Dùng `-ControlPlaneOnly` để kiểm khởi chạy, grant, heartbeat và STOP trên Android mà không tạo USB manager/runtime, xin quyền USB, mở tuner hoặc gọi firmware/I²C/Bulk/setInterface. Chế độ này được ràng bất biến vào challenge/grant và bị chặn ở các điểm cấp quyền I/O. Nó từ chối firmware path, physical epoch, AutoUsbPermission và ControlMirror. Kết quả thành công là `CONTROL_PLANE_COMPLETE`, không phải `TS_SMOKE_PASS`.
+
+```powershell
+.\tools\Invoke-TBS5530-AutonomousSession.ps1 -Serial '<verified-serial>' -ExpectedModel SM-X926B -ExpectedApi 36 -ExpectedBootCount <verified-boot> -Profile EXPERIMENTAL_DIAGNOSTIC -ReadApi NATIVE_USBFS_URB_8X4096 -ExplicitSetInterfaceAlt0 -ControlPlaneOnly -DurationSeconds 30 -GrantBoundedSession -ProofOfGuardPassed -OutputDirectory 'D:\TSDuck\logs\<new-run>'
+```
+
+Report ghi `cleanup_path=NO_RESOURCES_ACQUIRED` chỉ khi chưa bắt đầu cấp tài nguyên và tất cả owner/runtime/request đều vắng. Phiên đã bắt đầu cấp tài nguyên phải đi qua cancel/drain và xác nhận runtime kết thúc; số byte bằng 0 không thay được bằng chứng ấy. Nếu cleanup hoặc ghi audit thất bại, không mở phiên mới. Kiểm offline bằng [Test-TBS5530-Launch.ps1](tools/Test-TBS5530-Launch.ps1), [Test-TBS5530-Heartbeat.ps1](tools/Test-TBS5530-Heartbeat.ps1) và [Test-TBS5530-AutonomousSession.ps1](tools/Test-TBS5530-AutonomousSession.ps1).
+
+## Chẩn đoán Android: đọc lại cấu hình đầu ra TS của Sony
+
+`SONY_TS_OUTPUT_READBACK` chỉ có trong debug, mặc định **TẮT**. Mục đích là kiểm cấu hình đầu ra sau khi Sony báo khóa, không sửa cấu hình hoặc khẳng định đã có dữ liệu ở chân chip/FIFO. Helper [Invoke-TBS5530-AutonomousSession.ps1](tools/Invoke-TBS5530-AutonomousSession.ps1) nhận `-SonyTsOutputReadback -ControlMirror -Profile EXPERIMENTAL_DIAGNOSTIC -ReadApi NATIVE_USBFS_URB_8X4096`. Cần consent riêng cho đúng danh sách đọc; cờ không ghép với alt0, chuẩn bị endpoint, 8192 byte hoặc ControlPlaneOnly.
+
+Có tối đa hai ảnh chụp trạng thái: `AFTER_LOCK` và `BEFORE_FIRST_URB` sau stream-select `8A 0A 00`. Mỗi ảnh gồm 20 giao dịch EP0: đọc sync bank20/10, chọn bank00, đọc từng byte C4/C6/80/81/95/A9/33, chọn lại bank20 rồi đọc sync lần nữa. Chỉ hai selector writes thay bank; không ghi output mode, drive hoặc PLP. Mỗi kế hoạch có hash, quyền dùng một lần, cùng owner/worker và giới hạn 5 giây được kiểm quanh từng lệnh. Không ép đóng syscall đang chạy khi quá hạn.
+
+**Giới hạn nguồn:** C3,96/97,D9, actual PLP và L1 chưa có phép đọc được xác minh, nên ghi `NOT_AVAILABLE`. Nguồn có đọc 81 ở nhánh serial nhưng chưa chứng minh đọc trong chế độ parallel đích an toàn; tính không gây tác dụng phụ trên silicon vẫn `UNKNOWN`. Ảnh chụp không đồng thời (`NONATOMIC`); bank được suy từ kế hoạch (`PLAN_INFERRED`), không phải đã đọc lại bank selector. Xem nguồn và SHA trong [RESEARCH.md](docs/project/RESEARCH.md).
+
+Mọi short/error, mất owner/quyền, đổi lock hoặc lỗi audit đều dừng trước Bulk. Sau I/O không chắc chắn, bank là `UNKNOWN`: không cố restore bằng lệnh mới, không retry hoặc replay firmware. Không có đọc I²C khi URB đang chờ. `report.json` lưu raw registers, sync trước/sau, thời gian, intent/dispatch/completion và kết quả restore; các stage snapshots/audits nằm trong session-private. Helper xuất report và EP0 đã hash sau terminal/drain, ngoài Git. Kiểm phần mềm không thay thế phép đo trên tuner; kết quả mới nhất ở [TEST-MATRIX.md](docs/project/TEST-MATRIX.md).
+
 # Download
 
 * [Download DVB-T Driver on Google Play](https://play.google.com/store/apps/details?id=info.martinmarinov.dvbdriver)
