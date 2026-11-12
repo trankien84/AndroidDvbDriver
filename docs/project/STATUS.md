@@ -1,5 +1,60 @@
 # Port TBS5530 sang Android — trạng thái hiện tại
 
+## 2026-11-11, phiên 22:18 — Recovery đã áp dụng; B1 MANUAL0 khóa K36 nhưng vẫn -75, chưa có TS
+
+**Đã chạy đúng phép thử MANUAL PLP0 trên Samsung; Android vẫn nhận thành công 0 byte EP82.** Có khóa K36/sync `0x26`, nhưng cả 8 URB native 4096 byte đều status `-75`/actual=0. Vì vậy MANUAL0 đơn lẻ không đủ trong điều kiện đã thử; chưa xác định root cause hoặc loại mọi vấn đề PLP. Giữ Phase 3.1/ROOT_CAUSE_UNRESOLVED/TS_SMOKE_PASS=false.
+
+- **Recovery hoàn tất:** Sau phê duyệt riêng từng exact build/helper/plan, ledger 7→9 records, 581→747 byte, prefix cũ giữ nguyên và journal no-backup consumed bền. Không được chạy lại recovery plan. User duyệt dùng ledger đã đối soát + hash fence làm witness từ đây, full history trước witness vẫn UNKNOWN.
+- **B1 thực:** Một original firmware bootstrap đủ 132 controls/8192 image byte trong 3545 ms. Sau natural re-enumeration, operational-only được duyệt tiếp với cùng epoch, không FirmwarePath/0 A0. MANUAL0 bank23 AF00/AD01, drive 54/54, stream 8A0A00, 191 full-length EP0 controls; alt0/readback OFF. Actual PLP/L1 vẫn UNKNOWN.
+- **Transport/cleanup:** 8 SUBMIT/8 REAP, syscall=0/errno=0 nhưng 8×URB -75/actual=0, payload rỗng. Terminal REPORT/USB_RECEIVE_FAILURE, DRAIN_CONFIRMED, outstanding=0/quarantine=false và app USB fd=0. Thu/hash 20 files operational. User đã rút tuner sau drain; ADB sau rút không còn device nên không khẳng định hậu kiểm host-empty mới.
+- **History cuối:** Owned bootstrap append hợp lệ thành 12 records/996 byte, prefix 747 giữ nguyên, app/host SHA `b6b5935a2af02fd125565ed24694d4fc4a0cb2616c8445aeaecae94cb829e7fb`. Không reset/rearm/retry firmware. APK thực SHA `f848e12c286aa40e7a0ff413f24df20aba63908a938d3162205e6da2aa727d71`; source/main production giữ baseline, coordinator chỉ debug.
+
+**Giới hạn bước tiếp:** Không lặp MANUAL0 hoặc chuyển tổ hợp/DRIVE55/B7/040x/custom firmware/VM tự động. Gate C và E vẫn cần nguồn/safety đúng chip/board, không dùng quyền B1 để vượt. Điểm cuối đã chứng minh tốt là frontend lock/TS config; ranh giới chưa quan sát là TS pins/board→FX2 FIFO→first USB completion. Bundle `phase31-recovery-coordinator-20261111-222119-cd9dcedf` dưới D:\TSDuck\reports có `b1-manual0-result.md`, raw/hash pointers và decision tree; xem [TEST-MATRIX.md](TEST-MATRIX.md), [RESEARCH.md](RESEARCH.md), ADR-046 ở [DECISIONS.md](DECISIONS.md). Không stage/commit/push.
+
+## 2026-11-11 — Đã triển khai recovery core và hash fence; chỉ kiểm offline/emulator, chưa đổi tablet
+
+**Đã hoàn tất phần lõi theo quyết định thiết kế offline; chưa áp dụng candidate và B1 vẫn NOT_RUN.** User duyệt `implement_guarded_recovery_offline`, không duyệt ghi Samsung hoặc tuner. Source debug mới chỉ cho append đúng hai deny records theo exact plan, không bỏ entry cũ; lỗi sau write giữ COMMIT_UNKNOWN và cấm retry/rollback. Adapter mở file có sẵn O_APPEND|O_NOFOLLOW rồi sync, không tạo store rỗng hoặc có exported apply Activity.
+
+- B1 nay bắt buộc hash ledger được host pin trong challenge/grant/helper. Trong phiên, history mismatch bị giữ thành lỗi không thể tự rearm dù bytes cũ trở lại; chỉ advance sau consume append-only của owner. Helper giữ EP0 evidence sau drain trước khi từ chối mismatch và ghi witness ngoài app, không tự duyệt hash cuối cho run sau.
+- Kiểm mới PASS: Node 29/29; driver JVM 456/456; app JVM 74/74; emulator 24/24 gồm grant/fence và append/fsync bằng fixture cache riêng. Debug/release/lint/AndroidTest compile PASS; release không có classes recovery/fence. Giữ một legacy eligible failure ở cold emulator đầu, targeted và full sau PASS, không nới heartbeat hoặc xác nhận nguyên nhân timing.
+- Samsung hậu kiểm chỉ đọc 22:07 giữ ledger 7 dòng/hash e398459c... và APK cũ/hash bbbf25cc... nguyên trạng, current USB host rỗng. APK mới chỉ ở build/emulator, SHA `5cb28185685b991bce689ff6068c6e7d8186ac79c5b059226ad53155a682da1c`; helper mới SHA `63f096c20d8ad886510c3dc194d510b9bef03212ae1d2590e158e68b7b691c07`. Card/hash B1 cũ không còn đủ để chạy build mới.
+
+**Còn chặn trước apply:** Chưa có caller UI/grant/journal dùng một lần và host coordinator được rà; chưa kiểm power-failure hoặc hash-guard latency trên Samsung. Không tuyên bố live-ready hoặc full-history restore. Cần hoàn thiện/rà đường điều phối này, freeze đúng hashes rồi xin quyền ghi app riêng; không dùng candidate 9 dòng tự mở B1. Kế hoạch và báo cáo `guarded-implementation.md` trong bundle `phase31-history-recovery-20261111-210818-73007003` dưới D:\TSDuck\reports. Giữ Phase 3.1/ROOT_CAUSE_UNRESOLVED/TS_SMOKE_PASS=false; không stage/commit/push.
+
+## 2026-11-11 21:05 — Đã kiểm backup và chuẩn bị recovery chỉ bổ sung khóa chặn; chưa ghi app
+
+**Không tìm được ledger đầy đủ mới hơn; B1 vẫn chưa chạy.** Đã kiểm 3.203 tệp text, 313 mục text trong 5 ZIP và các bản `.bak`/`.new` chính xác trên Samsung. Chỉ còn ledger 7 dòng đã biết; file phụ đều không có. Samsung SM-X926B/API36, boot 47, current USB host rỗng; lượt này chỉ đọc/hash/backup, không mở app, cài/gỡ hoặc I/O tuner.
+
+- Thêm [công cụ recovery offline](../../tools/diagnostics/README.md) tạo candidate **deny-only**, nghĩa là chỉ bổ sung khóa cấm cho epoch đã nạp được bằng chứng xác nhận. Giữ nguyên 581 byte/7 dòng cũ, thêm hai khóa Sony/lifecycle ngày 10/11 thành 747 byte/9 dòng; không dựng attachmentKey thiếu hoặc nhận là full restore.
+- 8 tests recovery và 21 decoder regressions PASS; proposal trên raw thật PASS, CLI từ chối overwrite đúng exit 2. Runtime, APK, helper và plan B1 đã khóa từ trước không đổi; không chạy lại Gradle hoặc Android instrumentation.
+- Candidate chưa áp dụng: `appWriteAuthorized=false`, `liveGateBlocked=true`. Cần phê duyệt riêng exact baseline/candidate hashes và đường ghi durable trước bất kỳ append nào trên app. Không reset, rearm, copy đè hoặc tự rollback về bản 7 dòng; B1 tiếp tục `NOT_RUN_HISTORY_CONTINUITY_UNPROVEN`.
+
+Kế hoạch đầy đủ và hashes nằm trong `D:\TSDuck\reports\phase31-history-recovery-20261111-210818-73007003\recovery-plan.md`; candidate/raw riêng dưới logs cùng run ID. Main manifest cho phép backup là source fact, chưa chứng minh backup/restore hoặc runner gây mất keys. Giữ Phase 3.1/ROOT_CAUSE_UNRESOLVED/TS_SMOKE_PASS=false. Bước kế tiếp là duyệt kế hoạch recovery có giới hạn, không phải cắm tuner hoặc chạy B1 ngay.
+
+## 2026-11-11 — Samsung preflight PASS; B1 bị chặn vì lịch sử consumed chưa đầy đủ
+
+**Chưa chạy B1 hoặc nhận byte EP82 mới.** Samsung SM-X926B/API36, boot 47 đã PASS 5/5 lifecycle; helper control-plane kết thúc sạch với firmware/native URB null và NO_RESOURCES_ACQUIRED. Người dùng đã duyệt một B1 có điều kiện, nhưng điều kiện bảo toàn lịch sử chưa đạt nên chưa phát grant hardware. Giữ Phase 3.1/ROOT_CAUSE_UNRESOLVED/TS_SMOKE_PASS=false.
+
+- Ledger Samsung hiện có 7 entries/581 byte, đúng format và marker initialized; đã backup chỉ đọc, remote/local hash khớp. Hai epoch continuation ngày 09/11 MATCH dòng 4/6, nhưng expected epoch của Sony và lifecycle ngày 10/11 ABSENT. Chưa chứng minh history đầy đủ hoặc nguyên nhân thiếu; không tạo lại/restore/rearm hay dùng epoch mới để vượt gate.
+- Runner instrumentation đầu làm APK không còn cài sau test; đã báo người dùng và được duyệt cài lại đúng APK, chạy giữ-app. Lượt sau lifecycle vẫn PASS 5/5, APK giữ lại và hash đúng. Không suy data loss từ APK vắng; chưa có snapshot ledger trước test để quy nguyên nhân thiếu keys cho runner/reinstall.
+- Các kiểm phần mềm/offline và code MANUAL0 ở checkpoint trước vẫn hợp lệ. DRIVE55 và custom FX2 firmware vẫn BLOCKED_FOR_SAFETY. Không tuner/firmware/tune/Bulk mới, không đổi source/hashes hoặc consumed stores sau preflight.
+
+**Bước tiếp:** Giữ tuner rút và dữ liệu app nguyên trạng; cần bản ledger đầy đủ có provenance/checksum hoặc kế hoạch recovery riêng được rà và phê duyệt. Không chạy lại firmware/B1 chỉ vì đã có grant có điều kiện. Report `b1-safety-blocker.md`, `attachment-history-continuity.md`, summaries preflight và backup pointers nằm trong bundle `phase31-android-first-20261111-172352-0a98eee3` dưới D:\TSDuck\reports; raw riêng dưới logs cùng run ID. Không stage/commit/push.
+
+## 2026-11-11 — Ưu tiên Android; MANUAL0 đã sẵn sàng ở mức phần mềm, chưa chạy tuner
+
+**Đã hoàn tất phần offline và triển khai phép thử chỉ đổi PLP; chưa có byte EP82 mới trên Android.** Giữ Phase 3.1, `ROOT_CAUSE_UNRESOLVED` và `TS_SMOKE_PASS=false`. Android là đường chính; Windows BDA nhận TS là đối chứng. Không cần làm Linux M nhận TS trước khi tiếp tục Android.
+
+- **A / D — OFFLINE-TESTED:** Kiểm 119 inputs, 74 khớp hash lịch sử và 45 tự hash chưa có anchor cũ, không mismatch; 60 tests offline PASS. Thu hẹp khác ảnh firmware, descriptor và tuner init/tune BDA–VM, không chứng minh board/FIFO/USB PHY. Hash BDA trong prompt thiếu sáu ký tự; raw đúng được ghi ở RESEARCH.
+- **B — MANUAL0 phần mềm PASS, live NOT_RUN:** Thêm `MANUAL_PLP0_K36` debug-only/default OFF, dùng API MANUAL có sẵn; chỉ thêm bank23/AF=00 và đổi AD=01. Giữ drive 54/54, native 8×4096, stream timing và limits. Challenge/grant khóa experiment, golden và APK SHA; helper bắt buộc hash đã kiểm, không ghép alt0/readback/8192 hoặc PLP tùy ý.
+- **C — BLOCKED_FOR_SAFETY:** Có proposal offline chỉ đổi bank 00/96/97 thành 55/55 tại initialize; không có option live. TBS/community/Go có writes 54/54, nhưng CoreELEC init không có khối drive này. Chưa đủ exact CXD6802 pin/board mapping để chứng nhận hai bit đổi; không suy an toàn hoặc nguyên nhân từ Windows 55/55.
+- **E — Công cụ host PASS; firmware/live BLOCKED:** Generator/verifier pattern 512 byte, sequence và CRC chỉ offline, 30 tests PASS; FX2 regression 51 PASS/13 SKIP. Không viết/nạp firmware tùy biến, không A0/GPIO/LNB mới.
+- **Kiểm phần mềm:** 449 driver + 74 app unit PASS, 21 app + 13 driver instrumentation dùng USB giả PASS; native C fault injection 8×4096/8192 PASS, debug/release/lint PASS, release không có diagnostic classes, minSdk 21 giữ nguyên, bốn ABI có trong APK và LOAD alignment 64-bit=0x4000. Bốn activity lifecycle tests FAIL trên emulator không thuộc host allowlist; giữ failure, không nới guard. ASan NOT_RUN.
+
+**Bước an toàn duy nhất tiếp theo:** Người dùng kết nối Samsung SM-X926B/API36 qua ADB, giữ tuner rút, để chạy lifecycle/control-plane trước. Chỉ nếu PASS mới xin/xác nhận đúng card B1, fresh physical epoch và OS permission rồi thực hiện một run bounded; chưa có grant live trong lượt này. Không replay B7/040x/double A0, chạy DRIVE55 hoặc lặp VM. Emulator tạm đã dừng; không có tuner run cần drain mới.
+
+Branch/HEAD nền xác minh: `chore/modernize-android-build` / `8abf57c32bd75cf03508f6db62e03a0825e67868`; các edits chưa commit, không stage/push/sync references. Bundle ngoài Git: `D:\TSDuck\reports\phase31-android-first-20261111-172352-0a98eee3`, có overview, experiment card, evidence/source manifests và handoff. Xem [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md), ADR-042 ở [DECISIONS.md](DECISIONS.md).
+
 ## 2026-11-11, phiên 10:11 — Đã đối chiếu offline BDA/VM; phát hiện yếu tố gây nhiễu từ RSSI
 
 **Không thấy khác ảnh firmware, descriptor operational hoặc chuỗi init/tune tuner; chưa có byte sửa Android đủ căn cứ.** Khác biệt mới: phép đo cường độ tín hiệu RSSI của VM còn ghi tuner, chạy năm lượt trước Bulk đầu và một lượt ngang lúc host báo BABBLE. Đây là yếu tố cần cô lập, chưa phải nguyên nhân gốc.

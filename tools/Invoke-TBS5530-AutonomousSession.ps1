@@ -19,6 +19,10 @@ param(
     [switch]$ControlMirror,
     [switch]$ExplicitSetInterfaceAlt0,
     [switch]$SonyTsOutputReadback,
+    [ValidateSet('BASELINE_AUTO', 'MANUAL_PLP0_K36')][string]$FrontendExperiment = 'BASELINE_AUTO',
+    [ValidatePattern('^[a-f0-9]{64}$')][string]$ExpectedFrontendGoldenSha256,
+    [ValidatePattern('^[a-f0-9]{64}$')][string]$ExpectedAppApkSha256,
+    [ValidatePattern('^[a-f0-9]{64}$')][string]$ExpectedAttachmentHistorySha256,
     [switch]$ControlPlaneOnly,
     [string]$AndroidCliPath,
     [string]$OutputDirectory = 'D:\TSDuck\logs'
@@ -26,6 +30,12 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if (-not $GrantBoundedSession -or -not $ProofOfGuardPassed) { throw 'BLOCKED: cần quyền phiên bounded và kết quả proof-of-guard trước khi chạy thật.' }
+if ($FrontendExperiment -ceq 'MANUAL_PLP0_K36' -and ($Profile -cne 'EXPERIMENTAL_DIAGNOSTIC' -or
+    $ReadApi -cne 'NATIVE_USBFS_URB_8X4096' -or -not $ControlMirror -or $ExplicitSetInterfaceAlt0 -or
+    $SonyTsOutputReadback -or $ControlPlaneOnly -or -not $ExpectedFrontendGoldenSha256 -or -not $ExpectedAppApkSha256 -or
+    -not $ExpectedAttachmentHistorySha256)) {
+    throw 'BLOCKED: MANUAL_PLP0_K36 cần native4096/experimental/mirror/hash đã kiểm, không ghép phép thử khác.'
+}
 if ($SonyTsOutputReadback -and ($Profile -cne 'EXPERIMENTAL_DIAGNOSTIC' -or $ReadApi -cne 'NATIVE_USBFS_URB_8X4096' -or
     $ExplicitSetInterfaceAlt0 -or $ControlPlaneOnly -or -not $ControlMirror)) {
     throw 'BLOCKED: SONY_TS_OUTPUT_READBACK cần native4096/experimental/mirror, không ghép alt0 hoặc control-plane-only.'
@@ -391,6 +401,7 @@ $launch = @('shell', 'am', 'start', '--activity-clear-top', '--activity-single-t
 if ($ControlMirror) { $launch += @('--ez', 'control_mirror', 'true') }
 if ($ExplicitSetInterfaceAlt0) { $launch += @('--ez', 'explicit_set_interface_alt0', 'true') }
 if ($SonyTsOutputReadback) { $launch += @('--ez','sony_ts_output_readback','true') }
+$launch += @('--es', 'frontend_experiment', $FrontendExperiment)
 $launchResult = Invoke-PinnedAdb $launch -Operation SESSION_LAUNCH
 $launchEvidence = Join-Path $OutputDirectory ('phase31-launch-' + $launchToken + '.txt')
 if (Test-Path -LiteralPath $launchEvidence) { throw 'Không ghi đè evidence đã có.' }
@@ -414,6 +425,10 @@ if (-not (Test-TBS5530LaunchChallenge $challenge $launchToken ([bool]$ControlPla
     $challenge.host_profile -cne $expectedHostProfile -or
     $challenge.vid -ne 29516 -or $challenge.pid -ne 21808 -or $challenge.firmware_sha256 -cne $firmwareSha -or
     $challenge.firmware_protocol -cne 'TBS_SOURCE_DUAL_RESET' -or $challenge.ts_variant -cne $ReadApi -or
+    $challenge.frontend_experiment -cne $FrontendExperiment -or
+    ($ExpectedFrontendGoldenSha256 -and $challenge.golden_sha256 -cne $ExpectedFrontendGoldenSha256) -or
+    ($ExpectedAppApkSha256 -and $challenge.app_apk_sha256 -cne $ExpectedAppApkSha256) -or
+    ($ExpectedAttachmentHistorySha256 -and $challenge.attachment_history_sha256 -cne $ExpectedAttachmentHistorySha256) -or
     $challenge.control_mirror -ne [bool]$ControlMirror -or
     $challenge.explicit_set_interface_alt0 -isnot [bool] -or $challenge.explicit_set_interface_alt0 -ne [bool]$ExplicitSetInterfaceAlt0 -or
     $challenge.sony_ts_output_readback -isnot [bool] -or $challenge.sony_ts_output_readback -ne [bool]$SonyTsOutputReadback -or
@@ -424,6 +439,11 @@ if ($SonyTsOutputReadback) {
         '|bankProvenance=PLAN_INFERRED|snapshot=NONATOMIC|read81=SOURCE_SERIAL_RMW_NOT_PARALLEL_PROOF' +
         '|source=TBS:2ce787de9f6e81b4294692a45de15596ae2e1322,CoreELEC:072f8e99e0ac66d88d7278784e922e08e8253210,Community:c5fa27eecbe80633cbb365cc44656daea1c0e2e3'
     if ($challenge.sony_readback_layout -cne $layout) { throw 'BLOCKED: Sony readback layout không khớp source/allowlist đã duyệt.' }
+}
+if ($FrontendExperiment -ceq 'MANUAL_PLP0_K36') {
+    $observedHistory = Get-TBS5530Sha256Token (Invoke-PinnedAdb @('shell', 'run-as', $package, 'sha256sum',
+        'files/autonomous-v1-samsung-sm-x926b-api36-attachments.txt') -Operation HISTORY_FENCE_HASH)
+    if ($observedHistory -cne $ExpectedAttachmentHistorySha256) { throw 'BLOCKED: history thực tế không khớp hash ngoài app đã duyệt.' }
 }
 $directory = 'files/autonomous-v1-' + $challenge.session
 if ($FirmwarePath) {
@@ -440,6 +460,7 @@ $expiry = [Math]::Min([long]$challenge.created_elapsed_ms + 300000, $now + $Dura
 $grant = @{}
 $challenge.PSObject.Properties | ForEach-Object { $grant[$_.Name] = $_.Value }
 $grant.profile = $Profile; $grant.bounded_user_authorization = $true; $grant.rf_in_confirmed = -not $ControlPlaneOnly
+$grant.host_script_sha256 = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $grant.expires_elapsed_ms = $expiry
 if ($PhysicalRecoveryEpoch) {
     $grant.physical_recovery_epoch = $PhysicalRecoveryEpoch
@@ -491,6 +512,7 @@ try {
     }
 }
 if ($null -eq $terminalReport) { throw 'FAIL-STOP: deadline hoặc kết thúc không có terminal report đã xác minh.' }
+if ($terminalReport.frontend_experiment -cne $FrontendExperiment) { throw 'FAIL-STOP: report không khớp frontend experiment đã cấp quyền.' }
 if ($terminalReport.launch_token -cne $launchToken -or $terminalReport.control_plane_only -isnot [bool] -or
     $terminalReport.control_plane_only -ne [bool]$ControlPlaneOnly) { throw 'FAIL-STOP: terminal report không khớp launch hiện hành.' }
 if ($ControlPlaneOnly) {
@@ -526,5 +548,18 @@ if ($ControlMirror -and (Test-TBS5530DrainedTerminal $terminalReport)) {
     @{ run_id=$challenge.session; layer='ANDROID_APP_OBSERVED'; sha256=$hash; bytes=(Get-Item -LiteralPath $trace).Length;
         records=$terminalReport.control_mirror_records; cleanup=$terminalReport.cleanup; read_api=$ReadApi } |
         ConvertTo-Json | Set-Content -LiteralPath (Join-Path $local 'manifest.json') -Encoding utf8
+}
+if ($FrontendExperiment -ceq 'MANUAL_PLP0_K36') {
+    if (-not (Test-TBS5530DrainedTerminal $terminalReport)) { throw 'FAIL-STOP: không đọc history trước drain.' }
+    $observedHistory = Get-TBS5530Sha256Token (Invoke-PinnedAdb @('shell', 'run-as', $package, 'sha256sum',
+        'files/autonomous-v1-samsung-sm-x926b-api36-attachments.txt') -Operation HISTORY_FENCE_HASH)
+    $evidence = Join-Path $OutputDirectory ('phase31-history-fence-' + $challenge.session + '.json')
+    if (Test-Path -LiteralPath $evidence) { throw 'Không ghi đè evidence đã có.' }
+    $historyMatches = $terminalReport.attachment_history_sha256 -ceq $observedHistory
+    @{ baseline_sha256=$ExpectedAttachmentHistorySha256; final_sha256=$observedHistory; session=$challenge.session;
+        expected_final_sha256=$terminalReport.attachment_history_sha256; verified=$historyMatches;
+        cleanup=$terminalReport.cleanup; source='HOST_READ_AFTER_DRAIN_NOT_AUTOMATIC_APPROVAL_FOR_NEXT_RUN' } |
+        ConvertTo-Json | Set-Content -LiteralPath $evidence -Encoding utf8
+    if (-not $historyMatches) { throw 'FAIL-STOP: history sau run không khớp fence của app; evidence đã giữ.' }
 }
 exit $exitCode

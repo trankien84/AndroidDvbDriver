@@ -19,17 +19,27 @@ public final class Tbs5530AutonomousPlans {
         Tbs5530Frontend.Operation.PROBE, Tbs5530Frontend.Operation.INITIALIZE,
         Tbs5530Frontend.Operation.TUNE, Tbs5530Frontend.Operation.POLL_STATUS
     };
+    private static final String MANUAL_PLP0_TUNE = "cd0b9eb33bd972db4d4dc37fbeae8ee7465b3402a86b5de36f9f0a289eff9b66";
     private final Map<Tbs5530Frontend.Operation, String> hashes;
+    private final Tbs5530FrontendExperiment experiment;
     public Tbs5530AutonomousPlans() throws IOException {
-        hashes = dryRun();
-        for (int i = 0; i < OPERATIONS.length; i++) if (!PINNED[i].equals(hashes.get(OPERATIONS[i])))
-            throw new IOException("Golden dry-run mismatch: " + OPERATIONS[i]);
+        this(Tbs5530FrontendExperiment.BASELINE_AUTO);
     }
+    public Tbs5530AutonomousPlans(Tbs5530FrontendExperiment experiment) throws IOException {
+        if (experiment == null) throw new IOException("Explicit frontend experiment required");
+        this.experiment = experiment;
+        hashes = dryRun(experiment);
+        for (int i = 0; i < OPERATIONS.length; i++) {
+            String expected = experiment == Tbs5530FrontendExperiment.MANUAL_PLP0_K36 && OPERATIONS[i] == Tbs5530Frontend.Operation.TUNE
+                    ? MANUAL_PLP0_TUNE : PINNED[i];
+            if (!expected.equals(hashes.get(OPERATIONS[i]))) throw new IOException("Golden dry-run mismatch: " + OPERATIONS[i]);
+        }
+    }
+    public String fingerprint() { return hash(hashes.toString()); }
     public void require(Tbs5530Frontend.Plan plan) throws IOException {
         if (plan == null || !canonical(plan).equals(hashes.get(plan.operation))) throw new IOException("Plan is not allowlisted");
-        if (plan.operation == Tbs5530Frontend.Operation.TUNE && (plan.tuneParameters.frequencyHz != 594000000L
-                || plan.tuneParameters.bandwidthHz != 8000000
-                || plan.tuneParameters.selection.mode != Tbs5530DvbT2TuneParameters.Mode.AUTO)) throw new IOException("Only K36 AUTO allowed");
+        if (plan.operation == Tbs5530Frontend.Operation.TUNE && !experiment.matches(plan.tuneParameters))
+            throw new IOException("Tune differs from the exact frontend experiment");
     }
     public static boolean nativeUrb(Tbs5530TsSmoke.ReadApi api) {
         return api == Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096 || api == Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X8192;
@@ -60,6 +70,16 @@ public final class Tbs5530AutonomousPlans {
         return hash(normalized.append(transcript.substring(end)).toString());
     }
     public static Map<Tbs5530Frontend.Operation, String> dryRun() throws IOException {
+        return dryRun(Tbs5530FrontendExperiment.BASELINE_AUTO);
+    }
+    public static Map<Tbs5530Frontend.Operation, String> dryRun(Tbs5530FrontendExperiment experiment) throws IOException {
+        Map<Tbs5530Frontend.Operation, String> result = new LinkedHashMap<>();
+        for (Tbs5530Frontend.Plan plan : dryRunPlans(experiment).values()) result.put(plan.operation, canonical(plan));
+        return result;
+    }
+    /** Immutable approval programs for offline review; the only transport here is the fake below. */
+    public static Map<Tbs5530Frontend.Operation, Tbs5530Frontend.Plan> dryRunPlans(Tbs5530FrontendExperiment experiment) throws IOException {
+        if (experiment == null) throw new IOException("Explicit frontend experiment required");
         Tbs5530Session session = new Tbs5530Session();
         long token = session.requestPermission(); session.permissionResult(token, true);
         session.connected(token, new Tbs5530Session.Resources() {
@@ -80,15 +100,14 @@ public final class Tbs5530AutonomousPlans {
                     public long elapsedRealtimeMillis() { return now[0]; }
                     public void delayMillis(long millis) { now[0] += millis; }
                 });
-        Map<Tbs5530Frontend.Operation, String> result = new LinkedHashMap<>();
+        Map<Tbs5530Frontend.Operation, Tbs5530Frontend.Plan> result = new LinkedHashMap<>();
         try {
-            Tbs5530Frontend.Plan probe = frontend.planProbe(); result.put(probe.operation, canonical(probe)); frontend.execute(probe);
-            Tbs5530Frontend.Plan init = frontend.planInitialize(); result.put(init.operation, canonical(init)); frontend.execute(init);
+            Tbs5530Frontend.Plan probe = frontend.planProbe(); result.put(probe.operation, probe); frontend.execute(probe);
+            Tbs5530Frontend.Plan init = frontend.planInitialize(); result.put(init.operation, init); frontend.execute(init);
             frontend.readyForTune();
-            Tbs5530Frontend.Plan tune = frontend.planTune(new Tbs5530DvbT2TuneParameters(594000000L, 8000000,
-                    Tbs5530DvbT2TuneParameters.Selection.automatic()), true);
-            result.put(tune.operation, canonical(tune)); frontend.execute(tune);
-            Tbs5530Frontend.Plan status = frontend.planPollStatus(3); result.put(status.operation, canonical(status));
+            Tbs5530Frontend.Plan tune = frontend.planTune(experiment.parameters(), experiment == Tbs5530FrontendExperiment.BASELINE_AUTO);
+            result.put(tune.operation, tune); frontend.execute(tune);
+            Tbs5530Frontend.Plan status = frontend.planPollStatus(3); result.put(status.operation, status);
             if (!frontend.execute(status).status.locked) throw new IOException("Fake golden path did not lock");
             return result;
         } finally { session.close(); }

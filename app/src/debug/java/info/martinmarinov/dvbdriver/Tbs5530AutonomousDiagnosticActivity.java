@@ -109,7 +109,7 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
         session = new Tbs5530AutonomousSession(this, intent.getStringExtra("read_api"),
                 intent.getBooleanExtra("control_mirror", false), intent.getBooleanExtra("explicit_set_interface_alt0", false),
                 token, intent.getBooleanExtra(Tbs5530AutonomousLaunch.CONTROL_ONLY, false),
-                intent.getBooleanExtra("sony_ts_output_readback",false));
+                intent.getBooleanExtra("sony_ts_output_readback",false), intent.getStringExtra("frontend_experiment"));
         setIntent(new Intent(intent));
         if (foreground) { session.policy.foreground(true); ui.post(tick); }
     }
@@ -382,10 +382,13 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
                 execute(probe, probe.planProbe());
                 session.policy.transition(Tbs5530AutonomousPolicy.State.FRONTEND_INIT);
                 execute(probe, probe.planInitialize()); probe.readyForTune();
-                execute(probe, probe.planExperimentalAutoTune(new Tbs5530DvbT2TuneParameters(594000000L, 8000000,
-                        Tbs5530DvbT2TuneParameters.Selection.automatic())));
+                Tbs5530DvbT2TuneParameters tune = session.frontendExperiment.parameters();
+                execute(probe, session.frontendExperiment == Tbs5530FrontendExperiment.BASELINE_AUTO
+                        ? probe.planExperimentalAutoTune(tune) : probe.planTune(tune));
                 Tbs5530Frontend.Result lock = execute(probe, probe.planPollStatus(3));
-                if (lock.status == null || !lock.status.locked) throw new IOException("No confirmed lock");
+                if (lock.status == null || !lock.status.locked) throw new IOException(
+                        session.frontendExperiment == Tbs5530FrontendExperiment.MANUAL_PLP0_K36
+                                ? "PLP_MANUAL0_NO_LOCK" : "No confirmed lock");
                 session.policy.transition(Tbs5530AutonomousPolicy.State.LOCK_CONFIRMED);
                 if(session.sonyTsOutputReadback) {
                     sonyReadback=probe.sonyOutputReadback(session.sonyAuthorization(),SystemClock::elapsedRealtimeNanos);

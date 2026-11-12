@@ -1,5 +1,128 @@
 # TBS5530 test matrix
 
+## 2026-11-11, phiên 22:18 — Recovery apply PASS; B1 MANUAL0 TS FAIL với cleanup PASS
+
+| Kiểm mới | Kết quả | Bằng chứng / giới hạn |
+| --- | --- | --- |
+| Host recovery guards cuối | PASS 37 | Exact grant/hash, clock shellUID, no-overwrite/no hardware, launch correlation |
+| Emulator coordinator/journal/file/fence | PASS 11/11 | Gồm terminal refusal→fresh token→duplicate-token gate; synthetic cache/no production store |
+| App JVM/build/lint/release | PASS 74 và build gates | Wrapper offline, không nâng toolchain; release không recovery Activity/Permit/Journal |
+| Recovery attempt 1 | REFUSED_BEFORE_APPEND | Heartbeat 0 do appUID uptime denied; consumed=false/ledger unchanged; sửa helper, duyệt hash mới |
+| Recovery attempt 2 | REFUSED_PRE_GRANT | Challenge cũ do Activity reuse; journal chưa consumed, không append; sửa lifecycle và duyệt exact build |
+| Recovery callback-fixed | PASS thực trên Samsung | 7→9 records, 581→747 byte, prefix 581 byte-exact, candidate SHA fe9ab4fc..., journal consumed verified; không full-history proof |
+| B1 no-I/O permission timeout | NOT_RUN tuner stage | Terminal riêng/drain confirmed, EP0=0/firmware=null/native=null; không coi là MANUAL0 failure |
+| Permission-only OS preflight | PASS thực | User bỏ Always/chọn OK, app GRANTED/OS_PERMISSION_VERIFIED trước I/O; không secure dialog bypass |
+| B1 bootstrap | PASS firmware transfer | Một upload 132 full-length controls, image 8192/payload 8196, 3545 ms; natural re-enumeration, không double A0 |
+| B1 operational handoff | PASS điều kiện/NO_A0 | User duyệt cùng epoch/permission mới, không FirmwarePath/0 A0, fresh owner/High-Speed/maxpacket 512 |
+| B1 MANUAL0 tune/lock | PASS lock, actual PLP UNKNOWN | Bank23 AF00/AD01, sync 26, drive 54/54; không readback PLP/L1 hoặc TS pin proof |
+| B1 EP0 plan | PASS 191/191 | Controls full-length, một stream 8A0A00; AUTO lịch sử 190, alt0/readback OFF |
+| B1 Bulk/TS | FAIL dữ liệu, completion biết rõ | 8×4096 SUBMIT/REAP, syscall=0/errno=0 nhưng 8×status -75/actual=0; payload 0, TS_SMOKE_PASS=false |
+| B1 cleanup | PASS | REPORT/USB_RECEIVE_FAILURE, DRAIN_CONFIRMED, outstanding=0/quarantine=false, app USB fd=0 |
+| Evidence integrity | PASS 20 files | Hash Android/host operational/native khớp; bootstrap raw hash và machine assertions riêng |
+| History hậu bootstrap | PASS append-only | 9→12/747→996 byte, prefix 747 nguyên, witness SHA b6b5935a... app/host match |
+| Physical removal | USER_CONFIRMED sau drain | ADB devices 0 sau rút; không ghi fresh host-empty PASS |
+| DRIVE55/custom firmware/VM mới | NOT_RUN / safety BLOCKED | Không dùng quyền B1 để mở nhánh khác; root cause unresolved |
+
+Raw/hashes/full commands ở bundle `phase31-recovery-coordinator-20261111-222119-cd9dcedf` trong D:\TSDuck\reports/logs. Không ghép clock Java elapsedRealtime với native monotonic, không dùng zero actual thành zero wire bytes. Manual0 đơn lẻ không đủ; không sửa các kết quả lịch sử bên dưới.
+
+## 2026-11-11 — Recovery/fence build cuối, không ghi tablet
+
+| Kiểm mới trên source recovery/fence | Kết quả | Giới hạn |
+| --- | --- | --- |
+| Node recovery + decoder | PASS 29/29 | Tạo proposal và refusal overwrite; không app I/O |
+| Driver JVM TBS5530 | PASS 456/456 | Gồm 7 recovery/fence cases, real candidate fixture và các regression cũ; không skip |
+| App JVM TBS5530 | PASS 74/74 | Guard/lifecycle regression thuần JVM |
+| Emulator final latch build | PASS 24/24 | 3 experiment/fence grants + 19 legacy grants + 2 file append/fsync tests; store/cache synthetic |
+| Cold emulator suite đầu | FAIL 1/22, giữ lịch sử | Legacy eligible assertion; targeted 4 và full 22 rồi final 24 PASS, không nới heartbeat, cause UNKNOWN |
+| Helper frontend/history | PASS 23 checks | Missing hash trước ADB, host witness/grant checks, EP0 export trước final mismatch refusal |
+| Helper legacy/launch | PASS suite và 57 checks | Offline child process theo quyền có trước, không live helper |
+| Build debug/release/AndroidTest/lint | PASS | Wrapper offline/toolchain cũ; recovery source/debug-only |
+| Release class isolation | PASS | apkanalyzer không thấy HistoryRecovery/HistoryFence/FrontendExperiment/AutonomousSession |
+| Samsung hậu kiểm 22:07 | PASS chỉ đọc | APK cũ/hash bbbf25cc..., history cũ e398459c..., host USB rỗng, không new APK install/apply |
+| Apply coordinator/UI/journal | NOT_IMPLEMENTED_LIVE | Core callback không thay thế caller/grant/journal production; cần rà riêng trước apply |
+| Power failure / Samsung write / B1 | NOT_RUN | Không quyền ghi tablet hoặc tuner; TS_SMOKE_PASS=false |
+
+Logs/fixtures/hashes mới trong bundle `phase31-history-recovery-20261111-210818-73007003`. Build cuối source main không đổi; APK/helper debug mới cần freeze và phê duyệt khác card B1 trước. Không suy tests giả thành hardware hoặc full-history PASS.
+
+## 2026-11-11 21:05 — Recovery offline và kiểm tablet chỉ đọc
+
+| Phép kiểm mới | Kết quả | Giới hạn |
+| --- | --- | --- |
+| Tìm nội dung local ledger | PASS thực thi | 3.203 text files, chỉ backup 7 dòng đã biết; không chứng nhận mọi nơi trên máy |
+| ZIP text search | PASS thực thi | 313 text entries trong 5 ZIP, không full/embedded ledger mới, không giải nén hoặc sửa raw |
+| Samsung read-only inventory | PASS | SM-X926B/API36/boot 47, host rỗng; base 581 byte, marker initialized; `.bak`/`.new`/marker `.bak` ABSENT |
+| Ledger export integrity | PASS | Remote/local SHA khớp baseline e398459c..., không app launch/write hoặc restore |
+| Recovery unit tests | PASS 8/8 | Prefix byte-exact, deny-set monotonic, malformed/hash/epoch/host/native counters, duplicate evidence |
+| Decoder regression | PASS 21/21 | Cùng runner Node, tổng 29 PASS/0 FAIL/0 SKIP |
+| Real-evidence candidate | PASS offline / NOT_APPLIED | 7→9 records, 581→747 byte, SHA fe9ab4fc...; liveGateBlocked=true |
+| CLI output tồn tại | PASS refusal / exit 2 | Không overwrite candidate hoặc tái sử dụng directory |
+| Proposal đầu | FAIL exit 2, đã sửa verifier | Source/raw dùng exception=NONE, fixture đầu nhầm null; không sửa raw để PASS |
+| Editor Node diagnostics | Không lỗi được báo | Không thay bằng chứng tests hoặc hardware |
+| JVM/Gradle/instrumentation | NOT_RUN mới | Không đổi runtime, không cài/gỡ app hoặc nâng toolchain |
+| Ledger apply / B1 / tuner I/O | NOT_RUN | Chưa phê duyệt ghi app hoặc mở history gate; ROOT_CAUSE_UNRESOLVED/TS_SMOKE_PASS=false |
+
+Bundle `phase31-history-recovery-20261111-210818-73007003` dưới D:\TSDuck\reports có exact commands/stdout/exit, scan coverage và recovery plan. Candidate/input riêng ở logs, không Git. Các PASS phần mềm/hardware cũ giữ nguyên đúng phiên, không tính lại thành PASS mới.
+
+## 2026-11-11 — Kết quả cuối gate lịch sử: B1 không được chạy
+
+| Kiểm sau Samsung preflight | Kết quả | Giới hạn / hành động |
+| --- | --- | --- |
+| Audit continuity 32 input files | PASS thực thi / continuity UNPROVEN | Hai expected continuation 09/11 MATCH dòng 4/6; Sony/lifecycle 10/11 ABSENT |
+| Snapshot history hiện tại | FORMAT_VALID, không chứng nhận đầy đủ | 7 records/581 byte, marker initialized, remote/local hash khớp; backup chỉ đọc |
+| Native firmware/tune/Bulk B1 | NOT_RUN_HISTORY_CONTINUITY_UNPROVEN | Grant B1 có điều kiện chưa phát hành, không consumed attempt mới |
+| Reset/restore/recreate/rearm history | NOT_RUN | Không chép keys hoặc mở lại grants cũ để vượt gate |
+| Samsung lifecycle giữ APK | PASS 5/5 | APK còn/hash đúng sau test; kết quả emulator 4 FAIL lịch sử vẫn giữ |
+| Helper control-plane | PASS | NO_RESOURCES_ACQUIRED, firmware/native URB null, mirror=0/TS=0; không tuner PASS |
+
+Chưa xác định vì sao keys thiếu hoặc dữ liệu app có từng mất/restore hay không. `pm path` vắng sau runner không là proof data loss; không có pre-test full-ledger snapshot. Cần recovery plan riêng hoặc bản ledger đầy đủ có provenance trước hardware. Evidence/report trong `phase31-android-first-20261111-172352-0a98eee3` dưới D:\TSDuck; không TS_SMOKE_PASS mới.
+
+## 2026-11-11 — Samsung không tuner: lifecycle và control-plane đã PASS
+
+Sau quyền người dùng cho preflight và một B1 có điều kiện, đã xác minh Samsung SM-X926B/API36, boot 47, hai ADB alias của cùng tablet và current USB host rỗng. Không dùng filter khai báo VID/PID trong dumpsys làm bằng chứng tuner đang gắn. Chưa phát grant B1 hoặc chạy firmware/tune/Bulk mới.
+
+| Kiểm mới trên thiết bị thật | Kết quả | Bằng chứng / giới hạn |
+| --- | --- | --- |
+| Lifecycle lần đầu | PASS 5/5 | Đúng Samsung; khác kết quả emulator ngoài allowlist. Không tuner |
+| APK sau runner lần đầu | ABSENT | `pm path` không thấy app; chưa suy app-data bị xóa. Đã báo và xin quyết định trước B1 |
+| Lifecycle giữ APK, được duyệt riêng | PASS 5/5 | `leaveApksInstalledAfterRun=true`, `uninstallIncompatibleApks=false`; APK còn và hash khớp build đã khóa |
+| Helper control-plane 30 giây | PASS / exit 0 | CONTROL_PLANE_COMPLETE, terminal sạch, NO_RESOURCES_ACQUIRED, firmware/native URB null, mirror=0/TS=0 |
+| History sau reinstall | PRESENT / FORMAT_VALID | Marker initialized=true,7 records/581 byte, remote/local SHA khớp; chỉ backup/read, không restore/reset/rearm |
+| Continuity old epoch | ĐANG KIỂM | Cần đối chiếu khóa cũ, không coi file tồn tại tự nó là proof đủ |
+| B1 MANUAL0 hardware | NOT_RUN | Chờ continuity và fresh physical attach được xác nhận; grant có điều kiện chưa bị dùng |
+
+**Quy tắc chạy physical instrumentation:** Với AGP 9.5.0 hiện tại, thêm `-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.experimental.testOptions.uninstallIncompatibleApks=false`; kiểm APK hash và ledger trước/sau. Không tự clear/uninstall hoặc dựng lại history để chạy test. Raw riêng tại D:\TSDuck\logs\phase31-android-first-20261111-172352-0a98eee3, summaries ở bundle reports cùng run ID. Xem báo cáo `physical-preflight.md`; các kết quả emulator/offline trước giữ nguyên bên dưới.
+
+## 2026-11-11 — Android-first: phần mềm MANUAL0 và dữ liệu offline, chưa live tuner
+
+Branch `chore/modernize-android-build`, HEAD nền `8abf57c32bd75cf03508f6db62e03a0825e67868` cùng edits chưa commit. Bundle `phase31-android-first-20261111-172352-0a98eee3` dưới D:\TSDuck\reports giữ logs, XML và hashes; mọi PASS dưới đây là lượt mới đúng phạm vi, không sửa lịch sử.
+
+| Phép kiểm | Kết quả | Bằng chứng / giới hạn |
+| --- | --- | --- |
+| Gate A/D input audit | PASS offline | 119 inputs; 74 khớp hash cũ, 45 chỉ tự hash, 0 mismatch; tách ba host và clocks |
+| Gate A/D regressions | PASS 60/60 | Comparison 20 + decoder 21 + capture 11 + layered 8; không hardware |
+| Driver JVM TBS5530 | PASS 449/449 | Gồm 5 tests experiment và 1 private Windows fixture mới; no skip/failure |
+| App JVM TBS5530 | PASS 74/74 | Launch/capture/permission và related regression; không hardware |
+| App instrumentation cuối | PASS 21/21 | API 37 x86_64 emulator: 2 experiment grant + 19 legacy approval; không mở USB |
+| Driver instrumentation | PASS 13/13 | OperationalHandoff, BootstrapIsolation, ExplicitInterface; USB/manager giả |
+| Activity lifecycle trên emulator | FAIL 4/5 | Session constructor từ chối model emulator ngoài allowlist; giữ XML/log failure, không mở rộng host hoặc gọi test PASS |
+| Lifecycle/control-plane trên Samsung | NOT_RUN | Không physical ADB device cuối lượt; là chốt bắt buộc trước live B1 |
+| Helper frontend guards | PASS 17 | Default AUTO, cấm ghép biến, thiếu golden/APK hash từ chối trước ADB |
+| Helper legacy/launch guards | PASS | Existing autonomous suite và 57 launch/control-plane checks; script chỉ chạy offline trong child process được duyệt |
+| Native C fault injection | PASS | GCC 16.2.0 sẵn có, `-std=c11 -Wall -Wextra -Werror`; core thật 8×4096 và 8×8192, không silicon |
+| ASan | NOT_RUN | Không có runtime ASan được compiler resolve; không ghi PASS giả |
+| Debug/release/instrumentation compile/lint | PASS | Gradle Wrapper offline, debug APK và release unsigned; source 8/JDK 25 warnings giữ nguyên |
+| Release isolation | PASS | `apkanalyzer dex packages --defined-only` không có FrontendExperiment/Autonomous/ControlProbe/NativeUsbfsUrb; minSdk 21 |
+| Native ABI/alignment | PASS tĩnh | APK có armeabi-v7a/arm64-v8a/x86/x86_64; 64-bit LOAD align 0x4000; không physical native-load mới |
+| Windows TS parser fixture | PASS offline | Hash đúng; 30897800 byte, 164350 packets, 3054 TEI, 1705 CC, 24 PAT/373 PMT, 14 programs có PMT; không Android TS |
+| Windows fixture assertion đầu | FAIL đã sửa test có căn cứ | Nhầm zero sync loss với zero malformed; kiểm header độc lập có 115 basic invalid headers, parser 139; giữ XML failure |
+| FX2 host pattern mới | PASS 30/30 | Synthetic marker/sequence 512/CRC/cap; không firmware hoặc RF |
+| Existing FX2 regressions | PASS 51, SKIP 13 | Thiếu private fixture được ghi SKIP đúng; không coi skip là PASS |
+| DRIVE55 proposal | PASS offline / live BLOCKED | Đúng hai literal 54→55, zero controls thêm; BOARD_MAPPING_UNKNOWN |
+| Android B1 MANUAL0 / C1 DRIVE55 | NOT_RUN / BLOCKED_FOR_SAFETY | Không fresh attachment, không live grant hoặc vendor/I²C writes mới |
+| Custom FX2 firmware / Android TS smoke | NOT_RUN / false | Không upload firmware tùy biến, không EP82 data mới; ROOT_CAUSE_UNRESOLVED |
+
+Lần Gradle regression đầu FAIL do wildcard `*Tbs5530*` bị shell mở rộng thành tên workspace. Đã đổi selector thành argument đầy đủ `--tests=info.martinmarinov.*Tbs5530*`, không sửa assertion để che failure. VS Code test discovery không match source set debug nên dùng runner Gradle của repo. Android CLI không thấy AVD dù native emulator liệt kê được; fallback executable đã kiểm help, emulator tạm chạy rồi được dừng đúng instance. Không cài package hoặc sửa PATH/AVD.
+
 ## 2026-11-11, phiên 10:11 — Đối chiếu offline BDA/VM từ raw cũ
 
 Bundle `phase31-bda-vm-offline-20261111-101351-3dad820b`, branch/HEAD giữ `chore/modernize-android-build` / `b73f11097e594acd2abe1769a65ed03216c8e963`. Không suy tests hoặc capture lịch sử thành hardware PASS mới.

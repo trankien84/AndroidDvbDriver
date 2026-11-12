@@ -1,5 +1,65 @@
 # Kiểm kê môi trường
 
+## 2026-11-11, phiên 22:18 — Samsung recovery/B1 thật, kết thúc không giữ tuner owner
+
+- **Build/checkout:** Branch chore/modernize-android-build, HEAD nền 8abf57c32bd75cf03508f6db62e03a0825e67868 với edits cũ được giữ. Thêm debug recovery Activity/Permit/no-backup Journal/helper/tests, không source main production. Toolchain/SDK/dependencies không đổi; no stage/commit/push/reference sync.
+- **Physical host:** SM-X926B/API36/boot 47, serial/network alias pin rõ và giữ private. APK final cài bằng install-r sau duyệt riêng, SHA f848e12c286aa40e7a0ff413f24df20aba63908a938d3162205e6da2aa727d71; không uninstall/clear. Recovery helper final 9bcb2a46..., autonomous helper 63f096c2..., raw/grants ngoài Git.
+- **Recovery runtime:** AppUID không đọc /proc/uptime, shellUID đọc được; helper clock mới truyền uptime qua argument, set-e/host timestamp validation, không tăng deadline. Activity terminal relaunch mới dùng CLEAR_TOP/SINGLE_TOP/onNewIntent, không force-stop/CLEAR_TASK. Journal no-backup O_EXCL/fsync consumed giữ plan, ledger 7→9 đã apply đúng hashes; recovery plan không chạy lại.
+- **B1 ownership/firmware:** User duyệt reconciled witness và một fresh attach/RF IN. One original bootstrap 132 controls/3545 ms, permission re-enumeration guard dừng sạch. Handoff operational user duyệt cùng epoch không FirmwarePath/0 A0, chip path 0x197/K36/manual0/drive 54. Native 8×4096 completion -75/0, không firmware retry hoặc đổi USB host/driver.
+- **Cleanup:** Trước user remove đã drain/8 complete/outstanding=0/quarantine=false và app USB fd=0; user xác nhận rút/ngắt nguồn tuner. Pinned ADB alias sau đó mất và list devices 0, nên hậu kiểm current host-empty mới NOT_RUN. Không tự reconnect, không cắm lại, không helper/emulator/capture do phiên còn active.
+- **Witness cuối:** Firmware history 12 records/996 byte, prefix 747 nguyên, SHA b6b5935a2af02fd125565ed24694d4fc4a0cb2616c8445aeaecae94cb829e7fb app/host match. Full history trước reconciliation UNKNOWN không đổi thành PASS; mọi run sau cần witness/fresh scope mới và không tái dùng consumed epoch.
+
+Bundle `phase31-recovery-coordinator-20261111-222119-cd9dcedf` dưới D:\TSDuck\reports/logs giữ exact commands/failures/reports. Node/driver 456 tests của lượt trước không tự tính rerun; lượt này app 74/build/lint/11 emulator/37 helper mới PASS. Không ASan/power-loss proof mới hoặc CoreELEC runtime; graph index cũ không dùng làm authority.
+
+## 2026-11-11 — Guarded recovery chỉ build/emulator; tablet giữ nguyên
+
+- **Quyền mới:** User chọn triển khai recovery/hash guard offline, chưa cho cài APK mới, ghi ledger hoặc chạy B1. Samsung chỉ bị đọc lại exact history/APK hashes và current USB host; không launch app/cài/gỡ.
+- **Build/test:** Dùng Wrapper và AGP/Gradle/JDK/SDK đang pin, không dependency install hoặc toolchain change. Node 29, JVM driver 456/app 74, emulator 24 tests PASS. Emulator AVD có sẵn chạy tạm port 5580 sau kiểm ports không có owner khác; pin emulator serial mọi install/test, rồi dừng đúng instance. Không sử dụng default device vì Samsung cùng kết nối.
+- **Hashes mới:** Debug APK `5cb28185685b991bce689ff6068c6e7d8186ac79c5b059226ad53155a682da1c`, host helper `63f096c20d8ad886510c3dc194d510b9bef03212ae1d2590e158e68b7b691c07`. Samsung 22:07 vẫn APK cũ `bbbf25cc67b50e090c8261c00e38c41501538bbf7c8f73549879ab19bf9ca7ff`, ledger `e398459ceddb2c8f35ddc61b81ee66a31ec1aee300c33bb603dc9f593b0b31f9`, boot 47 và host USB rỗng; candidate 9 dòng chưa apply.
+- **Gateway/index:** AgentMemory đã ghi milestone với canonical project/harness đúng và đọc lại content/agent; save response có project, projection expand không hiện project riêng. GitNexus list_repos mới xác minh canonical path/branch đúng nhưng index vẫn ở b73f110, sau HEAD một commit và thiếu dirty changes; không dùng graph làm proof hoặc force repair. Source/diff/tests/evidence hashes là căn cứ.
+- **Limits:** Recovery core/append adapter chưa có exported caller/grant/journal/host coordinator live. Không power-failure test hoặc hash-guard benchmark trên physical bootstrap; không nới heartbeat/limits. Không stage/commit/push hoặc sync reference; `.gitnexus` không bị sửa trong lượt này.
+
+## 2026-11-11 21:05 — Kiểm chỉ đọc Samsung và công cụ recovery local
+
+- **Checkout:** Branch/HEAD vẫn `chore/modernize-android-build` / `8abf57c32bd75cf03508f6db62e03a0825e67868`; bảo toàn edits lượt trước. Thêm Node offline recovery/tests và cập nhật README/hồ sơ. Hash các source runtime/helper từ manifest cũ không đổi; không stage/commit/push hoặc sync references.
+- **Device:** ADB ban đầu không có Samsung; không tự connect/reconnect. Sau người dùng xác nhận nối, pin đúng SDK ADB và SM-X926B/API36/boot 47, một network alias/current USB host rỗng. Chỉ shell read-only/exec-out export ledger và marker, không mở app/permission, cài/gỡ hoặc instrumentation.
+- **Storage:** Base Samsung ledger vẫn 581 byte/7 dòng với hash e398459c... như checkpoint trước, marker initialized=true. Exact `.bak`/`.new` và marker `.bak` không có. Không dùng filemtime bất thường làm proof recovery; không backup-service hoặc restore command.
+- **Tooling:** Node có sẵn chạy 29 tests và CLI không dependency mới. Không thay Gradle/SDK/JDK/NDK/Android config, không Python/VM/WSL/driver/tuner commands. ZIP được đọc tại chỗ bằng API hệ thống, giới hạn 2 MiB mỗi text và 64 MiB text/archive, không giải nén.
+- **Gateway:** `retrieve_tools` hiện đã expose lại AgentMemory; recall/smart_search đọc checkpoint Sony theo canonical project `git:github.com/trankien84/androiddvbdriver`. Đây là thay đổi khả dụng của công cụ so phiên trước, không sửa lịch sử thành đã persist. Current source/raw/tests vẫn là chuẩn; không cần GitNexus cho tool offline độc lập.
+
+Report/raw riêng ở `D:\TSDuck\reports\phase31-history-recovery-20261111-210818-73007003` và logs cùng run ID. Candidate chứa denial keys ngoài Git, chưa áp dụng lên app; quyền kiểm chỉ đọc không được hiểu là quyền append hoặc B1.
+
+## 2026-11-11 — Đóng gate B1 trước hardware, giữ Samsung app và history hiện tại
+
+Samsung preflight/control-plane đã PASS và APK giữ lại đúng hash. Ledger Samsung được backup chỉ đọc có 7 entries/581 byte; audit 32 inputs chỉ chứng minh hai epoch 09/11 còn, expected Sony/lifecycle 10/11 thiếu. Không có đủ evidence continuity hoặc nguyên nhân thiếu, không phục hồi/reimport/rearm/app clear. Không phát grant hardware, không tuner URB mới cần drain.
+
+Giữ hai property AGP về leaveApks/uninstallIncompatible ở các lệnh instrumentation vật lý tiếp theo; không sửa global build hoặc User/Machine execution policy. Child Bypass đã dùng chỉ cho scope preflight/control-plane được duyệt, không helper live B1. Samsung vẫn kết nối ADB; tuner được người dùng giữ rút, không đọc lại owner bằng Windows/VM hoặc đổi USB ownership. Những trạng thái offline/emulator trước đó giữ đúng thời điểm của chúng.
+
+Report continuity chỉ đọc và safety blocker ở bundle `phase31-android-first-20261111-172352-0a98eee3`; private ledger/grants/nhận diện ở D:\TSDuck\logs ngoài Git. Canonical project/harness không đổi; Gateway/AgentMemory vẫn không expose nên chưa ghi remote.
+
+## 2026-11-11 — Samsung preflight không tuner sau phê duyệt
+
+- **Thiết bị:** Samsung SM-X926B/API36, boot 47; hai network ADB aliases có cùng identity/boot, chọn một serial rõ ràng giữ private. Current USB host rỗng, port disconnected. Chuỗi vendor_id=29516 trong dumpsys thuộc activity filter, không device attachment; đã phân biệt trước test.
+- **Instrumentation:** Lifecycle đúng host PASS 5/5. Runner đầu gỡ APK sau test; không kiểm kê app-data trước nên không kết luận mất dữ liệu. Người dùng được thông báo và duyệt cài lại đúng APK cùng chế độ giữ-app; lượt sau PASS 5/5, APK còn cài và SHA khớp build `bbbf25cc67b50e090c8261c00e38c41501538bbf7c8f73549879ab19bf9ca7ff`. Không gọi clear/uninstall thủ công hoặc sửa ledgers.
+- **Tùy chọn AGP đã kiểm:** `android.injected.androidTest.leaveApksInstalledAfterRun` và `android.experimental.testOptions.uninstallIncompatibleApks` có trong BooleanOption của plugin 9.5.0 local. Lượt giữ-app dùng true/false tương ứng; không sửa global config. Đây là biện pháp giữ APK cho các lần kiểm thiết bị thật tiếp theo, không phải chứng nhận backup toàn app-data.
+- **History/guard:** History Samsung cùng marker initialized vẫn tồn tại: 7 records/581 byte, SHA `e398459ceddb2c8f35ddc61b81ee66a31ec1aee300c33bb603dc9f593b0b31f9`, format hợp lệ và backup chỉ đọc hash khớp. Chưa dùng filemtime bất thường làm proof continuity; đối chiếu old epoch riêng, không dựng lại store.
+- **Control-plane:** Helper đã chạy child-process Bypass trong scope preflight/control-plane người dùng duyệt, terminal CONTROL_PLANE_COMPLETE/NO_RESOURCES_ACQUIRED, firmware/native URB null, 0 mirror records/TS bytes. B1 hardware vẫn NOT_RUN; quyền chung có điều kiện không cho phép C1 hoặc firmware khác.
+
+Raw identity/grants/history backup nằm ngoài Git dưới D:\TSDuck\logs\phase31-android-first-20261111-172352-0a98eee3; summaries redacted ở reports cùng run ID. Các quan sát ADB rỗng ở checkpoint offline trước là lịch sử, không ghi đè bằng trạng thái mới này.
+
+## 2026-11-11 — Môi trường kiểm phần mềm Android-first, không tuner live
+
+- **Checkout:** Branch `chore/modernize-android-build`, HEAD `8abf57c32bd75cf03508f6db62e03a0825e67868`, sạch khi bắt đầu; chỉ edits của nhiệm vụ hiện tại, không stage/commit/push. Bốn reference SHA đọc lại không đổi, không sync hoặc sửa reference.
+- **Declared / installed:** AGP 9.5.0, Wrapper Gradle 9.8.2 cùng checksum đã pin, compileSdk 37.2, targetSdk 37, Build-Tools 37.0.0, NDK 30.0.16248370, CMake 4.1.2; JAVA_HOME hiện trỏ JDK 25. MinSdk 21 và Java source/target 8 giữ nguyên. Inspect script chạy thành công không thay package; đây là toolchain đang khai báo/cài và đã build trong lượt này, không khẳng định latest vendor.
+- **PowerShell:** Script chưa ký ban đầu bị execution policy chặn. Người dùng cho phép child process `pwsh -NoProfile -ExecutionPolicy Bypass -File ...` chỉ để audit/tests offline; không đổi User/Machine policy, không coi đó là quyền chạy helper hardware. Audit stdout nằm trong bundle ngoài Git.
+- **Android:** `D:\Android\Sdk\platform-tools\adb.exe` được chọn rõ thay bản ADB khác trên PATH. Lúc đầu/cuối không physical device. Native emulator 37.2.13 chạy AVD có sẵn `TBS5530_Runtime_API37`, API 37/x86_64, chỉ để fake instrumentation; Android CLI không nhận AVD, nên dùng executable SDK sau đọc help. Đã xác nhận boot bằng `sys.boot_completed=1`, kết thúc đúng instance và ADB cuối không còn device. Không wipe, cài SDK hoặc thay cấu hình AVD.
+- **C/native:** GCC 16.2.0 tại `C:\msys64\mingw64\bin\gcc.exe` có sẵn; dùng trực tiếp compiler cho portable C fault injection, không cài MSYS2 hoặc dùng nó thay shell POSIX. ASan runtime không resolve nên NOT_RUN. NDK llvm-readelf kiểm LOAD alignment 0x4000 cho bốn ELF64 trong debug APK; bốn ABI đều có, không native-load trên Android vật lý mới.
+- **Build/artifacts:** Debug APK SHA `bbbf25cc67b50e090c8261c00e38c41501538bbf7c8f73549879ab19bf9ca7ff`; helper SHA `616b9e271aaebef304477d15aa540e54f8f425de42976bb06662d22ff914ae94` sau sửa CR chỉ ở added lines. Không chuẩn hóa toàn file mixed EOL lịch sử. Source manifest ghi dirty build; HEAD không thay thế hash APK. Firmware/raw/TS/grants/binary đều ngoài Git.
+- **Hardware/VM:** Không VBoxManage/SSH/usbipd, capture mới, claim tuner, bootstrap hoặc vendor/I²C writes thật. Owner tuner hiện tại UNKNOWN vì không đo live. Không dùng CLEAN_DISCONNECTED lịch sử làm hậu kiểm mới. Emulator đã dừng; không có native tuner URB mới cần drain.
+- **GitNexus / memory:** CLI GitNexus 1.6.12 và help có thật; status không trả kết quả sau chờ hữu hạn, đã dừng đúng process tree của lệnh đọc. Không reindex/repair, graph/FTS chưa xác minh và không dùng làm căn cứ. Built-in source/diff/tests/raw là chuẩn. Gateway `retrieve_tools`/AgentMemory không được expose trong tool set hiện tại; đã đánh giá checkpoint nhưng không thể lưu remote, không tuyên bố persist.
+
+Báo cáo và logs: `D:\TSDuck\reports\phase31-android-first-20261111-172352-0a98eee3`. Python environment/commands cho công cụ Gate E được agent xác minh riêng theo interpreter có sẵn, không cài dependency; exact command/exit ở manifest Gate E. Không chuyển môi trường, root Android, thay BDA/USB driver hoặc quyền USB.
+
 ## 2026-11-11, phiên 10:11 — Chỉ phân tích file BDA/VM đã có
 
 - **Checkout:** Branch `chore/modernize-android-build`, HEAD `b73f11097e594acd2abe1769a65ed03216c8e963`; giữ các edits có trước. Không sửa runtime/Android/helper/module/toolchain, stage/commit/push hoặc sync references. Sáu hồ sơ được backup trước sửa.

@@ -1,5 +1,85 @@
 # Architecture decision record (ADR)
 
+## ADR-046 — Chấp nhận witness sau deny-only reconciliation và đóng B1 âm tính, không tăng quyền sang nhánh khác
+
+**Date:** 2026-11-11, phiên bắt đầu 22:18 +07
+
+**Status:** Recovery append verified và B1 operational đã thực hiện; kết quả B1 không có TS. Không hoàn thành Phase 3.1, không production fix.
+
+**Decision / consent:** User phê duyệt exact APK/helper/plan cho recovery; ledger 7→9 với prefix cũ nguyên, consumed no-backup journal, không rollback/rearm. User sau đó chấp nhận reconciled ledger/hash fence làm witness từ mốc này với full history trước witness UNKNOWN và duyệt một B1. Không gọi denial reconciliation là full restore hoặc standing permission. Bootstrap owned consume tiếp 9→12 records, witness app/host khớp và không tái nạp.
+
+**Runtime:** MANUAL0/K36/drive 54/8×4096 giữ một biến như card. One bootstrap original đủ 132 controls và operational 0 A0 cùng epoch; user xử lý OS permission/re-enumeration rồi duyệt phần handoff không firmware. Frontend sync 26/lock, 191 controls full-length; tám URB -75/actual=0, sample rỗng, drain confirmed/outstanding=0/quarantine=false/USB fd=0. Manual PLP0 đơn lẻ không đủ trong điều kiện thử, không root cause hoặc all-PLP elimination.
+
+**Software corrections:** AppUID uptime permission và terminal relaunch được chứng minh bằng failures/read-only logs, sửa đúng shellUID clock/host validation và onNewIntent/launch gate; không nới heartbeat, không consumed retry. Mỗi artifact hash mới được duyệt lại. 37 helper/11 emulator tests và app 74/build/lint/release isolation PASS, failures trước giữ nguyên.
+
+**Stop boundary / alternatives:** Không chạy thêm candidate live, tổ hợp MANUAL0+DRIVE55, B7/040x, double A0 hoặc custom firmware từ quyền B1. DRIVE55/FX2 diagnostic vẫn safety-blocked, dữ liệu thiếu nằm giữa TS pins/board/FIFO và first USB completion. Giữ tuner rút theo user sau drain, không cần cắm lại; hậu kiểm host-empty chưa thực hiện vì ADB mất. Bước tiếp chỉ nghiên cứu offline có khả năng phân biệt mới hoặc safety/source đủ cụ thể; không hứa userspace chắc sửa được, không yêu cầu mua analyzer/Linux host.
+
+**Records:** Bundle `phase31-recovery-coordinator-20261111-222119-cd9dcedf` dưới D:\TSDuck\reports có recovery proof/B1 result/raw hashes. Source branch/HEAD nền vẫn chore/modernize-android-build / 8abf57c32bd75cf03508f6db62e03a0825e67868 với edits chưa commit; không stage/push hoặc sync references.
+
+## ADR-045 — Recovery append-only có fence, nhưng không xuất apply khi chưa có coordinator được duyệt
+
+**Date:** 2026-11-11, quyết định offline sau phiên 21:05 +07
+
+**Status:** Recovery core/adapter/hash fence đã triển khai và kiểm offline/emulator. Không cài APK mới hoặc ghi ledger Samsung; B1 chưa chạy.
+
+**Decision:** Recovery chỉ nhận prefix nguyên vẹn, exact before/after hashes và hai deny records bổ sung; quyền dùng một lần phải consume bền trước append, kết quả write không chắc chắn không retry/rollback. Adapter chỉ mở file có sẵn, không tạo history mới, không exported Activity hoặc apply command. Tách caller UI/grant/journal/host coordinator thành chốt phải hoàn thiện và rà trước quyền ghi app; không giả interface Port là journal production đã triển khai.
+
+**Fence:** Với B1, host bắt buộc pin approved history hash; app so snapshot trong grant và guards, chỉ advance sau own consume append-only. Mismatch bị latch, bytes cũ trở lại không làm phiên hợp lệ lại. Hậu kiểm host sau drain giữ EP0 evidence trước và ghi witness mới, không dùng witness cuối làm auto-approval lần sau. AUTO/legacy không tự bị migration vào policy mới.
+
+**Evidence:** Node 29, JVM driver 456/app 74 và emulator 24 tests PASS; debug/release/lint/AndroidTest compile và release isolation PASS. Samsung read-only cuối vẫn ledger 581 byte/hash e398459c... và APK cũ bbbf25cc..., host rỗng. Không claim full historical continuity, power-failure safety hoặc performance bootstrap của guard mới.
+
+**Trade-offs / next gate:** Không dùng AtomicFile rollback trong append recovery vì bản ngắn có thể bỏ denial đã bền; partial result giữ uncertainty. Đổi APK/helper hashes làm old B1 card hết đủ điều kiện, phải freeze và xin scope mới. Main backup config không đổi vì chưa xác định cause. Giữ `NOT_RUN_HISTORY_CONTINUITY_UNPROVEN` cho B1 cho tới quyết định recovery riêng được rà và phê duyệt.
+
+## ADR-044 — Chuẩn bị deny-only recovery offline, không đồng nhất với phục hồi toàn lịch sử
+
+**Date:** 2026-11-11, phiên 21:05 +07
+
+**Status:** Công cụ/proposal đã kiểm; chưa phê duyệt apply, chưa ghi app và chưa mở B1.
+
+**Context:** Sau đề nghị xử lý consumed-history, không tìm được full ledger mới hơn trong local text/ZIP hoặc `.bak`/`.new` trên Samsung. Ledger base vẫn 7 entries, hai expected Sony/lifecycle epochs thiếu và hai continuation epochs cũ có mặt. Checksum lịch sử không cho phép tái dựng toàn bytes hoặc mọi attachmentKey.
+
+**Decision:** Chỉ tạo candidate offline giữ nguyên prefix 581 byte rồi thêm hai deny records có receipt/report/raw corroboration và SHA pin. Không sửa/xóa/reorder entry cũ, không tự sinh epoch mới, không tái tạo namespace hoặc gọi đây là full restore. Tool luôn trả liveGateBlocked=true và không có đường apply/ADB/USB. Candidate 747 byte/9 records chỉ là đề xuất làm chặt hơn tập bị cấm; chưa đủ để tuyên bố toàn lịch sử liên tục.
+
+**Safety / approval:** User đồng ý hướng recovery và kiểm Samsung chỉ đọc, chưa duyệt exact baseline/candidate bytes hoặc ghi app. Apply cần kế hoạch riêng kiểm hash trước/sau và đường ghi durable qua app, không copy đè live file bằng shell. Nếu kết quả ghi không chắc chắn, giữ gate chặn; không rollback tự động về bản 7 dòng làm mất denial đã append. Không gộp quyền recovery với B1 hoặc firmware/tuner writes.
+
+**Evidence / validation:** 3.203 text files và 313 text entries trong 5 ZIP không full backup mới; Samsung base/marker hiện tại hợp lệ, siblings ABSENT. 8 unit tests + 21 decoder regressions PASS; real-input proposal PASS, overwrite bị từ chối. Source main, runtime/app/helper/plan/APK giữ hash cũ. Main allowBackup=true không chứng minh Auto Backup gây thiếu lịch sử, nên chưa tự đổi backup setting.
+
+**Reopen trigger:** Rà và duyệt exact deny-only apply hoặc có full ledger đáng tin; nếu muốn mở B1 cần giải quyết riêng continuity/hash-fence/recovery policy rồi xác minh fresh physical scope. Không bỏ chốt chỉ vì candidate có 9 dòng. Báo cáo `recovery-plan.md` và manifests ở bundle `phase31-history-recovery-20261111-210818-73007003` dưới D:\TSDuck\reports; xem [STATUS.md](STATUS.md), [TEST-MATRIX.md](TEST-MATRIX.md).
+
+## ADR-043 — Dừng B1 khi consumed history chưa đủ, giữ APK/dữ liệu khi kiểm physical host
+
+**Date:** 2026-11-11, sau Samsung preflight
+
+**Status:** Áp dụng chốt an toàn; B1 hardware NOT_RUN. Không thay đổi driver production hoặc phục hồi ledger.
+
+**Context:** Samsung lifecycle 5/5 và helper control-plane đã PASS, người dùng duyệt một B1 có điều kiện. Ledger hiện tại đúng format nhưng chỉ có hai expected continuation epochs 09/11; expected Sony/lifecycle 10/11 thiếu. Không có snapshot toàn ledger trước preflight để quy nguyên nhân hoặc chứng nhận đầy đủ.
+
+**Decision:** Không phát grant B1, bootstrap/tune/Bulk, tạo namespace rỗng, append/reimport keys hay mở lại consumed grants để vượt chốt. Giữ backup/hash hiện trạng và tuner rút. Cần full ledger đáng tin hoặc kế hoạch recovery riêng có invariants không bỏ/rearm consumed records và phê duyệt trước khi ghi app. Tạo epoch mới không tự sửa thiếu continuity.
+
+**Instrumentation:** Runner đầu để APK không còn cài sau tests. Sau báo cáo và quyền người dùng cài lại, đã kiểm chế độ giữ APK thành công với `-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.experimental.testOptions.uninstallIncompatibleApks=false` trên AGP 9.5.0. Mọi physical instrumentation tiếp theo phải có biện pháp giữ app/data và kiểm hashes trước/sau; không clear/uninstall làm bước test mặc định. Không suy app-data mất chỉ từ APK vắng.
+
+**Evidence / limits:** History 7 entries/581 byte hash khớp remote/local, marker initialized; continuation 09/11 MATCH dòng 4/6, Sony/lifecycle 10/11 ABSENT. Samsung preflight 5/5 và control-plane sạch chỉ chứng minh phần mềm no-I/O. Source/build/helper/plan hashes không đổi; chưa có Android EP82 data mới hoặc nguyên nhân tuner. Giữ ROOT_CAUSE_UNRESOLVED và TS_SMOKE_PASS=false.
+
+**Reopen trigger:** Bằng chứng recovery/continuity được rà và duyệt riêng, sau đó xác minh lại đúng build/owner/physical epoch trước một B1 còn trong phạm vi; không chuyển sang DRIVE55 hoặc firmware mới. Báo cáo `b1-safety-blocker.md`, `attachment-history-continuity.md` trong bundle ngoài Git; xem [STATUS.md](STATUS.md), [TEST-MATRIX.md](TEST-MATRIX.md).
+
+## ADR-042 — Android-first và phép thử chỉ đổi MANUAL PLP0, không mở quyền drive hoặc firmware mới
+
+**Date:** 2026-11-11, phiên bắt đầu 17:21 +07
+
+**Status:** MANUAL0 đã triển khai debug-only và kiểm phần mềm; live chưa được cấp quyền/chưa chạy. Drive 55 và custom FX2 firmware bị chặn an toàn. Giữ Phase 3.1/ROOT_CAUSE_UNRESOLVED.
+
+**Context:** Android AUTO đã khóa K36 nhưng không nhận byte EP82 thành công, trong khi Windows BDA có TS thật và yêu cầu MANUAL0. Linux M cũng MANUAL0 nhưng có lỗi host BABBLE trước guest cancellation; không dùng việc M chưa thu được TS làm điều kiện trì hoãn Android. Các phép buffer/alt0/timing-only cũ không có yếu tố phân biệt mới.
+
+**Decision:** Chỉ thêm option `MANUAL_PLP0_K36` trong source debug và challenge/grant/helper, mặc định giữ `BASELINE_AUTO`. Tái sử dụng frontend MANUAL hiện có, không viết lại sequence hoặc thêm tham số PLP tùy ý. Golden bốn program, experiment và APK SHA được kiểm trước grant; host helper lưu script SHA vào grant bất biến. B1 chỉ thêm AF=00/đổi AD=01 tại bank23, giữ drive 54/54 và transport 8×4096. No-lock dừng trước Bulk với `PLP_MANUAL0_NO_LOCK`; không tự đổi biến hay rearm ledger.
+
+**Safety / alternatives:** Không thêm option DRIVE55 live khi chưa đủ pin mapping đúng CXD6802/board; giữ proposal hai byte offline. TBS/community/Go có drive 54, CoreELEC init không có cùng block, không dùng source family hoặc Windows success làm proof an toàn điện. FX2 CPU manual IN có cơ sở tài liệu nhưng firmware diagnostic còn thiếu recovery/board/license; chỉ làm generator/verifier host offline, không A0/GPIO/LNB/EEPROM mới. Không tiếp tục một loạt VM RSSI trials trong quyết định này.
+
+**Validation:** 449 driver và 74 app unit PASS; 21 app và 13 driver Android instrumentation dùng USB giả PASS; native C 8×4096/8192 PASS; release/debug/lint PASS và minSdk 21 không đổi. Bốn activity lifecycle tests FAIL trên emulator do model không nằm trong physical host allowlist; không sửa allowlist hoặc giả kết quả PASS. Cần chạy lifecycle/control-plane trên Samsung không gắn tuner trước khi mở live B1. Kết quả Windows parser/FX2 pattern chỉ offline.
+
+**Reopen trigger / rollback:** Nếu MANUAL0 tạo dữ liệu thực, giữ build/raw/hash và xin một fresh attach đối chứng trước khi gọi causal fix hoặc đổi production. Nếu vẫn -75/0, chỉ kết luận MANUAL0 đơn lẻ không đủ. Drive 55 chỉ mở lại sau đánh giá an toàn có nguồn; pattern firmware cần quyết định riêng và recovery được chứng minh. Bỏ option trở về AUTO ở source, không tự gửi rollback writes trên hardware. Không stage/commit/push.
+
+**Records:** Bundle `phase31-android-first-20261111-172352-0a98eee3` dưới D:\TSDuck\reports có experiment card, evidence/source manifest và handoff; xem [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md). Đây là thay đổi phần mềm đã kiểm, không tuyên bố Android `TS_SMOKE_PASS`.
+
 ## ADR-041 — Cô lập phép đo RSSI trước khi suy khác init BDA/VM là nguyên nhân Android
 
 **Date:** 2026-11-11, phiên 10:11

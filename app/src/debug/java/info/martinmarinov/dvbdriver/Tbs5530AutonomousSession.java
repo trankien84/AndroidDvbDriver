@@ -22,6 +22,9 @@ final class Tbs5530AutonomousSession {
     final Tbs5530AutonomousPolicy policy;
     final Tbs5530AutonomousPlans golden;
     final Tbs5530TsSmoke.ReadApi readApi;
+    final Tbs5530FrontendExperiment frontendExperiment;
+    private final Tbs5530HistoryFence.Store historyStore;
+    private final Tbs5530HistoryFence historyFence;
     final boolean controlMirrorEnabled, explicitSetInterfaceAlt0, controlPlaneOnly, sonyTsOutputReadback;
     final String launchToken;
     final java.util.Map<Tbs5530SonyTsOutputReadback.Stage,Tbs5530SonyTsOutputReadback.Snapshot> sonySnapshots = new java.util.EnumMap<>(Tbs5530SonyTsOutputReadback.Stage.class);
@@ -67,8 +70,12 @@ final class Tbs5530AutonomousSession {
     }
     Tbs5530AutonomousSession(Context context, String requestedApi, boolean mirror, boolean explicitAlt0,
                             String launchToken, boolean controlOnly, boolean sonyReadback) throws IOException {
+        this(context, requestedApi, mirror, explicitAlt0, launchToken, controlOnly, sonyReadback, null);
+    }
+    Tbs5530AutonomousSession(Context context, String requestedApi, boolean mirror, boolean explicitAlt0,
+                            String launchToken, boolean controlOnly, boolean sonyReadback, String experiment) throws IOException {
         this(context, requestedApi, Build.MODEL, Build.VERSION.SDK_INT,
-                Settings.Global.getInt(context.getContentResolver(), "boot_count", -1), mirror, explicitAlt0, launchToken, controlOnly, sonyReadback);
+                Settings.Global.getInt(context.getContentResolver(), "boot_count", -1), mirror, explicitAlt0, launchToken, controlOnly, sonyReadback, experiment);
     }
     Tbs5530AutonomousSession(Context context, String requestedApi, String model, int api, int boot) throws IOException {
         this(context, requestedApi, model, api, boot, false);
@@ -85,6 +92,17 @@ final class Tbs5530AutonomousSession {
     }
     Tbs5530AutonomousSession(Context context, String requestedApi, String model, int api, int boot, boolean mirror,
                             boolean explicitAlt0, String launch, boolean controlOnly, boolean sonyReadback) throws IOException {
+        this(context, requestedApi, model, api, boot, mirror, explicitAlt0, launch, controlOnly, sonyReadback, null);
+    }
+    Tbs5530AutonomousSession(Context context, String requestedApi, String model, int api, int boot, boolean mirror,
+                            boolean explicitAlt0, String launch, boolean controlOnly, boolean sonyReadback, String experiment) throws IOException {
+        this(context, requestedApi, model, api, boot, mirror, explicitAlt0, launch, controlOnly, sonyReadback, experiment, null);
+    }
+    Tbs5530AutonomousSession(Context context, String requestedApi, String model, int api, int boot, boolean mirror,
+                            boolean explicitAlt0, String launch, boolean controlOnly, boolean sonyReadback, String experiment,
+                            Tbs5530HistoryFence.Store injectedHistory) throws IOException {
+        frontendExperiment = Tbs5530FrontendExperiment.parse(experiment);
+        frontendExperiment.requireOptions(requestedApi, mirror, explicitAlt0, controlOnly, sonyReadback);
         sonyTsOutputReadback=sonyReadback;
         if (sonyReadback && (controlOnly || explicitAlt0 || !mirror || !"NATIVE_USBFS_URB_8X4096".equals(requestedApi)))
             throw new IOException("Sony readback requires native4096/mirror and forbids other endpoint experiments");
@@ -98,9 +116,12 @@ final class Tbs5530AutonomousSession {
         hostProfile = Tbs5530VerifiedHost.profile(model, api);
         historyPrefix = Tbs5530VerifiedHost.historyPrefix(hostProfile);
         contextForLedger = context.getApplicationContext();
+        historyStore = frontendExperiment == Tbs5530FrontendExperiment.BASELINE_AUTO ? null
+                : injectedHistory != null ? injectedHistory : () -> Tbs5530HistoryRecoveryStore.readSnapshot(contextForLedger, historyPrefix);
+        historyFence = historyStore == null ? null : new Tbs5530HistoryFence(historyStore.read());
         root = context.getFilesDir(); directory = new File(root, PREFIX + "-" + id);
         if (!directory.mkdir()) throw new IOException("Cannot create fresh session namespace");
-        golden = new Tbs5530AutonomousPlans();
+        golden = new Tbs5530AutonomousPlans(frontendExperiment);
         write("ledger.jsonl", "");
         policy = new Tbs5530AutonomousPolicy(SystemClock::elapsedRealtime, new Tbs5530AutonomousPolicy.Ledger() {
             public void check() throws IOException {
@@ -119,17 +140,32 @@ final class Tbs5530AutonomousSession {
             if (boot < 0) throw new IOException("Unverified Android boot");
             challenge.put("policy", Tbs5530AutonomousPolicy.VERSION).put("session", id).put("host_profile", hostProfile).put("model", model)
                     .put("api", api).put("boot_count", boot).put("vid", 0x734c).put("pid", 0x5530)
+                    .put("source_git_sha", BuildConfig.SOURCE_GIT_SHA).put("app_apk_sha256", installedApkHash(context))
                     .put("firmware_sha256", Tbs5530FirmwareValidation.SHA256).put("firmware_protocol", "TBS_SOURCE_DUAL_RESET")
                     .put("created_elapsed_ms", policy.created()).put("max_session_ms", 300000).put("heartbeat_ms", 2000)
-                    .put("golden_sha256", Tbs5530AutonomousPlans.hash(Tbs5530AutonomousPlans.dryRun().toString()))
+                    .put("golden_sha256", golden.fingerprint()).put("frontend_experiment", frontendExperiment.name())
                     .put("live_ready", !controlPlaneOnly).put("retry", 0).put("max_upload_per_attachment", 1)
                     .put("ts_variant", readApi.name()).put("control_mirror", controlMirrorEnabled)
                     .put("explicit_set_interface_alt0", explicitSetInterfaceAlt0);
             if (launchToken != null) challenge.put("launch_token", launchToken).put("control_plane_only", controlPlaneOnly);
+            challenge.put("attachment_history_sha256", historyFence == null ? JSONObject.NULL : historyFence.sha256());
             challenge.put("sony_ts_output_readback",sonyTsOutputReadback);
             if (sonyTsOutputReadback) challenge.put("sony_readback_layout",Tbs5530SonyTsOutputReadback.layout());
             Tbs5530DurableFile.write(new File(root, PREFIX + "-challenge.json"), challenge.toString().getBytes(StandardCharsets.UTF_8));
         } catch (org.json.JSONException error) { throw new IOException(error); }
+    }
+    static String installedApkHash(Context context) throws IOException {
+        try {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            try (FileInputStream input = new FileInputStream(context.getApplicationInfo().sourceDir)) {
+                byte[] buffer = new byte[65536]; int count;
+                while ((count = input.read(buffer)) != -1) digest.update(buffer, 0, count);
+            }
+            StringBuilder text = new StringBuilder(64);
+            for (byte b : digest.digest()) text.append("0123456789abcdef".charAt((b & 255) >>> 4))
+                    .append("0123456789abcdef".charAt(b & 15));
+            return text.toString();
+        } catch (java.security.NoSuchAlgorithmException impossible) { throw new AssertionError(impossible); }
     }
     static String read(File file, int limit) throws IOException {
         try (FileInputStream input = new android.util.AtomicFile(file).openRead()) {
@@ -149,8 +185,13 @@ final class Tbs5530AutonomousSession {
         try {
             String text = read(new File(directory, "grant.json"), 16384); JSONObject grant = new JSONObject(text);
             for (String key : new String[]{"policy", "session", "host_profile", "model", "api", "boot_count", "vid", "pid", "firmware_sha256",
-                    "firmware_protocol", "created_elapsed_ms", "golden_sha256", "ts_variant"}) {
+                    "firmware_protocol", "created_elapsed_ms", "golden_sha256", "ts_variant", "frontend_experiment", "source_git_sha", "app_apk_sha256"}) {
                 if (!challenge.get(key).toString().equals(grant.get(key).toString())) throw new IOException("Grant scope mismatch: " + key);
+            }
+            if (historyFence != null) {
+                if (!historyFence.sha256().equals(grant.opt("attachment_history_sha256")))
+                    throw new IOException("Host-pinned attachment history scope mismatch");
+                synchronized (Tbs5530AutonomousSession.class) { historyFence.require(historyStore.read()); }
             }
             if (grant.optBoolean("control_mirror", false) != controlMirrorEnabled) throw new IOException("Control mirror scope mismatch");
             if (!Boolean.valueOf(explicitSetInterfaceAlt0).equals(grant.opt("explicit_set_interface_alt0")))
@@ -171,7 +212,8 @@ final class Tbs5530AutonomousSession {
             Tbs5530AutonomousAttachmentLedger.requireRecoveryEpoch(recoveryEpoch, recoveryConfirmed);
             expires = grant.getLong("expires_elapsed_ms");
             Tbs5530AutonomousPolicy.Profile profile = Tbs5530AutonomousPolicy.Profile.valueOf(grant.getString("profile"));
-            if ((sonyTsOutputReadback || readApi != Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO) && profile != Tbs5530AutonomousPolicy.Profile.EXPERIMENTAL_DIAGNOSTIC)
+            if ((frontendExperiment != Tbs5530FrontendExperiment.BASELINE_AUTO || sonyTsOutputReadback
+                    || readApi != Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO) && profile != Tbs5530AutonomousPolicy.Profile.EXPERIMENTAL_DIAGNOSTIC)
                 throw new IOException("Diagnostic receive requires experimental session profile");
             policy.grant(profile, expires, heartbeat(), explicitSetInterfaceAlt0);
             if (controlMirrorEnabled) controlMirror = new Tbs5530ControlMirror(directory, id, recoveryEpoch,
@@ -190,6 +232,7 @@ final class Tbs5530AutonomousSession {
         if (policy.state() != Tbs5530AutonomousPolicy.State.ERROR_UNCERTAIN) lastStage = policy.state().name();
         if (!accepted || !grantText.equals(read(new File(directory, "grant.json"), 16384))) throw new IOException("Grant changed or unavailable");
         policy.heartbeat(heartbeat()); policy.requireSession();
+        if (historyFence != null) synchronized (Tbs5530AutonomousSession.class) { historyFence.require(historyStore.read()); }
     }
     void requireDeviceIo() throws IOException {
         if (controlPlaneOnly) throw new IOException("Control-plane validation forbids device I/O");
@@ -308,6 +351,7 @@ final class Tbs5530AutonomousSession {
                     public String read() throws IOException { return Tbs5530AutonomousSession.read(history, 1024 * 1024); }
                     public void write(String value) throws IOException { Tbs5530DurableFile.write(history, value.getBytes(StandardCharsets.UTF_8)); }
                 }).consume(key, recoveryEpoch, recoveryConfirmed);
+                if (historyFence != null) historyFence.advanced(historyStore.read());
             } catch (Tbs5530AutonomousAttachmentLedger.AlreadyConsumed error) {
                 preNativeRefusal = true; failure(error); throw error;
             }
@@ -355,6 +399,7 @@ final class Tbs5530AutonomousSession {
         else if ("Control program already consumed".equals(message)) stopReason = "PROGRAM_ATTEMPT_CONSUMED";
         else if ("Foreground, OS permission or attachment changed".equals(message)) stopReason = "PHYSICAL_GUARD_CHANGED";
         else if ("No confirmed lock".equals(message)) stopReason = "RF_LOCK_NOT_CONFIRMED";
+        else if ("PLP_MANUAL0_NO_LOCK".equals(message)) stopReason = "PLP_MANUAL0_NO_LOCK";
         else if ("Firmware uncertain; no retry".equals(message)) stopReason = "FIRMWARE_UNCERTAIN";
         else if (message != null && message.startsWith("Raw capture")) stopReason = "RAW_CAPTURE_IO_OR_BOUNDS";
         else stopReason = "GUARD_OR_IO_FAILURE";
@@ -481,6 +526,10 @@ final class Tbs5530AutonomousSession {
             Tbs5530TsSmoke.Result ts = tsResult;
             boolean synchronous = readApi == Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO;
             Tbs5530OperationalHandoff.NativeReceiveSnapshot urb = nativeReceiveSnapshot;
+            json.put("attachment_history_sha256", historyFence == null ? JSONObject.NULL : historyFence.sha256());
+            json.put("frontend_experiment", frontendExperiment.name());
+            json.put("requested_plp", frontendExperiment == Tbs5530FrontendExperiment.MANUAL_PLP0_K36 ? "MANUAL:0" : "AUTO");
+            json.put("actual_plp", "UNKNOWN");
             json.put("explicit_set_interface_alt0", explicitSetInterfaceAlt0);
             json.put("sony_ts_output_readback",sonyMetrics());
             json.put("interface_selection", urb == null ? JSONObject.NULL : interfaceSelectionMetrics(urb.interfaceSelection));

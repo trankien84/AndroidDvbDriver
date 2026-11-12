@@ -8,6 +8,10 @@
         tools:replace="android:required" />
     <application>
         <activity
+            android:name="info.martinmarinov.dvbdriver.Tbs5530HistoryRecoveryActivity"
+            android:label="TBS5530 — Recovery lịch sử, không tuner"
+            android:exported="true" />
+        <activity
             android:name="info.martinmarinov.dvbdriver.Tbs5530AutonomousDiagnosticActivity"
             android:label="DVB-T Driver — TBS5530 Debug"
             android:launchMode="singleTop"
