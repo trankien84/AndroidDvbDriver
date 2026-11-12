@@ -35,7 +35,7 @@ public final class Tbs5530ControlMirror {
         long sequence, generation, thread, before, after;
         int type, request, value, index, requested, offset, timeout;
         Integer returned;
-        String phase, out = "", in = "", error = "NONE";
+        String phase, out = "", in = "", payloadSha256 = "", error = "NONE";
     }
     private static String hex(byte[] bytes, int offset, int length) {
         if (bytes == null || length <= 0) return "";
@@ -60,6 +60,7 @@ public final class Tbs5530ControlMirror {
         r.phase = phase; r.generation = generation; r.thread = Thread.currentThread().getId();
         r.type = type; r.request = request; r.value = value; r.index = index; r.offset = offset; r.timeout = timeout; r.requested = length;
         boolean input = (type & 128) != 0, firmware = request == 0xa0;
+        if (firmware && !input) r.payloadSha256 = Tbs5530ReloadLedger.hash(bytes == null ? new byte[0] : java.util.Arrays.copyOfRange(bytes, offset, offset + length));
         if (!input && !firmware) r.out = hex(bytes, offset, length);
         r.before = clock.nowNanos();
         try {
@@ -93,7 +94,7 @@ public final class Tbs5530ControlMirror {
                         + ",\"requested_length\":" + r.requested + ",\"returned_length\":" + r.returned + ",\"errno\":null,\"exception\":\"" + r.error
                         + "\",\"success\":" + (r.returned != null && r.returned == r.requested) + ",\"out_hex\":\"" + r.out + "\",\"in_hex\":\"" + r.in
                         + "\",\"payload_limit\":64,\"firmware_payload_omitted\":" + (r.request == 0xa0)
-                        + ",\"physical_dispatch_proven\":false}\n";
+                        + ",\"payload_sha256\":\"" + r.payloadSha256 + "\",\"physical_dispatch_proven\":false}\n";
                 output.write(text.getBytes(StandardCharsets.UTF_8));
             }
             output.getFD().sync();

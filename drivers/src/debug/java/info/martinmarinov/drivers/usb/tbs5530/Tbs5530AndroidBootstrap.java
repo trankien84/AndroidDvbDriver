@@ -22,6 +22,35 @@ public final class Tbs5530AndroidBootstrap implements AutoCloseable {
     private final long preparedAt = android.os.SystemClock.elapsedRealtime();
     private Tbs5530UsbBinding.Cancellation watchdog;
     private final boolean externalObservation;
+    /** Opaque receipt for the original Android API path; never claims kernel syscall observation. */
+    public static final class CleanProof {
+        public static final String EVIDENCE = "APP_OBSERVED_USB_DEVICE_CONNECTION_CONTROL_TRANSFER";
+        private final Tbs5530OneShotBootstrap.Snapshot snapshot;
+        private final String physicalEpochKey;
+        private CleanProof(Tbs5530OneShotBootstrap.Snapshot snapshot, String physicalEpochKey) {
+            this.snapshot = snapshot; this.physicalEpochKey = physicalEpochKey;
+        }
+        void require(String runId, String epochKey) throws IOException {
+            if (epochKey == null || !epochKey.matches("[a-f0-9]{64}") || !epochKey.equals(physicalEpochKey)
+                    || snapshot.pending || !snapshot.boundaries.runEpoch.equals(runId)
+                    || !Tbs5530AutonomousPolicy.bootstrapTransitionKnown(snapshot.state, snapshot.completed,
+                    snapshot.failure, snapshot.cleanupFailure, snapshot.boundaries))
+                throw new IOException("Foreign physical epoch or incomplete original bootstrap proof");
+        }
+    }
+    private static CleanProof proveOriginal(Port port, Tbs5530OneShotBootstrap.Snapshot snapshot,
+                                            boolean cleanupPending, String physicalEpochKey) throws IOException {
+        if (cleanupPending || port.open.get() || !port.writesClosed.get() || port.ordinal != 132
+                || port.plan.getSteps().size() != 133 || snapshot.boundaries == null
+                || !port.boundaries().runEpoch.equals(snapshot.boundaries.runEpoch))
+            throw new IOException("Original bootstrap full132/API boundaries/drain not proven");
+        CleanProof proof = new CleanProof(snapshot, physicalEpochKey);
+        proof.require(snapshot.boundaries.runEpoch, physicalEpochKey); return proof;
+    }
+    public CleanProof cleanProof() throws IOException {
+        requireAuthorization();
+        return proveOriginal(port, runner.snapshot(), cleanupPending(), authorization.physicalEpochKey());
+    }
 
     public void controlMirror(Tbs5530ControlMirror mirror) {
         if (started.get()) throw new IllegalStateException("Control mirror must be configured before bootstrap");

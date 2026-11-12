@@ -30,7 +30,7 @@ public final class Tbs5530AutonomousPlans {
         this.experiment = experiment;
         hashes = dryRun(experiment);
         for (int i = 0; i < OPERATIONS.length; i++) {
-            String expected = experiment == Tbs5530FrontendExperiment.MANUAL_PLP0_K36 && OPERATIONS[i] == Tbs5530Frontend.Operation.TUNE
+            String expected = experiment != Tbs5530FrontendExperiment.BASELINE_AUTO && OPERATIONS[i] == Tbs5530Frontend.Operation.TUNE
                     ? MANUAL_PLP0_TUNE : PINNED[i];
             if (!expected.equals(hashes.get(OPERATIONS[i]))) throw new IOException("Golden dry-run mismatch: " + OPERATIONS[i]);
         }

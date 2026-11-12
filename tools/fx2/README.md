@@ -21,6 +21,18 @@ $env:PYTHONDONTWRITEBYTECODE = '1'
 
 Tệp đầu ra phải là tên mới; công cụ không ghi đè báo cáo cũ. `--ep0-csv` là tùy chọn. CSV phải có header đúng như `a0_epochs()` sử dụng và gồm cả submit/completion EP0, không chỉ setup A0. Khi xuất bằng TShark, dùng `-r` cho capture cũ; không dùng `-i` hoặc bắt capture mới.
 
+## Kiểm chứng H-AUTOINLEN sau SET_CONFIGURATION
+
+[autoinlen_static.py](autoinlen_static.py) dùng cùng bộ giải mã và executor Gate B, khóa hash ảnh trước phân tích, rồi kiểm 256 giá trị `wValue` cho mỗi request 9 và 11. Inventory quét mọi vị trí byte chứa literal `MOV DPTR,#E620/E621`, liệt kê offset `MOVX`, địa chỉ và giá trị A được chứng minh từ đầu routine. Công cụ không tuyên bố loại trừ các địa chỉ được dựng động hoặc `MOVX @Ri`.
+
+```powershell
+$env:PYTHONDONTWRITEBYTECODE = '1'
+& 'C:\Python312\python.exe' -m unittest discover -s '.\tools\fx2' -p 'test_*.py' -v
+& 'C:\Python312\python.exe' '.\tools\fx2\autoinlen_static.py' --firmware '<private-firmware-path>' --output-dir '<existing-new-private-directory>'
+```
+
+Đầu ra gồm `autoinlen-static-report.md` và JSON, không ghi đè tệp cũ. Init đặt `0200`; đường SET_CONFIGURATION đặt `0400`. Đây là kiểm chứng tĩnh theo đường chạy, không phải đọc register từ thiết bị hoặc bằng chứng nguyên nhân lỗi Bulk. Unit test mới chỉ dùng byte tổng hợp nhỏ do test tự tạo; nhóm Gate B ảnh riêng vẫn chạy khi đặt `FX2_TEST_FIRMWARE`.
+
 ## Phạm vi bằng chứng
 
 Kiểm tra A0 tách từng epoch theo hai lệnh giữ CPU và hai lệnh nhả CPU; mỗi lượt phải có 132 transfers, đủ 8192 byte, không overlap, đúng thứ tự, cùng owner và có completion thành công. USB setup dùng little-endian; địa chỉ trong opcode MCS51 dùng big-endian. Status stage thành công không phải phép đọc lại RAM của thiết bị.

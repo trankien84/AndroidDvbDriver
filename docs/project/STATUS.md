@@ -1,5 +1,18 @@
 # Port TBS5530 sang Android — trạng thái hiện tại
 
+## 2026-11-12, phiên 07:38 +07 — B2 đã kiểm phần mềm; card chờ duyệt, chưa có quyền chạy thật
+
+**Đã tìm được một ứng viên giải thích lỗi: SET_CONFIGURATION gọi firmware routine đổi AUTOINLEN từ 512 thành 1024 byte.** Cổng A `SUPPORTED_OFFLINE`, không phải root cause đã xác nhận. Giữ `Phase 3.1`, `ROOT_CAUSE_UNRESOLVED`, candidate `ROOT_CAUSE_CANDIDATE_H_AUTOINLEN` và `TS_SMOKE_PASS=false`; chỉ xét đổi sau B2 dương tính và một lần lặp độc lập được duyệt.
+
+- **A1:** Ảnh đã pin hash, init `04CF` đặt `0200`; request 9→`0350`→`0DCA` đặt `0400`; request 11 không ghi AUTOINLEN trên đường đã kiểm. RENUM branch được mô phỏng hai trạng thái. Inventory literal có bốn writers, chưa loại trừ mọi DPTR động. 77/77 tests PASS cuối với ảnh và subset CSV riêng, không giảm PASS Gate B cũ.
+- **A2/A3/A4:** Windows cold2/prep2 có config giữa hai uploads, 660 controls của năm lượt khớp source Java từng setup/payload. Cold2 release→Sony đầu là **1288,912 ms**, không 0,58 giây; mốc ngắn hơn là EEPROM. TBS/CoreELEC probe mới và Go open lại có đường reload, không chứng minh mandatory probe2 hoặc causal fix. D1/D2 host config sau handoff UNKNOWN; chưa có đối chứng đảo chiều sạch.
+- **B cuối:** Bootstrap đã giữ original backend B1; chỉ reload dùng native syscall audit. Giữ MANUAL0/drive 54/native 8×4096 và golden B1, một reload 132 sau claim operational/trước frontend, source delay 100 ms rồi wait 1500 ms. Có private clean proof cùng epoch, store append-only/hash fence và caller init no-tuner có grant/tombstone riêng, không sửa/rearm ledger cũ. Store thật/init/B2 live vẫn NOT RUN.
+- **Kiểm cuối:** JVM fresh đủ private fixtures: driver TBS **464/464**, app **74/74**, usbxfer **32/32 PASS**, 0 SKIP; emulator corrected **30 app + 19 driver PASS** gồm original-bootstrap/reload và initializer giả. Debug/release/AndroidTest compile, app lint, helper/native fixtures/release isolation PASS có phạm vi. Standalone driver lint còn **FAIL cũ ngoài diff**; giữ failure emulator candidate đầu và các giới hạn, không tuyên bố mọi gate đều PASS.
+- **C/D:** Đã thêm đính chính và [ADR-047](DECISIONS.md). Card `b2-experiment-card.md` cùng card init riêng trong bundle khóa APK/helper/plan/templates và source freeze; actual store/history hiện tại phải xác minh sau quyền no-tuner riêng, không lấy template làm trạng thái installed. Chưa cài APK Samsung hoặc gửi A0 thật; emulator riêng đã dừng/cổng 5580–5581 không listener. Không stage/commit/push.
+
+**Điểm dừng D:** Đã chốt phần mềm và trình card có giới hạn, dừng chờ người dùng duyệt exact hashes. B2 phần cứng chỉ mở sau init no-tuner riêng được duyệt/verified và disposition driver lint FAIL cũ; không tự coi card là grant. Không dùng quyền này cho B7/040x, drive/buffer/interface/readback/RSSI, firmware vá hoặc retry. Branch/HEAD nền đúng `chore/modernize-android-build` / `5c1c3a0a02df5aeb63258b01b80e9ccc0116515e`; không stage/commit/push/sync references. Bundle `phase31-autoinlen-offline-20261112-073915-d3e4d287` dưới `D:\TSDuck\reports`/logs có verdict và evidence; xem [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md).
+
+
 ## 2026-11-11, phiên 22:18 — Recovery đã áp dụng; B1 MANUAL0 khóa K36 nhưng vẫn -75, chưa có TS
 
 **Đã chạy đúng phép thử MANUAL PLP0 trên Samsung; Android vẫn nhận thành công 0 byte EP82.** Có khóa K36/sync `0x26`, nhưng cả 8 URB native 4096 byte đều status `-75`/actual=0. Vì vậy MANUAL0 đơn lẻ không đủ trong điều kiện đã thử; chưa xác định root cause hoặc loại mọi vấn đề PLP. Giữ Phase 3.1/ROOT_CAUSE_UNRESOLVED/TS_SMOKE_PASS=false.

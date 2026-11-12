@@ -1,5 +1,73 @@
 # Research log (append-only)
 
+## 2026-11-12, phiên 07:38 +07 — H-AUTOINLEN được ủng hộ offline, chưa xác nhận nguyên nhân trên Android
+
+**Cổng A: `SUPPORTED_OFFLINE`.** Firmware có đường SET_CONFIGURATION đổi độ dài AUTOIN từ 512 thành 1024 byte sau init; hai capture Windows nhận Bulk có một lượt A0 thứ hai sau configuration, còn VM cold và Android đã ghi một bootstrap rồi operational không A0. Đây là ứng viên nguyên nhân có nguồn và tương quan, không phải bản sửa phần cứng đã xác nhận. Giữ `Phase 3.1`, ghi `ROOT_CAUSE_CANDIDATE_H_AUTOINLEN`; trạng thái nguyên nhân vẫn chưa được giải quyết và `TS_SMOKE_PASS=false` tới khi có B2 dương tính cùng một lần lặp độc lập được duyệt.
+
+Baseline mới xác minh sạch trước sửa: `chore/modernize-android-build` / `5c1c3a0a02df5aeb63258b01b80e9ccc0116515e`. Bundle `phase31-autoinlen-offline-20261112-073915-d3e4d287` dưới `D:\TSDuck\reports` và `D:\TSDuck\logs` giữ verdict, reports, JSON, exact commands/cwd/exits và manifests. Chỉ đọc raw/source đã có; không VM, USB/ADB thật, capture, firmware writes, sync references hoặc thay ledger thật trong phần A.
+
+### A1 — Giá trị sau init khác giá trị sau configuration
+
+Ảnh ngoài Git 8192 byte/SHA-256 `b97cf208bb586f706b26aa5450de6bb97375a3e3eabe833cddb0ae3a4f69d0dc` đã được [autoinlen_static.py](../../tools/fx2/autoinlen_static.py) khóa hash trước phân tích. Executor dùng cùng bộ giải mã Gate B, chạy riêng 256 giá trị low byte của `wValue` cho mỗi request 9/11 và hai nhánh RENUM; test mới chỉ dùng byte tổng hợp nhỏ tự tạo.
+
+| Nhận định | Kết quả | Bằng chứng tĩnh / giới hạn |
+| --- | --- | --- |
+| Startup gọi init `04CF` | PASS / `FIRMWARE_STATIC_CONFIRMED` | Caller `0877`; `REVCTL=03`, FIFORESET `80/02/04/06/08/00`, `IFCONFIG=CB`, `EP2FIFOCFG=09`, `EP2CFG=E8` |
+| Init đặt AUTOINLEN=512 | PASS | `MOVX` tại `059B` ghi `E620=02`; `05A3` ghi `E621=00` |
+| Request 9 đi qua `0350` đến `0DCA` | PASS | `0DD2` ghi `E620=04`, `0DDA` ghi `E621=00`, rồi lưu low byte `wValue` vào IRAM `2D` |
+| Request 11 đi qua `034A` đến `0E77` | PASS | Chỉ lưu low byte vào IRAM `2B`, không ghi `E620/E621` trên đường đã kiểm |
+| Nhánh RENUM tại `08D5` | PASS bounded | `USBCS` bit 1 chưa bật thì SETB IRAM `21.1` và gọi `0C7D`; bật thì bỏ lời gọi này |
+| Các writer literal `MOV DPTR,#E620/E621` | PASS inventory | Quét mọi byte offset, thấy đúng bốn writer ở trên; giá trị A xác minh bằng executor từ đầu routine |
+| Loại trừ toàn bộ DPTR dựng động hoặc `MOVX @Ri` | UNKNOWN | Không dùng linear sweep hoặc inventory literal làm chứng minh toàn firmware |
+
+`FIRMWARE_STATIC_CONFIRMED` chỉ áp dụng các đường đã kiểm. Chưa có readback AUTOINLEN trên chip, chưa chứng minh RENUM giữ nguyên qua reload Android, chưa đo packet USB vật lý; kết luận nhân quả vẫn `NOT_HARDWARE_CONFIRMED`. A1 đầu có 77 tests: 76 PASS/1 SKIP vì chưa cấp CSV riêng. Sau khi xuất subset EP0 cold2 bằng TShark và xác minh hai lượt 132, lượt cuối cùng có **77/77 PASS, không SKIP**; CSV SHA `be0e1dc0a1fec8744e9e46d0406d69031937c14630b2b1adcacaa2d375e9304f`. Gate B baseline cùng ảnh là 63 PASS/1 SKIP; không giảm số PASS cũ và không dùng subset để chứng nhận toàn capture.
+
+### A2/A3 — Đếm lượt nạp theo configuration và so từng control
+
+| Run / lớp ghi | A0 và configuration quan sát | Sau release cuối / khoảng tới Sony đầu | Completion Bulk đầu |
+| --- | --- | --- | --- |
+| Windows BDA cold2 | Hai lượt đủ 132; config frames `7/8`, rồi `299/300` giữa lượt 1 và lượt 2 `301–564` | Không descriptor/config thêm trong cửa sổ sau lượt cuối; `1288,912 ms` từ completion `564` tới Sony `601` | `1650/1659`, status 0, actual 8192, `2,291 ms`; requested UNKNOWN |
+| Windows prep2 | Hai lượt đủ 132; cùng thứ tự config giữa hai lượt | Không descriptor/config thêm sau lượt cuối trong capture; `1226,251 ms` tới Sony | `1909/1923`, status 0, actual 8192, `1,984 ms`; requested UNKNOWN |
+| VM 014626, host cold + operational | Cold một lượt; config `319/320` sau completion cuối `292`; operational 0 A0/config | Có descriptor discovery lại; `25911,463 ms` tới Sony bằng riêng clock Windows, gồm handoff gap | `743/744`, `0xC0000012/BABBLE`, actual 0, `0,258 ms` |
+| VM 014626, guest | Cold 132/operational 0; không config trong hai window guest | Đổi địa chỉ giữa phases; gap guest chưa có raw liên tục; `25909,475 ms` cùng clock guest | Requested 65536, status `-2`, actual 0; không đổi cancellation thành BABBLE |
+| Linux D1 `004247` | Operational 0 A0/config trong guest; host configuration sau handoff UNKNOWN | Last release và re-enumeration UNKNOWN | Status 0, actual 82; snaplen chỉ giữ 64/82 byte, sau đó ZLP/cancellations; chưa đủ TS 188 byte |
+| Linux D2 `013202` | Operational 0 A0/config; prep2 riêng có hai lượt; host config do guest sau handoff UNKNOWN | Không trừ clock Windows prep2 với guest; last release UNKNOWN | Status 0, actual 0, rồi tám cancellations `-2` |
+| Startup-only `004925` | Host có config `21/22`, 14 standard controls; guest chỉ descriptor; 0 A0 | Không có firmware/frontend, không dùng làm phép thử reload | Không Bulk |
+| Android B1 11/11 | Bootstrap 132 metadata; operational 0 A0; kernel config UNKNOWN trong app mirror | Natural handoff ở app, không kernel bus trace; gap Java `131656,949162 ms` gồm permission | Native requested 4096, syscall/errno 0 nhưng URB `-75`, actual 0 |
+| Android Sony 10/11 | Bootstrap 132 metadata; operational 0 A0; kernel config UNKNOWN | Gap Java `458197,541028 ms`, không thời gian bắt buộc firmware | Native requested 4096, syscall/errno 0 nhưng URB `-75`, actual 0 |
+
+**Đính chính timing so với giả thuyết đầu vào:** Cold2 completion release frame `564` đến Sony frontend đầu OUT80 frame `601` là `1288,912 ms`, không khoảng 0,58 giây. Mốc `581,477 ms` là EEPROM OUT90 payload `01a025`; official `tbs5530_read_mac_address` xác nhận địa chỉ EEPROM. Hai quan sát Windows không chứng minh thời gian ổn định bắt buộc; plan B2 chọn chờ bounded 1500 ms từ completion release cuối, không nhận việc bỏ B7/EEPROM/selectors rồi sleep là tương đương Windows.
+
+A3 chạy source Java thật của `Tbs5530FirmwarePlan` và `Tbs5530Fx2ProtocolPlan`: cold2 hai lượt, prep2 hai lượt và VM cold một lượt, tổng 660 controls, khớp từng setup/payload với `TBS_SOURCE_DUAL_RESET`. Mỗi lượt giữ đúng halt `7F92=01`, `E600=01`, 128 chunks 64 byte địa chỉ `0000–1FFF`, release `7F92=00`, `E600=00`, rồi delay source 100 ms. 132 setups có SHA `95f65c4c53c359ad961c0e544d0cc5fd5cd107b46300a4a4fad5800e663d072a`; canonical setup+payload 9252 byte có SHA `d535ce2872ac67a10a6ba6a9fdad99127d24ad88e758f8ec21d4f669a3390567`. Android chỉ so được 132 setups metadata/lengths, không payload bị mirror cố ý bỏ và không readback RAM.
+
+Cold2 SHA `70fced47614ff8ec17c9e78f79fca16408c23e6bcadcfb6ad25a4c69cd7f9ded`; prep2 SHA `09e18473340c7cbd3fed3a17e8e8b7ef7511a48309580c929c75e74771f82ae5`. CSV đủ firmware bytes vẫn riêng ngoài Git. A2/A3 có 60/60 parser tests và 27 assertions PASS, không hardware rerun; parser nghiêm từ chối warm gateB vì truncation và cold1 vì thiếu cặp completion được giữ nguyên, không che bằng output TShark đọc được.
+
+### A4/A5 — Nguồn, TRM và phản chứng
+
+Bốn SHA được đọc mới, không sync: official TBS `2ce787de9f6e81b4294692a45de15596ae2e1322`; CoreELEC `072f8e99e0ac66d88d7278784e922e08e8253210`; community C `c5fa27eecbe80633cbb365cc44656daea1c0e2e3`; Go `6aaa1899991c875ba0482fa9098adc6c83b01fd8`. Official `tbs5530.c::tbs5530_probe:379–386`, properties `319–377` và `dvb-usb-init.c::dvb_usb_find_device:210–246` / `dvb_usb_device_init:267–325` chỉ có cold ID, không `identify_state`. Nếu callback probe2 thực sự chạy cùng ID thì sẽ thử downloader nữa; `.no_reconnect=1` cho tiếp tục cùng probe sau upload thành công, không bắt buộc hai uploads hoặc tự chứng minh callback từ SET_CONFIGURATION.
+
+CoreELEC có cùng cold-only policy và hai thân framework đã so byte-exact. Community `tbs5530.c::tbs5530_probe:690–720` gọi loader ở dòng 706 sau cấp phát. Go `internal/coaxd/usb/board/tbs5530/tbs5530.go::open:103–135` mở transport rồi `LoadFirmware`, không bỏ operational; `recoverAndOpen` chỉ retry khi open đầu lỗi, không hai lượt bắt buộc trong một open thành công. Hai `request_firmware` kernel là hai lần lấy file, không hai vòng A0. Source loader TBS/CoreELEC raw khác LF/CRLF: giữ 1 FAIL byte-equality, kiểm giải thích normalized 2/2 PASS, không chuẩn hóa references.
+
+TRM v2.2 local SHA `5b7ee974529ad1a074a804ed19f12eb255b1e797ebb0f604a2ef04e328d4419a`: **§15.6.4** định nghĩa AUTOINLEN/default 512; **§15.14** là synchronization delay. §3.8 nêu A0 được FX2 xử lý bất kể RENUM; §7.4 phân biệt CPU reset với power-on reset, giữ endpoint configuration/RENUM. Startup firmware mới là đường ghi lại 512, không CPU reset đơn thuần. §1.8.1/§8.3 xác nhận High-Speed bulk maxpacket 512; physical buffer EP2/6 có thể 1024 không đổi giới hạn USB. Bổ sung TRM §9.3.7/PDF 185 ghi rõ auto-commit packet size không vượt buffer, Appendix C-25/PDF 453 nói SIE chia IN-FIFO theo độ dài AUTOINLEN. Mô hình commit 1024 được nguồn hỗ trợ khi buffer 1024, nhưng hành vi chip khi descriptor vẫn 512 — chặn, chia 2×512 hay phát quá dài — vẫn UNKNOWN; không lấy mô tả tự chia MaxPacketSize của EP0 áp sang EP82. Chưa đọc AUTOINLEN thực trên Android hoặc đo host báo babble từ chính giá trị đó. TRM 9/9 checks và addendum 7/7 quotes/page objects PASS, 16 blobs nguồn có hash; không test runtime Go/CoreELEC mới.
+
+Chưa tìm clean cold epoch một upload→MPEG-TS thành công hoặc hai uploads→host BABBLE trong raw hiện có. Warm gateB có Bulk thành công nhưng không biết lịch sử trước capture; cold1 có traffic cũ/mất pairing và Bulk xen giữa upload, không đối chứng sạch; D1 82 byte không đủ TS và thiếu host handoff trace. Vì vậy chỉ ghi `CAPTURE_CORRELATED`, không gọi số lượt upload là điều kiện cần/đủ. RSSI của ADR-041 còn là khác biệt thật nhưng thành giả thuyết thứ yếu cho lỗi chung vì Android không đo RSSI vẫn `-75`.
+
+### B2 đã triển khai và kiểm phần mềm, chưa chạy thật
+
+Option debug `B2_RELOAD_AFTER_SET_CONFIG` dùng cùng golden frontend B1 `75875b84fc3f959b35d436560ae19ccf7e52b890173f1f5e24984367f64fe228`. Candidate đầu đổi backend bootstrap đã bị từ chối trước live; bản corrected giữ original `UsbDeviceConnection.controlTransfer`, phát private clean proof chỉ sau 132/132 sạch/cùng epoch/drain. Chỉ reload mới có native `USBDEVFS_CONTROL` audit ordinal/setup/length/result/errno/timestamps, mirror tách BOOTSTRAP/RELOAD và bỏ payload A0 nhưng ghi hash. Operational A0 mặc định vẫn bị chặn; thiếu proof/epoch/permission/descriptor/speed/hash fence thì không reload/frontend.
+
+Store reload riêng có header không rỗng, anchor hash từng prefix, marker và fixed consumed tombstone cho init. Consume append/fsync/readback trước A0 đầu, mỗi physical epoch tối đa một suffix; mất/corrupt/partial/rollback/hash mismatch latch lỗi, không reset/rearm. Caller initializer debug-only/no-tuner có immutable grant, exact APK/helper/plan/history/templates, reservation/foreground/heartbeat và tombstone bền trước create O_EXCL. Chưa chạy caller hoặc ghi store Samsung; template pin witness lịch sử không là current installed hash. Init riêng phải được duyệt trước, không gộp thành quyền firmware.
+
+Corrected JVM fresh đủ private fixtures có driver TBS 464/464, app 74/74, usbxfer 32/32 PASS/0 SKIP; corrected emulator 30 app/19 driver PASS gồm integration 3/init 5/JNI load invalid-fd. Helper runtime/init có 19/19 và 9/9 cùng regression PASS; native plan 132/core 4096/8192, debug/AndroidTest/app lint/release isolation PASS có phạm vi. Standalone driver lint còn FAIL cũ ngoài diff; release assembly correction UP-TO-DATE, không gọi reassembly mới. First APK emulator 24/25 và focused 1/1 được giữ riêng, không xóa failure hoặc xác nhận timing cause. B2 live/actual AUTOINLEN/TS mới vẫn NOT RUN; xem [TEST-MATRIX.md](TEST-MATRIX.md) và `b2-final-validation.md` trong bundle.
+
+### Đính chính ngày 12/11 — các nhận định lịch sử phải đọc cùng kết quả mới
+
+- **Mục “Ranh giới FX2 chưa quan sát” ngày 10/11 và bảng Gate B/Phase 3.1 ghi `EP2AUTOINLEN=0200`:** 512 chỉ đúng trên đường init tới trước SET_CONFIGURATION tiếp theo. Phân tích cũ chưa đi vào `0DCA`; không sửa chữ hoặc kết quả lịch sử.
+- **Mục “Kết quả trace thật được duyệt — 18:38 +07”, đoạn “Vì sao vẫn giữ hướng B cho Android”:** nay có giải thích source cho việc probe/open lại sẽ tải lại và đường firmware SET_CONFIGURATION đặt 1024. Lý do tác giả driver thiết kế hai lượt và hiệu lực nhân quả trên Android vẫn chưa được chứng minh; không gọi replay tùy ý là retry hợp lệ.
+- **Mục “Nguồn gốc và semantic diff” ngày 09→10/11, câu closure `no_reconnect=1`:** không đọc lại descriptor trong cùng probe không loại trừ callback mới sau re-enumeration tải firmware lần nữa. Tách cached descriptor của probe1 khỏi chính sách probe2.
+- **Mục “Ma trận theo mốc có ý nghĩa” và bảng 10:11 ở [TEST-MATRIX.md](TEST-MATRIX.md) có “không replay double A0”:** quy tắc chỉ được xem lại cho B2 debug-only theo [ADR-047](DECISIONS.md#adr-047--xem-lại-quy-tắc-một-lượt-nạp-lượt-a0-thứ-hai-sau-set_configuration-là-bước-chức-năng-không-phải-retry). Chưa cấp quyền live hoặc mở lại epoch cũ; các nhánh khác vẫn bị chặn.
+
+
 ## 2026-11-11, phiên 22:18 — Recovery thật và negative B1 MANUAL0, không phải nguyên nhân đã xác nhận
 
 **MANUAL PLP0 đơn lẻ không tạo byte EP82 hợp lệ trên Samsung trong lượt mới.** Operational có 191 EP0 full-length, bank23 AF00/AD01, bank00 96/97=54/54, sync bank20/10=0x26, stream 8A0A00; actual selected PLP/L1 vẫn UNKNOWN. Không setInterface hoặc Sony readback bổ sung. Native 8×4096 có 8 submits/8 reaps, mọi reap syscall=0/errno=0 nhưng urb.status=-75/actual=0. Sample0 byte, không parser/PSI/TS PASS. Comparison dùng baseline AUTO lịch sử 190 controls và one-variable plan proof offline, không có same-session AUTO rollback hoặc positive causal control.

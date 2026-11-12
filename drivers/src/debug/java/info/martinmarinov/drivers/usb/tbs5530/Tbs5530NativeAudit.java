@@ -20,6 +20,9 @@ final class Tbs5530NativeAudit implements Tbs5530BootstrapTelemetry.Audit {
         try {
             JSONObject json = new JSONObject();
             json.put("run_epoch", s.runEpoch); json.put("monotonic_timebase", s.timebase);
+            json.put("evidence_layer", "ANDROID_APP_OBSERVED");
+            json.put("boundary", "UsbDeviceConnection.controlTransfer");
+            json.put("legacy_native_counter_names_are_syscall_proof", false);
             json.put("planned_ordinal", s.plannedOrdinal);
             json.put("guard_requested", s.guardRequested); json.put("guard_accepted", s.guardAccepted);
             json.put("native_call_started", s.nativeCallStarted); json.put("native_call_completed", s.nativeCallCompleted);

@@ -1,5 +1,60 @@
 # Architecture decision record (ADR)
 
+## ADR-047 — Xem lại quy tắc một lượt nạp: lượt A0 thứ hai sau SET_CONFIGURATION là bước chức năng, không phải retry
+
+**Date:** 2026-11-12, phiên 07:38 +07
+
+**Status:** Cổng A `SUPPORTED_OFFLINE`; phê duyệt triển khai/phân tích phần mềm debug-only theo nhiệm vụ, chưa phê duyệt B2 live. Chưa xác nhận chức năng hoặc nguyên nhân phần cứng; tên “bước chức năng” là cách phân loại giả thuyết thay vì quyền retry.
+
+### Context
+
+B1 MANUAL0 ngày 11/11 khóa K36 nhưng tám URB `-75`/actual 0. Phân tích cũ chỉ mô tả AUTOINLEN=512 sau init và cấm sao chép hai uploads BDA thành retry Android. Bằng chứng mới chỉ ra SET_CONFIGURATION còn gọi firmware routine đặt 1024; cần thử một thay đổi có guard, không tiếp tục lặp PLP/buffer/interface.
+
+### Evidence
+
+- `FIRMWARE_STATIC_CONFIRMED`: ảnh SHA `b97cf208bb586f706b26aa5450de6bb97375a3e3eabe833cddb0ae3a4f69d0dc` init `04CF` ghi `E620/E621=0200`; request 9→`0350`→`0DCA` ghi `0400`. Request 11→`0E77` không ghi AUTOINLEN trên đường đã kiểm; nhánh `08D5` bỏ gọi re-enumeration khi RENUM bật. Chưa loại trừ mọi DPTR động hoặc chứng minh RENUM runtime Android.
+- `CAPTURE_CORRELATED`: Windows cold2/prep2 có config `299/300` rồi lượt A0 `301–564`, cả hai lượt byte-exact source Android; Bulk thành công. VM cold một upload rồi config `319/320`, operational không A0 và host BABBLE. D1/D2 host config sau handoff UNKNOWN; chưa có đối chứng đảo chiều sạch hoặc actual AUTOINLEN readback.
+- `SOURCE_CONFIRMED` có điều kiện: TBS/CoreELEC cold-only IDs khiến callback probe mới thử loader, C gọi loader mỗi probe đi qua cấp phát, Go reload mỗi `board.open`. `no_reconnect=1` không tự buộc probe2; hai lần lấy file kernel không là hai uploads. Không đồng nhất source support với runtime.
+- TRM §15.6.4 định nghĩa AUTOINLEN/default 512, §15.14 là synchronization delay, §3.8 A0 bất kể RENUM, §7.4 CPU reset giữ endpoint/RENUM. §9.3.7/Appendix C-25 mô tả auto-commit theo AUTOINLEN không vượt buffer; hành vi chip khi descriptor 512 trái AUTOINLEN 1024 vẫn UNKNOWN. Cold2 release→Sony đầu đo lại `1288,912 ms`; khoảng `581,477 ms` là EEPROM, không frontend Sony.
+
+### Decision
+
+Chỉ thiết kế/triển khai option debug `B2_RELOAD_AFTER_SET_CONFIG`: giữ đúng pipeline B1 MANUAL0, thêm một reload 132 A0 cùng ảnh/cùng physical epoch trên operational đã có permission và claim, trước mọi frontend control. Chờ bounded 1500 ms sau completion release cuối; giữ delay 100 ms trong source plan. Nếu detach/re-enumeration trong cửa sổ thì terminal `RELOAD_CAUSED_REENUMERATION`, không frontend, không upload thêm. Mọi lỗi giữa transfers là `UNCERTAIN`, không tự halt/release/retry.
+
+Bootstrap phải giữ backend `UsbDeviceConnection.controlTransfer` như B1; không đổi bootstrap sang JNI để lấy bằng chứng syscall rồi coi đó vẫn là phép thử một biến. Candidate đầu dùng cách này đã bị từ chối trước live; native audit thật chỉ thêm ở reload, proof bootstrap phát hành nội bộ từ kết quả original 132/132 sạch/cùng epoch/drain, không host flag. Chưa có kết quả runtime chứng minh handoff; strict ABA/permission guards không được nới để tiếp tục.
+
+Consume reload bền trước A0 đầu trong store append-only riêng, host pin hash, không thêm record lạ vào parser `FIRMWARE_CONSUMED`. Bootstrap trước đó phải có bằng chứng 132/132 sạch cùng epoch; thiếu proof/hash/store hoặc store mất không được tự khởi tạo rỗng để vượt chốt. Initialization store mới và runtime append phải có kế hoạch exact bytes/consent riêng trong card; thiết kế không cho phép reset/rearm history. Bản corrected đã có caller init debug-only/no-tuner, immutable grant/heartbeat/foreground/reservation và fixed consumed tombstone trước create; O_EXCL/fsync từng target, partial state giữ nguyên và chặn retry. Header journal 138 byte, anchor 94 byte, marker 99 byte được pin riêng ngoài Git; chưa áp dụng Samsung hoặc coi template hash là installed hash.
+
+ADR này **supersedes in part** ADR-019 ở câu “không sao chép hai lượt tự nhiên của BDA thành retry Android”, ADR-033 ở dòng lifecycle M “Không rearm store hoặc nạp lần hai”, và ADR-046 ở cụm “double A0” trong Stop boundary, **chỉ cho B2 có card/hashes được duyệt**. Phần “không rearm store”, cấm retry lỗi, cấm các nhánh khác và mọi guard cũ vẫn giữ. ADR-041 được bổ sung thứ tự ưu tiên: RSSI là giả thuyết thứ yếu cho lỗi chung, không bị xóa bằng chứng có ghi tuner hoặc được coi là đã bác bỏ mọi ảnh hưởng.
+
+### Alternatives
+
+| Phương án | Trạng thái / lý do không chọn |
+| --- | --- |
+| Chỉ halt/release E600, không ghi image | Chỉ đề xuất, chưa triển khai/chưa chạy. CPU reset giữ config, cần proof startup đầy đủ và exact board plan riêng; không dùng làm recovery sau partial reload |
+| Vá ảnh để bỏ writes E620/E621 trong routine config | Chỉ đề xuất, chưa triển khai/chưa tạo firmware. Đổi image/hash/provenance và safety scope, trái giới hạn không custom firmware của nhiệm vụ |
+| Giữ một upload, tiếp tục B1 | Baseline giữ nguyên cho AUTO/legacy/B1; không tạo phép phân biệt mới sau B1 âm tính |
+| Replay B7/040x hoặc đổi drive/buffer/interface | Không chọn, chưa có quyền hoặc căn cứ an toàn; thêm biến sẽ làm khó diễn giải B2 |
+
+### Trade-offs
+
+Reload có thể gây detach, mất permission, firmware partial hoặc trạng thái FIFO mới; một lần nạp thêm không được xem như retry vô hại. Cần store/receipt/hash fence riêng và native boundary audit, làm đường debug phức tạp hơn; không vì vậy nới guard, đổi ledger cũ hoặc mở arbitrary A0 trên operational. Sleep 1500 ms chỉ vượt quan sát cold2, không thay thế tác dụng chưa biết của B7/EEPROM và không chứng minh AUTOINLEN đúng runtime.
+
+### Safety / rollback
+
+Không B7, `8A0400/0401`, EEPROM writes, LNB/DC, drive `96/97` khác `54/54`, buffer khác 8×4096, setInterface, readback Sony, RSSI, VM hoặc đổi owner. Mặc định AUTO/legacy và B1 không đổi, release không chứa option/class mới. Không cài APK lên Samsung hoặc ghi store/tuner trước card được duyệt đúng hashes. Lỗi/identity change phải stop, drain rồi cleanup; không force-close syscall đang active và không thêm release CPU để “cứu”.
+
+Không có rollback phần cứng bằng lệnh. Sau drain, người dùng ngắt nguồn tuner ít nhất 5 giây để mất RAM firmware; không dùng việc này làm quyền epoch tự sinh hoặc xóa consumed record. Source rollback là bỏ option B2, không gửi USB rollback writes. Store đã consume vẫn giữ dù kết quả thất bại hoặc uncertain.
+
+### Reopen trigger
+
+Chỉ mở B2 live khi software gates, immutable grant và exact APK/helper/plan/firmware/history/reload-store hashes đã khóa và được người dùng duyệt. B2 dương tính có URB status0/actual>0 và sync `0x47` cách 188 byte mới là ủng hộ mạnh; cần một fresh attach lặp độc lập trước kết luận root cause hoặc xét AUTO/production. Re-enumeration, vẫn `-75`, `-71/-110/ZLP` hay khác đều giữ negative/new symptom, dừng và nghiên cứu offline, không tự thử alternatives.
+
+**Validation:** Corrected JVM fresh TBS 464/app 74/usbxfer 32 PASS, 0 SKIP; emulator app 30/driver 19 PASS, helper/native/build/app lint/release isolation PASS có phạm vi. Giữ standalone driver lint FAIL cũ ngoài diff và failure emulator candidate đầu; không tự sửa unrelated hoặc dùng PASS sau xóa lịch sử. Bootstrap/reload proof trên Samsung, store init thật và B2 live chưa chạy.
+
+**Records:** [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md) và bundle `phase31-autoinlen-offline-20261112-073915-d3e4d287` dưới `D:\TSDuck`. Verdict/card không cấp quyền hardware; `B2 live = NOT RUN`. Card init riêng phải được duyệt/verified trước card tuner; disposition driver lint FAIL cũ cần ghi rõ, không nhận mọi gate đã PASS.
+
+
 ## ADR-046 — Chấp nhận witness sau deny-only reconciliation và đóng B1 âm tính, không tăng quyền sang nhánh khác
 
 **Date:** 2026-11-11, phiên bắt đầu 22:18 +07

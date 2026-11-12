@@ -1,4 +1,4 @@
-﻿# SPDX-License-Identifier: GPL-2.0-or-later
+# SPDX-License-Identifier: GPL-2.0-or-later
 # One bounded debug session; no package changes, reconnect or USB ownership changes.
 [CmdletBinding()]
 param(
@@ -19,7 +19,11 @@ param(
     [switch]$ControlMirror,
     [switch]$ExplicitSetInterfaceAlt0,
     [switch]$SonyTsOutputReadback,
-    [ValidateSet('BASELINE_AUTO', 'MANUAL_PLP0_K36')][string]$FrontendExperiment = 'BASELINE_AUTO',
+    [ValidateSet('BASELINE_AUTO', 'MANUAL_PLP0_K36', 'B2_RELOAD_AFTER_SET_CONFIG')][string]$FrontendExperiment = 'BASELINE_AUTO',
+    [ValidatePattern('^[a-f0-9]{64}$')][string]$ExpectedReloadPlanSha256,
+    [ValidatePattern('^[a-f0-9]{64}$')][string]$ExpectedReloadStoreSha256,
+    [ValidatePattern('^[a-f0-9]{64}$')][string]$ExpectedReloadAnchorSha256,
+    [ValidatePattern('^[a-f0-9]{64}$')][string]$ExpectedHelperSha256,
     [ValidatePattern('^[a-f0-9]{64}$')][string]$ExpectedFrontendGoldenSha256,
     [ValidatePattern('^[a-f0-9]{64}$')][string]$ExpectedAppApkSha256,
     [ValidatePattern('^[a-f0-9]{64}$')][string]$ExpectedAttachmentHistorySha256,
@@ -30,6 +34,21 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if (-not $GrantBoundedSession -or -not $ProofOfGuardPassed) { throw 'BLOCKED: cần quyền phiên bounded và kết quả proof-of-guard trước khi chạy thật.' }
+$b2Reload = $FrontendExperiment -ceq 'B2_RELOAD_AFTER_SET_CONFIG'
+if ($b2Reload) {
+    if ($ExpectedModel -cne 'SM-X926B' -or $ExpectedApi -ne 36 -or $Profile -cne 'EXPERIMENTAL_DIAGNOSTIC' -or
+        $ReadApi -cne 'NATIVE_USBFS_URB_8X4096' -or -not $ControlMirror -or $ExplicitSetInterfaceAlt0 -or $SonyTsOutputReadback -or
+        $ControlPlaneOnly -or -not $ExpectedFrontendGoldenSha256 -or -not $ExpectedAppApkSha256 -or -not $ExpectedAttachmentHistorySha256 -or
+        -not $ExpectedReloadPlanSha256 -or -not $ExpectedReloadStoreSha256 -or -not $ExpectedReloadAnchorSha256 -or
+        -not $ExpectedHelperSha256 -or -not $FirmwarePath -or -not $PhysicalRecoveryEpoch -or -not $PhysicalRecoveryConfirmed) {
+        throw 'BLOCKED: B2 cần exact Samsung/API36, native4096/MANUAL0/mirror, bootstrap cùng phiên, epoch và đủ hash; không ghép phép thử.'
+    }
+    if ((Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedHelperSha256) {
+        throw 'BLOCKED: B2 helper khác hash đã duyệt; chưa gọi ADB.'
+    }
+} elseif ($ExpectedReloadPlanSha256 -or $ExpectedReloadStoreSha256 -or $ExpectedReloadAnchorSha256 -or $ExpectedHelperSha256) {
+    throw 'BLOCKED: reload pins chỉ thuộc B2.'
+}
 if ($FrontendExperiment -ceq 'MANUAL_PLP0_K36' -and ($Profile -cne 'EXPERIMENTAL_DIAGNOSTIC' -or
     $ReadApi -cne 'NATIVE_USBFS_URB_8X4096' -or -not $ControlMirror -or $ExplicitSetInterfaceAlt0 -or
     $SonyTsOutputReadback -or $ControlPlaneOnly -or -not $ExpectedFrontendGoldenSha256 -or -not $ExpectedAppApkSha256 -or
@@ -106,8 +125,15 @@ function Get-TBS5530AdbDeadline([string]$Operation, [string[]]$DeviceArguments, 
         throw 'FAIL-STOP: export chỉ được đọc sau terminal report và drain đã xác minh.'
     }
     $remote = 'files/autonomous-v1-' + $Session + '/control-ep0.jsonl'
-    $expected = if ($Operation -ceq 'CONTROL_TRACE_READ') { @('exec-out', 'run-as', 'info.martinmarinov.dvbdriver', 'cat', $remote) }
-        elseif ($Operation -ceq 'CONTROL_TRACE_HASH') { @('shell', 'run-as', 'info.martinmarinov.dvbdriver', 'sha256sum', $remote) }
+    if ($Operation -cin @('NATIVE_A0_READ','NATIVE_A0_HASH')) {
+        if ($DeviceArguments.Count -ne 5 -or $DeviceArguments[4] -cnotmatch
+            ('^files/autonomous-v1-' + [regex]::Escape($Session) + '/(?:reload-a0-native\.jsonl|reload-native-boundaries\.json)$')) {
+            throw 'FAIL-STOP: native export không thuộc exact allowlist của session đã drain.'
+        }
+        $remote = $DeviceArguments[4]
+    }
+    $expected = if ($Operation -cin @('CONTROL_TRACE_READ','NATIVE_A0_READ')) { @('exec-out', 'run-as', 'info.martinmarinov.dvbdriver', 'cat', $remote) }
+        elseif ($Operation -cin @('CONTROL_TRACE_HASH','NATIVE_A0_HASH')) { @('shell', 'run-as', 'info.martinmarinov.dvbdriver', 'sha256sum', $remote) }
         else { throw 'FAIL-STOP: deadline export không áp dụng cho thao tác runtime.' }
     if ($DeviceArguments.Count -ne $expected.Count) { throw 'FAIL-STOP: export không đúng read-only allowlist.' }
     for ($i = 0; $i -lt $expected.Count; $i++) {
@@ -440,10 +466,22 @@ if ($SonyTsOutputReadback) {
         '|source=TBS:2ce787de9f6e81b4294692a45de15596ae2e1322,CoreELEC:072f8e99e0ac66d88d7278784e922e08e8253210,Community:c5fa27eecbe80633cbb365cc44656daea1c0e2e3'
     if ($challenge.sony_readback_layout -cne $layout) { throw 'BLOCKED: Sony readback layout không khớp source/allowlist đã duyệt.' }
 }
-if ($FrontendExperiment -ceq 'MANUAL_PLP0_K36') {
+if ($FrontendExperiment -ceq 'MANUAL_PLP0_K36' -or $b2Reload) {
     $observedHistory = Get-TBS5530Sha256Token (Invoke-PinnedAdb @('shell', 'run-as', $package, 'sha256sum',
         'files/autonomous-v1-samsung-sm-x926b-api36-attachments.txt') -Operation HISTORY_FENCE_HASH)
     if ($observedHistory -cne $ExpectedAttachmentHistorySha256) { throw 'BLOCKED: history thực tế không khớp hash ngoài app đã duyệt.' }
+}
+if ($b2Reload) {
+    foreach ($pin in @(
+        @('fx2_reload_option', 'B2_RELOAD_AFTER_SET_CONFIG'), @('fx2_reload_plan_sha256', $ExpectedReloadPlanSha256),
+        @('fx2_reload_store_sha256', $ExpectedReloadStoreSha256), @('fx2_reload_anchor_sha256', $ExpectedReloadAnchorSha256),
+        @('bootstrap_proof', 'SAME_SESSION_ORIGINAL132_APP_BOUNDARIES_DRAIN_REQUIRED')
+    )) {
+        if ($null -eq $challenge.PSObject.Properties[$pin[0]] -or $challenge.($pin[0]) -cne $pin[1]) { throw 'BLOCKED: B2 challenge không khớp card đã duyệt.' }
+    }
+    $storeHash = Get-TBS5530Sha256Token (Invoke-PinnedAdb @('shell', 'run-as', $package, 'sha256sum', 'no_backup/fx2-reload-v1.txt') -Operation RELOAD_STORE_HASH)
+    $anchorHash = Get-TBS5530Sha256Token (Invoke-PinnedAdb @('shell', 'run-as', $package, 'sha256sum', 'no_backup/fx2-reload-v1.anchor') -Operation RELOAD_ANCHOR_HASH)
+    if ($storeHash -cne $ExpectedReloadStoreSha256 -or $anchorHash -cne $ExpectedReloadAnchorSha256) { throw 'BLOCKED: B2 store/anchor thật khác hash ngoài app đã duyệt.' }
 }
 $directory = 'files/autonomous-v1-' + $challenge.session
 if ($FirmwarePath) {
@@ -549,7 +587,7 @@ if ($ControlMirror -and (Test-TBS5530DrainedTerminal $terminalReport)) {
         records=$terminalReport.control_mirror_records; cleanup=$terminalReport.cleanup; read_api=$ReadApi } |
         ConvertTo-Json | Set-Content -LiteralPath (Join-Path $local 'manifest.json') -Encoding utf8
 }
-if ($FrontendExperiment -ceq 'MANUAL_PLP0_K36') {
+if ($FrontendExperiment -ceq 'MANUAL_PLP0_K36' -or $b2Reload) {
     if (-not (Test-TBS5530DrainedTerminal $terminalReport)) { throw 'FAIL-STOP: không đọc history trước drain.' }
     $observedHistory = Get-TBS5530Sha256Token (Invoke-PinnedAdb @('shell', 'run-as', $package, 'sha256sum',
         'files/autonomous-v1-samsung-sm-x926b-api36-attachments.txt') -Operation HISTORY_FENCE_HASH)
@@ -561,5 +599,36 @@ if ($FrontendExperiment -ceq 'MANUAL_PLP0_K36') {
         cleanup=$terminalReport.cleanup; source='HOST_READ_AFTER_DRAIN_NOT_AUTOMATIC_APPROVAL_FOR_NEXT_RUN' } |
         ConvertTo-Json | Set-Content -LiteralPath $evidence -Encoding utf8
     if (-not $historyMatches) { throw 'FAIL-STOP: history sau run không khớp fence của app; evidence đã giữ.' }
+}
+if ($b2Reload) {
+    if (-not (Test-TBS5530DrainedTerminal $terminalReport)) { throw 'FAIL-STOP: không đọc reload store trước drain.' }
+    foreach ($name in @('reload-a0-native.jsonl','reload-native-boundaries.json')) {
+        $remote = $directory + '/' + $name
+        $command = 'if [ -f ' + $remote + ' ]; then printf PRESENT; fi'
+        $present = Invoke-PinnedAdb @('shell', 'run-as', $package, 'sh', '-c', "'$command'") -Operation NATIVE_A0_EXISTS
+        if ($present -cne 'PRESENT') {
+            if ($null -ne $terminalReport.fx2_reload -and $terminalReport.fx2_reload.state -ceq 'COMPLETE') {
+                throw 'FAIL-STOP: reload COMPLETE thiếu native boundary evidence; không coi là thành công.'
+            }
+            continue
+        }
+        $local = Join-Path $OutputDirectory ('b2-' + $challenge.session + '-' + $name)
+        if (Test-Path -LiteralPath $local) { throw 'Không ghi đè evidence đã có.' }
+        $text = Invoke-PinnedAdb @('exec-out', 'run-as', $package, 'cat', $remote) '' $true -Operation NATIVE_A0_READ -DrainedReport $terminalReport
+        [IO.File]::WriteAllText($local, $text, [Text.UTF8Encoding]::new($false))
+        $sourceHash = Get-TBS5530Sha256Token (Invoke-PinnedAdb @('shell', 'run-as', $package, 'sha256sum', $remote) -Operation NATIVE_A0_HASH -DrainedReport $terminalReport)
+        if ($sourceHash -cne (Get-FileHash -LiteralPath $local -Algorithm SHA256).Hash.ToLowerInvariant()) { throw 'FAIL-STOP: native evidence hash Android/host không khớp.' }
+    }
+    $observedStore = Get-TBS5530Sha256Token (Invoke-PinnedAdb @('shell', 'run-as', $package, 'sha256sum', 'no_backup/fx2-reload-v1.txt') -Operation RELOAD_STORE_HASH)
+    $observedAnchor = Get-TBS5530Sha256Token (Invoke-PinnedAdb @('shell', 'run-as', $package, 'sha256sum', 'no_backup/fx2-reload-v1.anchor') -Operation RELOAD_ANCHOR_HASH)
+    if ($terminalReport.fx2_reload_store_sha256 -cne $observedStore -or $terminalReport.fx2_reload_anchor_sha256 -cne $observedAnchor) {
+        throw 'FAIL-STOP: reload store/anchor sau drain không khớp owned append fence; không cấp quyền run tiếp.'
+    }
+    $evidence = Join-Path $OutputDirectory ('phase31-b2-reload-' + $challenge.session + '.json')
+    if (Test-Path -LiteralPath $evidence) { throw 'Không ghi đè evidence đã có.' }
+    @{ report=$terminalReport; baseline_store_sha256=$ExpectedReloadStoreSha256; final_store_sha256=$observedStore;
+        baseline_anchor_sha256=$ExpectedReloadAnchorSha256; final_anchor_sha256=$observedAnchor;
+        plan_sha256=$ExpectedReloadPlanSha256; helper_sha256=$ExpectedHelperSha256; next_run_approval=$false } |
+        ConvertTo-Json -Depth 16 | Set-Content -LiteralPath $evidence -Encoding utf8
 }
 exit $exitCode

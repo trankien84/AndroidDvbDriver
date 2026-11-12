@@ -1,5 +1,56 @@
 # TBS5530 test matrix
 
+## 2026-11-12, phiên 07:38 +07 — Cổng A H-AUTOINLEN và baseline phần mềm; B2 live NOT RUN
+
+| Kiểm mới | Kết quả | Bằng chứng / giới hạn |
+| --- | --- | --- |
+| Git trước sửa | PASS | Đúng branch/HEAD `5c1c3a0a02df5aeb63258b01b80e9ccc0116515e`, working tree sạch |
+| Gate B baseline cùng ảnh thật | PASS 63 / SKIP 1 | 64 tests; private CSV chưa cấp, không gọi skip là PASS |
+| A1 suite đầu | PASS 76 / SKIP 1 | 77 tests gồm 13 test byte tổng hợp mới và Gate B cũ; CSV chưa cấp ở lượt này |
+| A1 suite cuối có private CSV | PASS 77/77 / SKIP 0 | Subset EP0 cold2 đã hash, hai lượt 132; không giảm PASS baseline hoặc gọi subset là proof toàn capture |
+| A1 ảnh/hash/init/registers | PASS tĩnh | 8192 byte/hash pin, startup init 512 và FIFO/IFCONFIG/EP2CFG assertions |
+| A1 request 9/request 11 | PASS bounded | 256 low-byte wValue mỗi request; config ghi 1024, interface không ghi AUTOINLEN trên đường đã kiểm |
+| A1 RENUM/literal inventory | PASS bounded / toàn cục UNKNOWN | Hai nhánh RENUM; bốn literal writers, chưa loại trừ DPTR động/MOVX @Ri |
+| A1 CLI lần đầu | FAIL giữ nguyên | Literal scanner chưa biết A khi CLR A trước DPTR; sửa provenance từ executor, không sửa firmware |
+| A1 CLI cuối/no-overwrite | PASS / refusal đúng exit 1 | `a1-verified` giữ JSON+Markdown; lần output tồn tại không ghi đè |
+| A2 parser regressions | PASS 60/60 | Một runner Node trên parser hiện có, không fixture firmware mới |
+| A2/A3 raw assertions | PASS 27 | 18 raw + 3 completion + 6 review; không tính trùng vào 60 tests |
+| A3 byte-exact | PASS 660 controls | cold2/prep2 mỗi hai lượt, VM cold một; so Java source thực setup+payload |
+| A3 Android payload | UNKNOWN / metadata PASS | A0 mirror bỏ payload; chỉ so 132 setup/length của B1 và Sony, không RAM readback |
+| A2 timing cold2 | PASS đo lại | Release completion 564→Sony 601=`1288,912 ms`; `581,477 ms` là EEPROM |
+| D1/D2 host configuration sau handoff | UNKNOWN | Không raw Windows đồng thời đủ scope; startup 004925 không lấp gap cũ |
+| Warm gateB/cold1 parser nghiêm | FAIL giữ nguyên | Truncation/Unpaired Bulk completion; TShark exit 0 không đổi thành capture toàn vẹn |
+| A4 nguồn pin | PASS 16 blobs | Exact SHA/line/function và rehash; official/CoreELEC probe2 có điều kiện, C/Go loader policy |
+| A4 loader raw byte-equality | FAIL 1 giữ nguyên | CE CRLF/TBS LF; 2/2 kiểm normalized giải thích PASS, không sửa references |
+| A4 TRM | PASS 9/9 + addendum 7/7 quotes | AUTOINLEN §15.6.4; §15.14 sync delay; §9.3.7 commit không vượt buffer; mismatch descriptor 512 vẫn UNKNOWN |
+| Baseline driver JVM TBS5530 | Wrapper `UP-TO-DATE`, XML 456/456 PASS kế thừa | Không gọi là fresh rerun; XML giữ riêng, final B2 cần chạy lại thực và cấp private inputs |
+| Baseline app JVM TBS5530 | PASS 74/74 | Wrapper offline; editor chưa discover test nên dùng configured runner |
+| Baseline recovery parser | PASS 8/8 | Node, không đổi format ledger hoặc store thật |
+| Baseline native fault fixture | PASS 4096 và 8192 | GCC hiện có/real core/canary; runtime B2 vẫn chỉ 8×4096, exe tạm đã xóa |
+| B2 candidate đầu JVM | Driver 479 PASS/2 SKIP trên 481; app 74/74; usbxfer 32/32 | Runner full khác selector baseline; hai private inputs chưa cấp, chưa coi là không giảm PASS baseline |
+| B2 candidate đầu build/app lint/release isolation | PASS có phạm vi | Debug/release/AndroidTest compile, app lint; bản này còn đổi backend bootstrap nên chưa được chấp nhận làm single-variable B2 |
+| Standalone driver lint debug/release | FAIL cũ ngoài diff | `UsbPermissionObtainer.java:105`/UnspecifiedRegisterReceiverFlag; không sửa/suppress hoặc dùng app lint thay kết quả driver |
+| Emulator candidate đầu app | 24 PASS/1 FAIL trên 25 | Legacy sessionStorageIssuesExactSingleUsePlanWithoutTouchingManualStores báo host offline/expired; không nới heartbeat hoặc xóa failure |
+| Emulator candidate đầu focused failure | PASS 1/1 riêng | Cùng APK/source, cause timing UNKNOWN; không ghi đè failure cold suite |
+| Emulator candidate đầu B2 isolation/JNI | PASS 3/3 trong app suite | x86_64 load JNI thật, invalid fd/size bị từ chối trước syscall; không mở USB/init store |
+| Emulator candidate đầu driver | PASS 16/16 | OperationalHandoff/AndroidBootstrapPort/BootstrapIsolation dùng fake, default A0 vẫn bị chặn |
+| B2 corrected giữ original bootstrap | PASS source/fake | Original Port byte-equivalent, private proof sạch/cùng epoch/drain; chỉ reload JNI audit |
+| B2 final driver TBS JVM | PASS 464/464 / SKIP 0 | Fresh `--rerun-tasks`, 456 cases cũ + 8 B2, đủ private history/TS fixtures |
+| B2 final app/usbxfer JVM | PASS 74/74 và 32/32 | Fresh, 76/76 Gradle tasks executed; không dùng XML kế thừa |
+| B2 corrected emulator app | PASS 30/30 | API 37/x86_64/emulator-5580, reload isolation 3/init 5 và grant regression; không USB thật |
+| B2 corrected emulator driver | PASS 19/19 | Gồm original bootstrap→reload integration 3, các negative proof/epoch/drain và isolation cũ |
+| B2 runtime/init helper | PASS 19/19 và 9/9 cùng regression | Offline negative/hash/grant/template/heartbeat syntax, không ADB/apply |
+| B2 native plan/core | PASS 132/132 và canary 4096/8192 | Image tổng hợp, không true-firmware fixture hoặc USB syscall thật |
+| B2 final debug/AndroidTest/app lint | PASS | Corrected artifacts executed; release assembly UP-TO-DATE từ build trước, isolation/ABI/alignment kiểm lại PASS |
+| B2 release isolation | PASS tĩnh | Không class/option B2/init hoặc native diagnostic lib trong release, debug đủ 4 ABI/ELF64 align 0x4000 |
+| B2 initializer thật/history hiện tại | NOT RUN | Caller có code/grant/tombstone; chưa cài APK Samsung/init store; templates không thay actual hashes |
+| B2 trên Samsung / firmware reload / TS | NOT RUN | Chưa cài APK thật, chưa grant exact card; `NOT_HARDWARE_CONFIRMED` |
+
+**Đính chính ngày 12/11 cho mục “2026-11-11, phiên 10:11 — Đối chiếu offline BDA/VM từ raw cũ”, hàng firmware “không replay double A0”:** xem [ADR-047](DECISIONS.md). Chỉ B2 có card được duyệt mới được xem xét một reload có chức năng giả thuyết, không retry tự động, không rearm epoch/store hoặc mở các nhánh khác. Kết quả lịch sử bên dưới giữ nguyên; `Phase 3.1`, `ROOT_CAUSE_CANDIDATE_H_AUTOINLEN`, nguyên nhân chưa xác nhận, `TS_SMOKE_PASS=false`.
+
+Bundle `phase31-autoinlen-offline-20261112-073915-d3e4d287` dưới `D:\TSDuck\reports`/logs giữ lệnh, exits, XML và hashes. Không phần cứng/VM/capture mới hoặc sync references.
+
+
 ## 2026-11-11, phiên 22:18 — Recovery apply PASS; B1 MANUAL0 TS FAIL với cleanup PASS
 
 | Kiểm mới | Kết quả | Bằng chứng / giới hạn |

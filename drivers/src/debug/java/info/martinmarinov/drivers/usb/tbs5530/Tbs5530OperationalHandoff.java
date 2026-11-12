@@ -6,7 +6,7 @@ import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
-/** Opt-in debug acquisition through the existing binding/coordinator. Never uploads firmware. */
+/** Opt-in debug acquisition through the existing binding/coordinator; the default owner forbids every A0. */
 public final class Tbs5530OperationalHandoff implements AutoCloseable {
     public interface Consent { void requireCurrent() throws IOException; }
     public interface SonyReadbackHook { void beforeFirstBulk() throws IOException; }
@@ -17,12 +17,17 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
     private Tbs5530TsSmoke.ReadApi readApi = Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO;
     private Tbs5530ControlMirror controlMirror;
     private NativeConfiguration nativeConfiguration;
+    private volatile Tbs5530Fx2Reload reload;
+    private boolean reloadComplete;
+    private final java.util.List<Tbs5530Fx2Reload.Boundary> reloadBoundaries = new java.util.ArrayList<>();
     private static final class NativeConfiguration {
         final String runId;
         volatile Tbs5530TsSmoke.Limits limits;
         volatile Consent pollGuard;
         volatile Tbs5530NativeUsbfsBackend backend;
         volatile boolean k36AutoTuneConfirmed;
+        boolean reloadRequired;
+        Tbs5530ReloadAndroidManager reloadManager;
         NativeConfiguration(String runId) {
             if (runId == null || !runId.matches("[A-Za-z0-9_-]{1,100}")) throw new IllegalArgumentException("Invalid diagnostic run ID");
             this.runId = runId;
@@ -44,6 +49,14 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
                                     Tbs5530TsSmoke.ReadApi readApi, String runId) throws IOException {
         this(context, runtime, consent, readApi, new NativeConfiguration(runId));
     }
+    public Tbs5530OperationalHandoff(Context context, Tbs5530AndroidRuntime runtime, Consent consent,
+                                     Tbs5530TsSmoke.ReadApi readApi, String runId, boolean reloadRequired) throws IOException {
+        this(context, runtime, consent, readApi, reloadConfiguration(runId, readApi, reloadRequired));
+    }
+    private static NativeConfiguration reloadConfiguration(String runId, Tbs5530TsSmoke.ReadApi api, boolean required) throws IOException {
+        if (required && api != Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096) throw new IOException("B2 requires native4096");
+        NativeConfiguration configuration = new NativeConfiguration(runId); configuration.reloadRequired = required; return configuration;
+    }
     private Tbs5530OperationalHandoff(Context context, Tbs5530AndroidRuntime runtime, Consent consent,
                                      Tbs5530TsSmoke.ReadApi readApi, NativeConfiguration configuration) throws IOException {
         this(context, runtime, manager(context, readApi, consent, configuration), consent);
@@ -54,8 +67,7 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
                                                            Consent consent, NativeConfiguration configuration) throws IOException {
         if (api == Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO) return new Tbs5530AndroidUsbFacade.AndroidManager(context.getApplicationContext());
         if (Tbs5530AutonomousPlans.nativeUrb(api)) {
-            return new Tbs5530AndroidUsbFacade.AndroidManager(context.getApplicationContext(),
-                    (connection, intf, endpoint) -> {
+            Tbs5530AndroidUsbFacade.ReceiveBackendFactory factory = (connection, intf, endpoint) -> {
                         Tbs5530NativeUsbfsBackend backend = new Tbs5530NativeUsbfsBackend(connection, intf, endpoint, context.getFilesDir(),
                                 configuration.runId, configuration.limits, () -> {
                                     consent.requireCurrent();
@@ -64,7 +76,12 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
                                 });
                         configuration.backend = backend;
                         return backend;
-                    });
+                    };
+            if (configuration.reloadRequired) {
+                configuration.reloadManager = new Tbs5530ReloadAndroidManager(context.getApplicationContext(), factory);
+                return configuration.reloadManager;
+            }
+            return new Tbs5530AndroidUsbFacade.AndroidManager(context.getApplicationContext(), factory);
         }
         if (api != Tbs5530TsSmoke.ReadApi.QUEUED_USB_REQUEST_8X4096 || android.os.Build.VERSION.SDK_INT < 26) {
             throw new IOException("Bounded queued diagnostic requires API26+");
@@ -80,6 +97,11 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
         binding = new Tbs5530UsbBinding(session, facade, runtime, runtime, failure::set, 30000, 10000);
     }
 
+    public void reloadNativeAudit(java.io.File directory) throws IOException {
+        if (device != null || nativeConfiguration == null || nativeConfiguration.reloadManager == null)
+            throw new IOException("Reload audit must bind before acquisition");
+        nativeConfiguration.reloadManager.audit(new Tbs5530Fx2NativeAudit(directory, "RELOAD"));
+    }
     public void controlMirror(Tbs5530ControlMirror mirror) {
         if (device != null) throw new IllegalStateException("Control mirror must be configured before acquisition");
         controlMirror = java.util.Objects.requireNonNull(mirror);
@@ -132,6 +154,7 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
                                                int offset, int length, int timeout) throws IOException {
                         requireControlWorker();
                         if (request == 0xa0) throw new IOException("Firmware writes forbidden on operational owner");
+                        if (handoffOwner != null) handoffOwner.requireReloadComplete();
                         int result = handoffOwner == null || handoffOwner.controlMirror == null
                                 ? connection.controlTransfer(type, request, value, index, bytes, offset, length, timeout)
                                 : handoffOwner.controlMirror.transfer("OPERATIONAL", handoffOwner.session.getGeneration(), connection::controlTransfer,
@@ -167,6 +190,54 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
 
     public void start(Tbs5530UsbBinding.Device device) throws IOException {
         consent.requireCurrent(); profile.set(null); this.device = device; binding.start(device);
+    }
+    public void requireReloadComplete() throws IOException {
+        if (nativeConfiguration != null && nativeConfiguration.reloadRequired) {
+            if (!reloadComplete || reload == null) throw new IOException("B2 reload must complete before any frontend or stream control");
+            reload.requireComplete();
+        }
+    }
+    public boolean reloadWindow() { return reload != null && reload.window(); }
+    public void reloadReenumerated() { Tbs5530Fx2Reload active = reload; if (active != null) active.reenumerated(); }
+    public Tbs5530Fx2Reload.Snapshot reloadSnapshot() { return reload == null ? null : reload.snapshot(); }
+    public java.util.List<Tbs5530Fx2Reload.Boundary> reloadNativeBoundaries() { return new java.util.ArrayList<>(reloadBoundaries); }
+    public void reloadBeforeFrontend(Tbs5530FirmwarePlan plan, Tbs5530ReloadLedger ledger, String epochKey, Consent authorization,
+                                    Tbs5530AndroidBootstrap.CleanProof bootstrapProof,
+                                    Tbs5530Fx2Reload.Clock clock) throws IOException {
+        consent.requireCurrent(); authorization.requireCurrent();
+        if (nativeConfiguration == null || !nativeConfiguration.reloadRequired || nativeConfiguration.reloadManager == null
+                || reload != null || !operationalOwner() || controlMirror == null || bootstrapProof == null)
+            throw new IOException("B2 needs clean same-session original bootstrap132/API boundaries and drained lease, not host flags");
+        requireOriginalBootstrapProof(bootstrapProof, nativeConfiguration.runId, epochKey);
+        Tbs5530Fx2Reload.requireProfile(profile.get());
+        byte[] image = Tbs5530Fx2Reload.lockedImage(plan);
+        Tbs5530ReloadAndroidManager manager = nativeConfiguration.reloadManager;
+        manager.prepareReload(image);
+        Tbs5530Fx2Reload.Port port = new Tbs5530Fx2Reload.Port() {
+            Tbs5530Fx2Reload.Boundary boundary;
+            public int write(Tbs5530FirmwarePlan.Step step) throws IOException {
+                return controlMirror.transfer("RELOAD", generation(), (type, request, value, index, bytes, offset, length, timeout) -> {
+                    consent.requireCurrent(); authorization.requireCurrent(); session.requireUsable(generation());
+                    boundary = manager.nextReload(); reloadBoundaries.add(boundary); return boundary.result;
+                }, step.getRequestType(), step.getRequest(), step.getValue(), step.getIndex(), step.getPayload(), 0,
+                        step.getPayload().length, step.getTimeoutMillis());
+            }
+            public Tbs5530Fx2Reload.Boundary boundary() { return boundary; }
+            public void cleanup() { binding.cancel(); }
+        };
+        reload = new Tbs5530Fx2Reload(plan, () -> {
+            consent.requireCurrent(); authorization.requireCurrent(); session.requireUsable(generation());
+            if (!operationalOwner()) throw new IOException("Reload owner changed");
+        }, clock, port, ledger, epochKey);
+        session.transaction(generation(), () -> {
+            try { reload.execute(); }
+            catch (IOException error) { throw new Tbs5530ControlIo.TransferException(Tbs5530ControlIo.FailureKind.IO_FAILURE, "B2 reload stopped; no retry", error); }
+        });
+        reloadComplete = true;
+    }
+    static void requireOriginalBootstrapProof(Tbs5530AndroidBootstrap.CleanProof proof, String runId, String epochKey) throws IOException {
+        if (proof == null) throw new IOException("Original bootstrap proof missing");
+        proof.require(runId, epochKey);
     }
     public boolean pending() { return binding.isPending(); }
     public Tbs5530OperationalProfile observation() { return profile.get(); }

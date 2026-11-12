@@ -18,6 +18,7 @@ public final class Tbs5530OneShotBootstrap {
         default void requireStartBudget() throws IOException { requireCurrent(); }
         default void requireDispatch(int ordinal) throws IOException { }
         default String runEpoch() { return null; }
+        default String physicalEpochKey() { return null; }
     }
     public interface AttemptStore { void consume() throws IOException; }
     interface Delay { void await(int millis) throws IOException; }

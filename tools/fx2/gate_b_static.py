@@ -297,9 +297,11 @@ class Machine:
                 self.direct[6] = self.direct[b[1]]
             elif op == 0x4E:
                 self.acc |= self.direct[6]
-            elif op == 0x70:
-                if self.acc:
+            elif op in (0x60, 0x70):
+                if (op == 0x60 and self.acc == 0) or (op == 0x70 and self.acc != 0):
                     self.pc = item["target"]
+            elif op in (0xC3, 0xD3):
+                self.carry = int(op == 0xD3)
             elif op == 0x30:
                 if not self.bit(b[1]):
                     self.pc = item["target"]

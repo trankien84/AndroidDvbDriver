@@ -32,6 +32,7 @@ public final class Tbs5530ControlProbe {
             throws IOException {
         this(owner.session(), owner.session().getGeneration(), owner.controlIo(), authorization, clock);
         if (!owner.operationalOwner()) throw new IOException("Fresh operational session required");
+        owner.requireReloadComplete();
         handoff = owner;
     }
     Tbs5530ControlProbe(Tbs5530Session session, long generation, Tbs5530ControlIo io,

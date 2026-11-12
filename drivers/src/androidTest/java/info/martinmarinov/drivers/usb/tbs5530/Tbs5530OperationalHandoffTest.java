@@ -153,6 +153,8 @@ public class Tbs5530OperationalHandoffTest {
                     byte[] output = {3, (byte)0xc8, 0, 0};
                     assertEquals(4, f.handoff.controlIo().controlTransfer(0x40, 0x80, 0, 0, output, 0, 4, 2000));
                     assertArrayEquals(new byte[]{3, (byte)0xc8, 0, 0}, output);
+                    assertThrows(IOException.class, () -> f.handoff.controlIo().controlTransfer(0x40, 0xa0, 0xe600, 0,
+                            new byte[]{0}, 0, 1, 2000));
                 } catch (Throwable failure) { error.set(failure); } finally { done.countDown(); }
             });
             assertTrue(done.await(5, TimeUnit.SECONDS)); if (error.get() != null) throw new AssertionError(error.get());

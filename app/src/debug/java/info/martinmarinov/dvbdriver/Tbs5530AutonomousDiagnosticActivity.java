@@ -147,6 +147,10 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
         if (!waitingGrant && !stopped) {
             try {
                 UsbDevice actual = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
+                if (handoff != null && handoff.reloadWindow() && actual != null
+                        && actual.getVendorId() == 0x734c && actual.getProductId() == 0x5530) {
+                    handoff.reloadReenumerated(); return;
+                }
                 Tbs5530UsbBinding.Device fresh = single();
                 if (actual == null || !target(fresh) || actual.getVendorId() != fresh.vendorId
                         || actual.getProductId() != fresh.productId || actual.getDeviceId() != fresh.id
@@ -197,6 +201,9 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
         events = facade.listen(new Tbs5530UsbBinding.Events() {
             public void attached(Tbs5530UsbBinding.Device device) {
                 if (workflow != workflowGeneration || stopped || !target(device) || selected == null) return;
+                if (handoff != null && handoff.reloadWindow()) {
+                    handoff.reloadReenumerated(); return;
+                }
                 Tbs5530OneShotBootstrap.Snapshot current = bootstrap == null ? null : bootstrap.snapshot();
                 boolean knownTransition = current != null && !bootstrap.cleanupPending()
                         && Tbs5530AutonomousPolicy.bootstrapTransitionKnown(current.state,
@@ -209,7 +216,9 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
             }
             public void detached(Tbs5530UsbBinding.Device device) {
                 if (workflow == workflowGeneration && !stopped && selected != null && selected.equals(device) && bootstrap == null) {
-                    permission.invalidate(); fail("USB_DETACHED");
+                    permission.invalidate();
+                    if (handoff != null && handoff.reloadWindow()) { handoff.reloadReenumerated(); return; }
+                    fail("USB_DETACHED");
                 }
             }
         });
@@ -339,6 +348,7 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
                 if (!Tbs5530AutonomousPolicy.bootstrapTransitionKnown(snapshot.state, snapshot.completed,
                         snapshot.failure, snapshot.cleanupFailure, snapshot.boundaries))
                     throw new IOException("Firmware uncertain; no retry");
+                session.bootstrapProof = session.reloadEnabled() ? bootstrap.cleanProof() : null;
                 session.policy.uploadComplete(snapshot.completed, bootstrap.cleanupPending());
                 bootstrap.close();
                 ui.post(() -> {
@@ -354,8 +364,12 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
     }
     private void operational(Tbs5530UsbBinding.Device device) throws IOException {
         requirePhysical();
-        handoff = new Tbs5530OperationalHandoff(getApplicationContext(), runtime, this::requirePhysical, session.readApi, session.id);
+        if (session.reloadEnabled() && (!uploaded || session.bootstrapProof == null || session.bootstrapSnapshot == null
+                || session.bootstrapSnapshot.pending || bootstrap != null))
+            throw new IOException("B2 blocks operational-only launch without same-session clean original bootstrap/API-boundary/drain proof");
+        handoff = new Tbs5530OperationalHandoff(getApplicationContext(), runtime, this::requirePhysical, session.readApi, session.id, session.reloadEnabled());
         if (session.controlMirror != null) handoff.controlMirror(session.controlMirror);
+        if (session.reloadEnabled()) handoff.reloadNativeAudit(session.directory);
         handoff.start(device); result = "ACQUIRING_FRESH_OPERATIONAL_OWNER"; ui.postDelayed(this::awaitOwner, 25);
     }
     private void awaitOwner() {
@@ -369,6 +383,35 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
         runtime.execute(() -> {
             try {
                 requirePhysical(); session.owner(handoff.approvalIdentity(), handoff.generation(), this::requirePhysical);
+                if (session.reloadEnabled()) {
+                    Tbs5530FirmwarePlan firmware;
+                    try (FileInputStream input = new FileInputStream(new File(session.directory, "firmware.bin"))) {
+                        firmware = Tbs5530OneShotBootstrap.readFirmware(input, Tbs5530FirmwareValidation.SOURCE,
+                                Tbs5530FirmwareValidation.ENTRY, Tbs5530FirmwareValidation.Format.RAW_LINEAR);
+                    }
+                    try {
+                        handoff.reloadBeforeFrontend(firmware, session.reloadLedger, session.reloadEpochKey(), session::require,
+                                session.bootstrapProof, new Tbs5530Fx2Reload.Clock() {
+                                    public long nanos() { return SystemClock.elapsedRealtimeNanos(); }
+                                    public void pause(int millis) throws IOException {
+                                        try { Thread.sleep(millis); }
+                                        catch (InterruptedException error) { Thread.currentThread().interrupt(); throw new IOException(error); }
+                                    }
+                                });
+                    } finally {
+                        session.reloadSnapshot = handoff.reloadSnapshot();
+                        try {
+                            org.json.JSONArray rows = new org.json.JSONArray();
+                            for (Tbs5530Fx2Reload.Boundary b : handoff.reloadNativeBoundaries()) rows.put(new org.json.JSONObject()
+                                    .put("ordinal", b.ordinal).put("request_type", 64).put("request", 160).put("index", 0)
+                                    .put("value", b.value).put("length", b.length).put("result", b.result).put("errno", b.errno)
+                                    .put("before_ns", b.beforeNanos).put("after_ns", b.afterNanos));
+                            session.write("reload-native-boundaries.json", new org.json.JSONObject().put("phase", "RELOAD")
+                                    .put("boundary", "USBDEVFS_CONTROL_IOCTL").put("clock", "CLOCK_BOOTTIME").put("rows", rows).toString());
+                        } catch (org.json.JSONException error) { throw new IOException("Reload boundary audit failed", error); }
+                    }
+                    handoff.requireReloadComplete();
+                }
                 Tbs5530ControlProbe probe = new Tbs5530ControlProbe(handoff, new Tbs5530ControlProbe.Authorization() {
                     public void requireCurrent() throws IOException { requirePhysical(); current().requireCurrent(); }
                     public void consume(Tbs5530Frontend.Plan p) throws IOException { current().consume(p); }
@@ -387,7 +430,7 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
                         ? probe.planExperimentalAutoTune(tune) : probe.planTune(tune));
                 Tbs5530Frontend.Result lock = execute(probe, probe.planPollStatus(3));
                 if (lock.status == null || !lock.status.locked) throw new IOException(
-                        session.frontendExperiment == Tbs5530FrontendExperiment.MANUAL_PLP0_K36
+                        session.frontendExperiment != Tbs5530FrontendExperiment.BASELINE_AUTO
                                 ? "PLP_MANUAL0_NO_LOCK" : "No confirmed lock");
                 session.policy.transition(Tbs5530AutonomousPolicy.State.LOCK_CONFIRMED);
                 if(session.sonyTsOutputReadback) {
@@ -462,6 +505,14 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
         if (session != null) session.policy.failUncertain(); stop("ERROR_UNCERTAIN_NO_RETRY");
     }
     private void fail(Throwable error) {
+        if (session != null && handoff != null && handoff.reloadSnapshot() != null) {
+            session.reloadSnapshot = handoff.reloadSnapshot();
+            if (session.reloadSnapshot.state == Tbs5530Fx2Reload.State.RELOAD_CAUSED_REENUMERATION) {
+                session.stopReason = "RELOAD_CAUSED_REENUMERATION";
+                session.failureStage = "FX2_RELOAD_WAIT";
+                session.policy.failUncertain(); stop("RELOAD_CAUSED_REENUMERATION"); return;
+            }
+        }
         if (session != null) session.failure(error);
         fail("GUARD_OR_IO_FAILURE");
     }

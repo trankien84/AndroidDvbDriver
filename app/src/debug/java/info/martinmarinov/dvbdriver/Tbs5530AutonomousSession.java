@@ -23,6 +23,10 @@ final class Tbs5530AutonomousSession {
     final Tbs5530AutonomousPlans golden;
     final Tbs5530TsSmoke.ReadApi readApi;
     final Tbs5530FrontendExperiment frontendExperiment;
+    final Tbs5530ReloadLedger reloadLedger;
+    volatile Tbs5530AndroidBootstrap.CleanProof bootstrapProof;
+    volatile Tbs5530Fx2Reload.Snapshot reloadSnapshot;
+    boolean reloadEnabled() { return frontendExperiment == Tbs5530FrontendExperiment.B2_RELOAD_AFTER_SET_CONFIG; }
     private final Tbs5530HistoryFence.Store historyStore;
     private final Tbs5530HistoryFence historyFence;
     final boolean controlMirrorEnabled, explicitSetInterfaceAlt0, controlPlaneOnly, sonyTsOutputReadback;
@@ -116,6 +120,8 @@ final class Tbs5530AutonomousSession {
         hostProfile = Tbs5530VerifiedHost.profile(model, api);
         historyPrefix = Tbs5530VerifiedHost.historyPrefix(hostProfile);
         contextForLedger = context.getApplicationContext();
+        if (reloadEnabled() && (!"SM-X926B".equals(model) || api != 36)) throw new IOException("B2 first host is Samsung SM-X926B/API36 only");
+        reloadLedger = reloadEnabled() ? new Tbs5530ReloadLedger(new Tbs5530ReloadStore(contextForLedger)) : null;
         historyStore = frontendExperiment == Tbs5530FrontendExperiment.BASELINE_AUTO ? null
                 : injectedHistory != null ? injectedHistory : () -> Tbs5530HistoryRecoveryStore.readSnapshot(contextForLedger, historyPrefix);
         historyFence = historyStore == null ? null : new Tbs5530HistoryFence(historyStore.read());
@@ -149,6 +155,10 @@ final class Tbs5530AutonomousSession {
                     .put("explicit_set_interface_alt0", explicitSetInterfaceAlt0);
             if (launchToken != null) challenge.put("launch_token", launchToken).put("control_plane_only", controlPlaneOnly);
             challenge.put("attachment_history_sha256", historyFence == null ? JSONObject.NULL : historyFence.sha256());
+            if (reloadEnabled()) challenge.put("fx2_reload_option", Tbs5530Fx2Reload.OPTION)
+                    .put("fx2_reload_plan_sha256", Tbs5530Fx2Reload.planSha256())
+                    .put("fx2_reload_store_sha256", reloadLedger.sha256()).put("fx2_reload_anchor_sha256", reloadLedger.anchorSha256())
+                    .put("bootstrap_proof", "SAME_SESSION_ORIGINAL132_APP_BOUNDARIES_DRAIN_REQUIRED").put("max_reload_per_physical_epoch", 1);
             challenge.put("sony_ts_output_readback",sonyTsOutputReadback);
             if (sonyTsOutputReadback) challenge.put("sony_readback_layout",Tbs5530SonyTsOutputReadback.layout());
             Tbs5530DurableFile.write(new File(root, PREFIX + "-challenge.json"), challenge.toString().getBytes(StandardCharsets.UTF_8));
@@ -193,6 +203,12 @@ final class Tbs5530AutonomousSession {
                     throw new IOException("Host-pinned attachment history scope mismatch");
                 synchronized (Tbs5530AutonomousSession.class) { historyFence.require(historyStore.read()); }
             }
+            if (reloadEnabled()) {
+                for (String key : new String[]{"fx2_reload_option", "fx2_reload_plan_sha256", "fx2_reload_store_sha256", "fx2_reload_anchor_sha256", "bootstrap_proof", "max_reload_per_physical_epoch"})
+                    if (!challenge.get(key).toString().equals(grant.get(key).toString())) throw new IOException("Reload grant mismatch: " + key);
+                if (!grant.optString("host_script_sha256").matches("[a-f0-9]{64}")) throw new IOException("Host helper hash pin required");
+                reloadLedger.require();
+            }
             if (grant.optBoolean("control_mirror", false) != controlMirrorEnabled) throw new IOException("Control mirror scope mismatch");
             if (!Boolean.valueOf(explicitSetInterfaceAlt0).equals(grant.opt("explicit_set_interface_alt0")))
                 throw new IOException("EXPLICIT_SET_INTERFACE_ALT0 grant scope mismatch");
@@ -210,6 +226,7 @@ final class Tbs5530AutonomousSession {
             if (controlPlaneOnly && (!recoveryEpoch.isEmpty() || recoveryConfirmed || grant.optBoolean("rf_in_confirmed", false)))
                 throw new IOException("Control-plane validation cannot authorize a physical attachment");
             Tbs5530AutonomousAttachmentLedger.requireRecoveryEpoch(recoveryEpoch, recoveryConfirmed);
+            if (reloadEnabled() && (!recoveryConfirmed || recoveryEpoch.isEmpty())) throw new IOException("B2 requires fixed approved physical epoch");
             expires = grant.getLong("expires_elapsed_ms");
             Tbs5530AutonomousPolicy.Profile profile = Tbs5530AutonomousPolicy.Profile.valueOf(grant.getString("profile"));
             if ((frontendExperiment != Tbs5530FrontendExperiment.BASELINE_AUTO || sonyTsOutputReadback
@@ -232,6 +249,7 @@ final class Tbs5530AutonomousSession {
         if (policy.state() != Tbs5530AutonomousPolicy.State.ERROR_UNCERTAIN) lastStage = policy.state().name();
         if (!accepted || !grantText.equals(read(new File(directory, "grant.json"), 16384))) throw new IOException("Grant changed or unavailable");
         policy.heartbeat(heartbeat()); policy.requireSession();
+        if (reloadLedger != null) reloadLedger.require();
         if (historyFence != null) synchronized (Tbs5530AutonomousSession.class) { historyFence.require(historyStore.read()); }
     }
     void requireDeviceIo() throws IOException {
@@ -357,6 +375,13 @@ final class Tbs5530AutonomousSession {
             }
         }
     }
+    String reloadEpochKey() throws IOException {
+        require();
+        if (!reloadEnabled() || !recoveryConfirmed || recoveryEpoch.isEmpty()) throw new IOException("No approved B2 physical epoch");
+        if (expires - SystemClock.elapsedRealtime() < 132L * 2000 + 100 + Tbs5530Fx2Reload.WAIT_MS + 5000)
+            throw new IOException("Insufficient bounded session budget before reload consume");
+        return Tbs5530AutonomousPlans.hash(hostProfile + ":" + recoveryEpoch);
+    }
     Tbs5530OneShotBootstrap.Guard firmwareGuard(Boundary physical) {
         return new Tbs5530OneShotBootstrap.Guard() {
             // General transition/observation checks must not require the released upload attachment.
@@ -366,6 +391,7 @@ final class Tbs5530AutonomousSession {
             public void requireNative(int ordinal) throws IOException { requireDeviceIo(); require(); physical.require(); policy.uploadNative(ordinal); }
             public void requireDispatch(int ordinal) throws IOException { requireDeviceIo(); require(); physical.require(); policy.uploadDispatch(ordinal); }
             public String runEpoch() { return id; }
+            public String physicalEpochKey() { return reloadEnabled() ? Tbs5530AutonomousPlans.hash(hostProfile + ":" + recoveryEpoch) : null; }
         };
     }
     synchronized void failure(Throwable error) {
@@ -413,7 +439,8 @@ final class Tbs5530AutonomousSession {
         org.json.JSONArray chain = new org.json.JSONArray();
         for (String cause : snapshot.failureChain) chain.put(safeBootstrapCode(cause));
         Tbs5530BootstrapTelemetry.Snapshot b = snapshot.boundaries;
-        return new JSONObject().put("state", snapshot.state.name()).put("attempted", snapshot.attempted)
+        return new JSONObject().put("evidence_layer", "ANDROID_APP_OBSERVED").put("boundary", "UsbDeviceConnection.controlTransfer")
+                .put("syscall_proof", false).put("state", snapshot.state.name()).put("attempted", snapshot.attempted)
                 .put("completed", snapshot.completed).put("bytes", snapshot.bytes).put("duration_ms", snapshot.durationMillis)
                 .put("stop_cause", safeBootstrapCode(snapshot.failure)).put("cleanup_failure", safeBootstrapCode(snapshot.cleanupFailure))
                 .put("failure_chain", chain).put("native_started", b.nativeCallStarted).put("native_completed", b.nativeCallCompleted)
@@ -528,7 +555,15 @@ final class Tbs5530AutonomousSession {
             Tbs5530OperationalHandoff.NativeReceiveSnapshot urb = nativeReceiveSnapshot;
             json.put("attachment_history_sha256", historyFence == null ? JSONObject.NULL : historyFence.sha256());
             json.put("frontend_experiment", frontendExperiment.name());
-            json.put("requested_plp", frontendExperiment == Tbs5530FrontendExperiment.MANUAL_PLP0_K36 ? "MANUAL:0" : "AUTO");
+            json.put("requested_plp", frontendExperiment != Tbs5530FrontendExperiment.BASELINE_AUTO ? "MANUAL:0" : "AUTO");
+            if (reloadEnabled()) {
+                Tbs5530Fx2Reload.Snapshot r = reloadSnapshot;
+                json.put("fx2_reload_store_sha256", reloadLedger.sha256()).put("fx2_reload_anchor_sha256", reloadLedger.anchorSha256());
+                json.put("fx2_reload", r == null ? JSONObject.NULL : new JSONObject().put("state", r.state.name())
+                        .put("attempted", r.attempted).put("completed", r.completed).put("consumed", r.consumed)
+                        .put("final_release_ns", r.finalReleaseNanos).put("wait_ended_ns", r.waitEndedNanos).put("detach_ns", r.detachedNanos)
+                        .put("bootstrap_original_clean_proven", bootstrapProof != null).put("timebase", "ANDROID_ELAPSED_REALTIME_NS"));
+            }
             json.put("actual_plp", "UNKNOWN");
             json.put("explicit_set_interface_alt0", explicitSetInterfaceAlt0);
             json.put("sony_ts_output_readback",sonyMetrics());
