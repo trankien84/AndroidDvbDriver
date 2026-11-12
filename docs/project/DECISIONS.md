@@ -1,5 +1,188 @@
 # Architecture decision record (ADR)
 
+## ADR-053 — Đóng phép thử audit chất lượng; chỉ giữ chứng cứ, không sửa tiếp khi chưa rõ nguyên nhân
+
+**Date:** 2026-11-12, sau run 19:40–19:41 +07
+
+**Status:** Accepted theo yêu cầu mới của người dùng; phần cứng đã drain/rút, chỉ hoàn tất export/phân tích/hồ sơ trong phiên.
+
+### Context / Evidence
+
+Exact card e93476e4… cho một preparation và tối đa một B2 với APK 1efb3aaf… đã được duyệt. Run qua bootstrap/reload 132/132, 16 URB status 0/actual 4096/errno 0 và nhận 65536 byte. Audit mới 35 records/3903 byte, marker/header/hash seal đúng và SYNCED_CLOSED; app vẫn INVALID_TS với 16 sync losses/PAT 0/PMT 0. TSDuck raw không nhận dạng dù exit 0; derived còn 162 discontinuities/7 duplicates/service 0.
+
+COPY window giữa hai run giảm 674,676→576,444 ms nhưng các yếu tố không được kiểm soát để tách riêng audit; chưa đủ kết luận nguyên nhân TS hoặc chọn sửa tiếp. Mọi source/helper/tests trong 33 tệp freeze giữ nguyên suốt live. User đã rút sau drain và yêu cầu chỉ thu chứng cứ đã lưu/phân tích offline, không tiếp tục sửa mò trong phiên.
+
+### Decision
+
+Đóng run `B2_AUDIT_QUALITY_SINGLE_RUN_INVALID_TS`, giữ H-AUTOINLEN candidate và ROOT_CAUSE_UNRESOLVED/TS_SMOKE_PASS=false. Không đổi một số URB thành công hoặc bản TS dẫn xuất thành project PASS; không đánh dấu root cause confirmed hoặc coi run này là phép lặp độc lập đủ xác nhận.
+
+Chỉ export các tệp app đã lưu sau typed drain, đối soát SHA và phân tích offline, cập nhật hồ sơ/báo cáo rồi kết thúc. Không sửa thêm code/helper/tests, không cấp grant mới, preparation thứ hai, retry, power-cycle/reset/rearm/init/recovery hoặc variant khác. History cuối 1328 byte/16 records và journal/anchor đã consume được giữ như witness, không làm quyền chạy lại.
+
+### Alternatives
+
+Không chọn tiếp tục giảm guard I/O, đổi queue/buffer/timeout, thử B7/halt/release-only hoặc sửa TS parser chỉ để đổi kết quả. Chưa có evidence xác định phần chậm hoặc lớp gây hỏng byte; các phương án đó cần kế hoạch đo riêng thay vì triển khai ngay. Không rollback audit để ghi đè code đã kiểm chỉ vì phép thử chưa sạch TS.
+
+### Reopen trigger
+
+Chỉ mở lại trong nhiệm vụ mới có mục tiêu chẩn đoán cụ thể, dựa trên evidence hiện có và được người dùng duyệt. Mọi hardware run tiếp phải có card/hash/current witnesses/physical epoch/phê duyệt mới. Không có đề xuất sửa nào được triển khai tự động trong phiên này. Xem [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md).
+
+## ADR-052 — Giữ B2 là kết quả vận chuyển một lượt; chỉ hoãn ghi audit quan sát tới sau drain
+
+**Date:** 2026-11-12, sau B2 17:55–17:56 +07
+
+**Status:** Kết quả phần cứng đã đối soát; thay đổi audit được duyệt và kiểm offline, chưa chạy candidate mới trên tuner.
+
+### Context / Evidence
+
+B2 mới được duyệt riêng đã qua bootstrap/reload 132/132, không detach sau reload, 16 URB status 0/actual 4096 và nhận 65536 byte. App INVALID_TS, không PAT/PMT, 16 mất đồng bộ; TSDuck raw không nhận dạng TS dù exit 0. Một operational broadcast và một intent được ghi đúng trước descriptor seal/owner. Không đủ điều kiện TS_SMOKE_PASS hoặc ROOT_CAUSE_CONFIRMED, dù hỗ trợ mạnh H-AUTOINLEN ở tầng transport.
+
+Đường audit cũ ghi lại toàn tệp kèm fsync/readback mỗi boundary trên luồng receive. Candidate append-only bền đã kiểm nhưng vẫn chậm. Sau báo cáo giới hạn và trade-off mất observation tail khi crash, user chọn `approve_bounded_postdrain_observation_audit_offline`, không duyệt hardware tiếp theo.
+
+### Decision
+
+Phân loại `ROOT_CAUSE_CANDIDATE_H_AUTOINLEN` + `B2_POSITIVE_SINGLE_RUN_TRANSPORT_WITH_INVALID_TS`. Không đổi kết quả các run fail trước, không lấy bản TS dẫn xuất đã bỏ byte để chứng nhận raw. Giữ mọi dữ liệu raw bên ngoài Git.
+
+Chỉ boundary audit quan sát của TS B2 native được buffer giới hạn 64 records/65536 byte; `.started` phải bền trước receive. Sau runtime drain mới commit exact audit và `.complete` kèm hash bằng O_EXCL/O_NOFOLLOW/fsync/readback. Thiếu audit, undrained hoặc commit lỗi không được TS certification; lỗi commit trả AUDIT_UNAVAILABLE, không tự retry/rollback. Grant, consume, history/store/anchor, heartbeat, permission/owner/lock và vị trí kiểm quyền không hoãn hoặc cache.
+
+Coordinator dùng ba expected history/journal/anchor hashes bắt buộc từ card, kiểm chúng trước preparation và chuyển nguyên cho helper. Không dùng initial pins sau khi store đã consume, không reset/rearm hoặc chấp nhận một hash mới chỉ vì đọc được trên máy. APK/runtime/helper/plan/source vẫn phải khóa trước run mới.
+
+### Alternatives / Trade-offs
+
+Không tăng queue/buffer/read cap/TTL/heartbeat/deadline hoặc giảm upload guard; không B7/0400/0401/setInterface/readback/RSSI/firmware mới. Không bỏ guard I/O để tối ưu. Durable append từng boundary giảm một phần chi phí nhưng vẫn đo chậm; buffering được chọn riêng cho observation, chấp nhận crash mất phần cuối và bắt buộc không chứng nhận phiên đó. Emulator nhanh hơn không chứng minh chất lượng TS Samsung được sửa.
+
+### Reopen trigger
+
+Sau kiểm cuối offline và source freeze mới, chỉ xin một thử chất lượng có card/hash/physical epoch/phê duyệt mới, giữ pipeline và giới hạn B2. Nếu TS vẫn lỗi hoặc audit/authority/cleanup thất bại thì dừng, đối soát raw/events/native boundaries và đề xuất offline, không mở lượt thứ hai. Một candidate audit run mới không tự coi là lần lặp độc lập xác nhận root cause. Xem [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md).
+
+## ADR-051 — Chuẩn bị OS permission trước grant B2, không thay giới hạn thời gian
+
+**Date:** 2026-11-12, sau run initial-fix 17:27–17:29 +07
+
+**Context / evidence:** Một run mới riêng được duyệt đã qua initial permission/intent/FX2 profile nhưng policy từ chối upload trước A0: còn 189456 ms trong grant, ít hơn guard 285000 ms. Chờ operator sau ARMED/cắm/permission đã dùng ngân sách; không sửa lỗi này bằng tăng TTL hoặc giảm guard. Run đã drain và user rút, history/store giữ nguyên, không H-AUTOINLEN result.
+
+**Decision / consent:** User chọn approve_permission_first_plan_offline. Thêm coordinator host tách Activity permission-only 60 giây có sẵn trước autonomous session/grant; sau OS_PERMISSION_VERIFIED fresh và identity/token/clock đúng mới dispatch helper runtime unchanged với TTL 300 giây. Không USB open/claim/transfer hoặc grant B2 trong giai đoạn permission-only. Hash/API/boot/APK/current stores preflight vẫn bắt buộc, O_EXCL dispatch.once host tránh lặp; không auto-tap/default hoặc scope khác.
+
+**Validation / alternatives:** Fake 34/34 PASS, giữ fixture scope FAIL đầu; không Android/APK/runtime helper thay đổi. Không chọn tăng TTL/deadline, giảm 285 s guard, mint epoch hoặc retry grant đã dùng. Phase prepare vẫn có thể fail generic ABA/permission/foreground; phải stop theo card chứ không tự retry. Sau B2 bootstrap, natural re-enumeration/operational permission vẫn trong cùng grant/epoch và cửa sổ 10 giây cũ.
+
+**Reopen trigger:** Cần card/coordinator/APK/runtime/plan/firmware/store/history hashes và phê duyệt một run mới; không dùng duyệt offline làm hardware permission. Nếu prepare hoặc runtime fail giữ evidence/consumed rồi đóng run, chỉ xin scope mới sau phân tích. Không ROOT_CAUSE_CONFIRMED/TS smoke claim khi chưa receive. Xem [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md).
+
+## ADR-050 — B2-only provisional initial attach, seal FX2 profile trước bootstrap
+
+**Date:** 2026-11-12, sau lượt B2 của ADR-049
+
+**Status:** Đã triển khai/kiểm offline và emulator theo approve_initial_attach_fix_offline; chưa tablet/hardware, chưa có quyền run mới. Không sửa kết luận B2 trước hoặc H-AUTOINLEN.
+
+### Context / evidence
+
+Trace B2 trước có SELECTED→PERMISSION_REQUEST→một ATTACH_BROADCAST cùng identity→generic guard invalidate trong 25,291462 ms, trước bootstrap. Scope operational cũ chỉ tạo trong startBootstrap nên initial branch chưa được bảo vệ khỏi broadcast đến sau polling. BEFORE case source/trace-constrained FAIL đúng pending→invalidated, không giả đã chạy UI Samsung trên JVM.
+
+### Decision
+
+Tạo scope initial riêng chỉ khi B2 đã có exact session/physical epoch grant, trước listener/discover. Dùng chung bộ kiểm identity/session/epoch/permission generation provisional nhưng phase initial không cho bất kỳ target detach nào. Trước bootstrap phải fresh OS permission và raw descriptor profile FX2_DEFAULT đầy đủ theo parser/fingerprint cũ, seal/admit trước I/O rồi chuyển sang scope operational. Profile không là silicon/RF proof; operational descriptor 50 byte/hash và clean bootstrap original 132/drain proof vẫn giữ nguyên. Generic PermissionState ngoài scope B2 không sửa, deadline/MAX_MILLIS/heartbeat và pipeline không đổi.
+
+### Alternatives / limits
+
+Không bỏ generic ABA, không chỉ ignore attach vì cùng VID:PID, không xin token/epoch mới sau failure và không dùng persistent/split proof. Chấp nhận còn fail-closed nếu attach tới sau initial seal hoặc OEM event không rõ; không mở rộng exception tới owner hoặc pending native I/O. Raw profile kiểm chuẩn numeric FX2 đầy đủ thay vì giả serial/path là proof vật lý; vẫn cần freshness/permission/epoch và không có detach trong observer scope.
+
+### Validation / reopen trigger
+
+Corrected focused initial 7 + operational 14 + generic 30 PASS, full app 95 PASS/0 SKIP; emulator 20 fake/cache PASS, build/lint/release isolation/helper guards PASS có phạm vi. Giữ positive fixture FAIL ở lượt đầu do premature admission latch, sửa fixture không nới latch. Candidate APK 3ee6cf24… chưa cài tablet. Run mới cần source/APK/helper/store/history/physical epoch/card exact được duyệt; không dùng quyền B2 đã đóng hoặc tự lặp vì reload chưa consume. Nếu runtime còn fail, thu events rồi dừng theo card, không sửa và chạy lại trong cùng grant.
+
+**Records:** [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md); bundle `phase31-initial-attach-offline-20261112-165718-83b1da6b` ngoài Git.
+
+## ADR-049 — Đóng một lượt B2 trước bootstrap vì initial-attach đến sau selection; không có kết quả H-AUTOINLEN
+
+**Date:** 2026-11-12, phiên 15:39 +07; recovery 16:20, init 16:25, B2 16:35–16:37
+
+**Status:** Recovery và Phần I verified; B2 đúng một lượt FAIL trước bootstrap/reload, đã drain và user rút tuner. ROOT_CAUSE_UNRESOLVED, TS_SMOKE_PASS=false; không cấp quyền lượt tiếp.
+
+### Context
+
+Sau reinstall, current history 581 byte là prefix của witness 996 byte. User duyệt offline recovery v2 rồi exact APK/helper/plan cho một append, sau verified duyệt init v3 riêng; cuối cùng nhận báo cáo Phần I PASS và gửi đúng TIẾP TỤC B2, duyệt APK 9493d0b6… addendum và xác nhận physical recovery. Không dùng yêu cầu “làm tới xong” thay các chốt này.
+
+### Evidence
+
+Recovery 581→996 byte/7→12 records và prefix nguyên, journal O_EXCL/fsync hash 7254d8e7…; init journal 138 byte/anchor 94 byte/marker 99 byte exact, init tombstone 1131 byte/hash 1f5aa733…, history 996 byte exact và USB monitor 30/current-empty. B2 event journal ghi SELECTED→10,075 ms PERMISSION_REQUEST→23,127 ms một ATTACH_BROADCAST cùng identity→25,291 ms guard generic invalidate; tất cả main, bootstrap absent. Không callback/operational descriptor/reload/native receive, mirror 0 records. Source tạo scope sameSessionHandoff trong startBootstrap nên đường initial attach trước đó chưa nằm trong ngoại lệ operational.
+
+### Decision
+
+Đóng B2 là HANDOFF_FAILED_BEFORE_BOOTSTRAP_AND_RELOAD, không thông tin H-AUTOINLEN, không gọi negative reload hoặc root-cause confirmed. Giữ history/store/tombstones unchanged và mọi consumed grants; không retry/split launch/tự sửa rồi chạy lại. User đã rút tuner sau typed drain. Hậu kiểm fd phụ timeout nên UNKNOWN; không dùng fd 0 hoặc giả không có resource để thay terminal evidence.
+
+### Alternatives
+
+- Bỏ generic duplicate guard hoặc tự mint epoch/relaunch: không chọn, có thể che ABA và vượt quyền một lượt.
+- Mở proof bền/split launch, tăng permission/heartbeat/deadline hoặc chạy operational-only: không chọn, khác card và không chứng minh clean same-session bootstrap.
+- Chạy lại B2 vì chưa consume reload budget: không chọn; quyền một lượt đã dùng dù không A0.
+- Điều tra/sửa offline initial-discovery broadcast đến muộn, thêm test đúng timeline mới và giữ fail-closed identity/permission/descriptor/ABA: chỉ đề xuất cho nhiệm vụ sau, chưa triển khai từ grant này.
+
+### Reopen trigger
+
+Cần thiết kế offline được rà, test failing-before/passing-after cho initial-attach, pin source/APK/helper/store/history mới và phê duyệt exact run mới trước mọi tuner khác. H1 operational delivery/callback của B1 vẫn UNKNOWN, không hồi tố timeline mới; H-AUTOINLEN cần một run thực tới reload/receive mới có dữ liệu phân biệt. Nếu dương tính vẫn cần repeat độc lập được duyệt trước root-cause/TS smoke claims.
+
+**Records:** [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md); bundle `phase31-witness-recovery-20261112-154425-686a238c` dưới `D:\TSDuck`.
+
+## Bổ sung ADR-048 — Recovery exact host witness v2 tách quyền, ngày 2026-11-12, phiên 15:39 +07
+
+**Context / consent:** User yêu cầu làm tới khi hoàn tất và hỏi duyệt ngay khi cần; đã chọn approve_guarded_witness_recovery_v2_offline sau giải thích recovery v1 không nhận năm records thiếu. Đây chỉ là quyền triển khai/kiểm offline, không app write hoặc tuner.
+
+**Decision / status:** Thêm opt-in v2 vào core/caller/helper debug hiện có, khóa đúng prefix 581 byte và witness 996 byte, chỉ append 415 byte/5 khóa cấm đã có chứng cứ. Journal exact-plan O_EXCL/fsync trước append, missing/partial/consumed hoặc authority loss dừng không retry/rollback; không sửa generic format, không copy đè hoặc rearm v1. Mặc định legacy v1 giữ plan/result cũ. Full_history_proven=false, hardware_authorized=false, TTL 120 giây/heartbeat 2 giây giữ nguyên; helper recovery PS7 và pin hash bắt buộc cho v2.
+
+**Evidence / reopen:** Focused JVM 10/helper 8/emulator final 18 PASS, init regression 33/encoding 4/build/app lint/release isolation PASS có phạm vi. Exact APK/helper/plan mới phải trình card và hỏi trước install/apply. Nếu witness được khôi phục verified mới xét init riêng với exact APK mới; B2 cần Phần I PASS và câu riêng TIẾP TỤC B2. Không ADR-049 vì chưa B2 result; không dùng yêu cầu hoàn thành chung làm quyền sửa/ghi/USB vô hạn. Xem [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md).
+
+## Bổ sung ADR-048 — Cài lại đúng APK theo yêu cầu, không tự khôi phục lịch sử, ngày 2026-11-12, phiên 15:25 +07
+
+**Decision / consent:** Người dùng xác nhận đã lỡ gỡ app và yêu cầu cài lại. Duyệt này được dùng cho đúng một install-r APK `11983e5c56ba20ec2e32b583fb95ceb68a01493f5094d9335ff0933d0e20d920`, không uninstall/clear, tự launch hoặc khôi phục ledger/store. Khi thấy màn hình Dozing đã báo và chờ người dùng mở; không đổi khóa màn hình. Cài và installed hash đã PASS.
+
+**Evidence / stop:** Current history sau cài chỉ còn snapshot 581 byte/7 records, là prefix chính xác của witness host 996 byte/12 records. Ba targets/tombstone vắng không mở lại init hoặc consumed budgets. Giữ witness cũ, không tự chấp nhận bản bảy records hoặc copy đè dữ liệu app. Không xác định cơ chế dữ liệu cũ trở lại khi chưa có restore trace.
+
+**Reopen trigger:** Cần kế hoạch/phê duyệt riêng cho đối soát và khôi phục năm records thiếu, bảo toàn prefix và các journal chống dùng lại. Chưa thực hiện ghi khôi phục hoặc init/B2; chốt Phần I đủ mục 2.4 và câu riêng `TIẾP TỤC B2` vẫn giữ. Xem [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md).
+
+## Bổ sung ADR-048 — Duyệt exact init v2 rồi giữ chốt history, ngày 2026-11-12, 15:18 +07
+
+**Decision / consent:** Sau đọc card mới, người dùng chọn approve_init_v2_once với helper `edd2961fa7b9fc94abbf1bb663820d4ebca00b72b9b3d20f9fb8bc39f4513351`, card `85fcc0888292a468a9d34846e9cc04ca3aaaed05e52db4974dc1919f002d8546`, source manifest `92590c6f257732b734af7600fc0fa3f8dcb0f08a32b94be7d565173817e5a982` và artifact manifest `fbba70ca3054aa5067d9d83d418502c070215a5969c416b91e694ca36d9a6814`. Người dùng xác nhận tuner vẫn rút và màn hình mở. Quyền chỉ một Phần I, không B2 tự động.
+
+**Evidence / result:** Preflight qua model/API/boot/current USB nhưng history export trả run-as unknown package dù ADB exit 0. Chọn dừng trước install/initializer/grant/store, không lấy error payload làm ledger hoặc đổi witness. Không chọn cài lại/clear/restore/rearm để vượt chốt; chưa biết nguyên nhân package/user/profile, không suy data loss.
+
+**Reopen trigger:** Cần điều tra chỉ đọc package/user/profile và provenance history; mọi cài/khôi phục hoặc init tiếp cần kế hoạch riêng được duyệt dựa trên trạng thái thật. Helper v2 vẫn đúng hash, lỗi lần này không cho phép nới history guard. Phần I chưa PASS nên B2 vẫn đóng, H1 UNKNOWN, không ADR-049. Xem [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md).
+
+## Bổ sung ADR-048 — Cho sửa offline guard no-tuner và khóa lại card, ngày 2026-11-12, phiên 13:28 +07
+
+**Context / evidence:** Lượt preflight mới được yêu cầu tiếp tục đã dừng trước install vì wrapper/initializer tìm device_address trong cả history USB. Raw hiện tại và AOSP phân biệt current devices trước num_connects với connections lịch sử. Không coi đây là quyền tự bỏ chốt hoặc chạy lại sau failure.
+
+**Decision / status:** Người dùng chọn `approve_offline_usb_guard_fix`: sửa offline đúng initializer helper và tests, khử định danh fixture, giữ từ chối khi schema lạ; tạo source/artifact freeze và card mới rồi trình duyệt trước live. Đã kiểm PS7/PS5.1 mỗi shell 33/33 PASS, encoding 4/4; không APK/runtime B2/TTL/heartbeat/store plan thay đổi. Chọn parser current/history có kiểm cấu trúc thay vì bỏ kiểm device_address hoặc dùng các records detach làm proof duy nhất.
+
+**Reopen trigger:** Helper hash mới không được dùng với phê duyệt cũ; phải duyệt exact card mới trước preflight/init. Không install/initializer/store hoặc ADB thêm sau failure trong scope offline này. Phần I thật chưa PASS, B2 chưa mở; giữ câu riêng `TIẾP TỤC B2` sau báo cáo Phần I. Không ADR-049 vì chưa có B2 result; xem [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md).
+
+## Bổ sung ADR-048 — Sửa wrapper offline theo yêu cầu mới, ngày 2026-11-12, phiên 13:14 +07
+
+**Decision / status:** Người dùng yêu cầu sửa lỗi đã tìm thấy. Đã sửa đúng lỗi output async của wrapper mới ngoài Git và kiểm 12/12 offline PASS; giữ bản lỗi/evidence cũ. Không hiểu yêu cầu này là bỏ freeze hoặc sửa lint/lifecycle/CRLF/rủi ro detach vốn đã quyết định giữ nguyên. Không phát grant, chạy lại initializer hoặc mở B2.
+
+Chọn bản kế tiếp ngoài Git thay vì ghi đè bundle cũ hoặc đổi helper frozen. Kiểm bằng tiến trình giả và history tổng hợp, không ADB tablet; chỉ đề xuất preflight thật mới sau quyết định cho phép đọc lại. Khi cần ADB và thấy màn hình tablet tắt, phải báo người dùng mở rồi mới tiếp tục; không tự bật màn hình hoặc đổi cài đặt khóa. Chốt mục 2.4 và câu `TIẾP TỤC B2` vẫn giữ nguyên; xem [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md).
+
+## Bổ sung ADR-048 — Duyệt disposition phần mềm và chốt dừng hai phần, ngày 2026-11-12, phiên 12:55 +07
+
+**Status:** Người dùng đã duyệt các quyết định dưới đây trong prompt; init thật chưa thực hiện, B2 chưa mở. Không tạo ADR-049 vì chưa có kết quả B2 mới; lịch sử ADR-046/047/048 bên dưới giữ nguyên.
+
+### Context / evidence
+
+Nền `c4afcf9d1cd125670106f26dd84034908322377e` trên `chore/modernize-android-build` sạch lúc bắt đầu, 20/20 frozen files và 11/11 artifacts đúng size/hash. Prompt duyệt exact card init không tuner và exact card B2, nhưng tách bằng điều kiện Phần I PASS rồi người dùng trả đúng `TIẾP TỤC B2`. Người dùng đã xác nhận rút tuner khỏi Samsung và ngắt nguồn chữ Y trước preflight.
+
+### Decision
+
+- Driver lint debug/release lịch sử tại `UsbPermissionObtainer.java:105` được duyệt disposition “pre-existing, không chặn B2 debug”. Giữ FAIL, không sửa hoặc suppress.
+- Bốn lifecycle FAIL trên emulator model ngoài allowlist được chấp nhận là giới hạn môi trường, không chặn B2; giữ nguyên FAIL, không đổi thành PASS/SKIP hoặc dùng làm Samsung readiness.
+- Giữ CRLF hiện tại ở các tệp mới thuộc source freeze; dọn sau B2 trong nhiệm vụ riêng, không đổi bytes đã duyệt.
+- Chấp nhận rủi ro `Tbs5530SameSessionHandoff.detached()` reject mọi detach đúng VID:PID sau observe/select operational, không so identity. Detach attachment FX2 cũ tới muộn có thể gây `USB_DETACHED` dù không có ABA thật. Host gap lịch sử khoảng 1,95–1,98 giây không loại trừ rủi ro; nếu gặp, so `device_identity_sha256` của detach với operational trong events, báo lại và không tự sửa/chạy lại.
+- Phần I phải giữ history, tạo exact targets/tombstone một lần và kiểm installed APK/no-tuner trước khi mở chốt riêng. Bất kỳ lỗi nào đều dừng, không reset/rearm/delete/retry. Phần I chưa PASS thì câu tiếp tục riêng cũng không đủ quyền B2.
+
+### Kết quả áp dụng chốt dừng / alternatives
+
+Preflight host mới báo `MODEL_MISMATCH`, exit 1, dù ADB raw trả đúng SM-X926B/exit 0. Fixture MemoryStream offline xác nhận VoidTaskResult lọt output pipeline của wrapper mới ngoài Git; đây không phải lỗi initializer frozen. Chọn dừng ngay trước install/launch/grant/store và giữ evidence; không chọn âm thầm sửa wrapper rồi lặp ADB dưới quyền cũ. Chưa có quyền hoặc kết quả dùng để thay số FAIL lịch sử.
+
+### Reopen trigger
+
+Cần quyết định riêng cho sửa/kiểm wrapper offline và một preflight mới có phê duyệt. Chỉ sau init verified đủ mục 2.4 và câu tiếp tục riêng mới xét đúng một B2; giữ mọi hash/TTL/heartbeat/guard, không thêm nhánh thử khác. Xem [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md) và bundle `phase31-b2-live-20261112-125721-9a964d76` ngoài Git.
+
 ## ADR-048 — Giữ handoff trong cùng phiên, chỉ trì hoãn phán quyết attach trước owner và kiểm descriptor chính xác
 
 **Date:** 2026-11-12, phiên bắt đầu 11:20 +07

@@ -10,6 +10,8 @@ import java.util.Set;
 /** Debug-only deny-set reconciliation. No Android, USB, file access or implicit permission. */
 public final class Tbs5530HistoryRecovery {
     public static final int MAX_BYTES = 1024 * 1024;
+    public static final String WITNESS_BEFORE = "e398459ceddb2c8f35ddc61b81ee66a31ec1aee300c33bb603dc9f593b0b31f9";
+    public static final String WITNESS_AFTER = "b6b5935a2af02fd125565ed24694d4fc4a0cb2616c8445aeaecae94cb829e7fb";
     public enum State { PREPARED, CONSUMED, APPEND_VERIFIED, COMMIT_UNKNOWN, REFUSED }
     public interface Port {
         void requireCurrent() throws IOException;
@@ -23,11 +25,11 @@ public final class Tbs5530HistoryRecovery {
         public final String baselineSha256, candidateSha256, sha256;
         public final int baselineBytes, candidateBytes;
         private final byte[] before, after;
-        private Plan(byte[] before, byte[] after) {
+        private Plan(byte[] before, byte[] after, boolean witness) {
             this.before = before.clone(); this.after = after.clone();
             baselineBytes = before.length; candidateBytes = after.length;
             baselineSha256 = hash(before); candidateSha256 = hash(after);
-            sha256 = Tbs5530AutonomousPlans.hash("TBS5530-HISTORY-RECOVERY/v1|namespace=autonomous-v1-samsung-sm-x926b-api36"
+            sha256 = witness ? witnessPlanSha256() : Tbs5530AutonomousPlans.hash("TBS5530-HISTORY-RECOVERY/v1|namespace=autonomous-v1-samsung-sm-x926b-api36"
                     + "|before=" + baselineSha256 + "|after=" + candidateSha256
                     + "|beforeBytes=" + baselineBytes + "|afterBytes=" + candidateBytes
                     + "|added=2|NO_USB|APPEND_ONLY|FULL_HISTORY_UNPROVEN|NO_HARDWARE_AUTHORIZATION");
@@ -46,7 +48,21 @@ public final class Tbs5530HistoryRecovery {
                 || after.length != before.length + 166 || next.size() != prior.size() + 2
                 || !next.containsAll(prior) || !Arrays.equals(before, Arrays.copyOf(after, before.length)))
             throw new IOException("Recovery must preserve exact prefix and add exactly two approved denials");
-        return new Plan(before, after);
+        return new Plan(before, after, false);
+    }
+    public static String witnessPlanSha256() {
+        return Tbs5530AutonomousPlans.hash("TBS5530-HISTORY-WITNESS-RECOVERY/v2|namespace=autonomous-v1-samsung-sm-x926b-api36"
+                + "|before=" + WITNESS_BEFORE + "|after=" + WITNESS_AFTER
+                + "|beforeBytes=581|afterBytes=996|beforeRecords=7|afterRecords=12|added=5"
+                + "|NO_USB|APPEND_ONLY|EXACT_HOST_WITNESS|FULL_HISTORY_UNPROVEN|NO_HARDWARE_AUTHORIZATION");
+    }
+    public static Plan prepareWitness(byte[] before, byte[] after) throws IOException {
+        Set<String> prior = validate(before), next = validate(after);
+        if (before.length != 581 || after.length != 996 || prior.size() != 7 || next.size() != 12
+                || !WITNESS_BEFORE.equals(hash(before)) || !WITNESS_AFTER.equals(hash(after))
+                || !next.containsAll(prior) || !Arrays.equals(before, Arrays.copyOf(after, before.length)))
+            throw new IOException("Exact witnessed 7-to-12 append required; no replacement or rearm");
+        return new Plan(before, after, true);
     }
     public synchronized State state() { return state; }
     public synchronized void apply() throws IOException {

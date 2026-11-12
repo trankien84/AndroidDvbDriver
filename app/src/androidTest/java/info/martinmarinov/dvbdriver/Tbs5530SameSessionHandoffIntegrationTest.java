@@ -54,6 +54,50 @@ public class Tbs5530SameSessionHandoffIntegrationTest {
         assertEquals("HANDOFF_DESCRIPTOR_MISMATCH", assertThrows(IOException.class,
                 () -> wrong.descriptorsBeforeOwner(device, raw, "fake-session", "fake-epoch")).getMessage());
     }
+    @Test public void initialBroadcastOnMainPreservesAttemptUntilWorkerChecksFx2Tree() throws Exception {
+        Tbs5530SameSessionHandoff initial = Tbs5530SameSessionHandoff.initialBootstrap("fake-session", "fake-epoch");
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+            try {
+                initial.select(device);
+                Tbs5530PermissionState.Attempt attempt = permission.begin(device, false, 1000);
+                permission.dispatched(attempt);
+                initial.attach(permission, device, "fake-session", "fake-epoch");
+                assertSame(attempt, permission.attempt()); assertEquals(Tbs5530PermissionState.State.PENDING, permission.state());
+                permission.callback(attempt.token, attempt.generation, device, true);
+                permission.confirmFresh(device, true);
+            } catch (Throwable error) { failure.set(error); }
+        });
+        if (failure.get() != null) throw new AssertionError(failure.get());
+        initial.descriptorsBeforeOwner(device, fx2Descriptors(), "fake-session", "fake-epoch");
+        initial.requireOwnerAdmission("fake-session", "fake-epoch");
+        permission.requireReady(device);
+        assertThrows(IOException.class, () -> initial.attach(permission, device, "fake-session", "fake-epoch"));
+    }
+    @Test public void initialDetachBeforePollingOrOperationalTreeNeverAdmitsBootstrap() throws Exception {
+        Tbs5530SameSessionHandoff initial = Tbs5530SameSessionHandoff.initialBootstrap("fake-session", "fake-epoch");
+        assertEquals("USB_DETACHED", assertThrows(IOException.class, () -> initial.detached(device)).getMessage());
+        assertThrows(IOException.class, () -> initial.select(device));
+        Tbs5530SameSessionHandoff wrong = Tbs5530SameSessionHandoff.initialBootstrap("fake-session", "fake-epoch");
+        wrong.select(device);
+        assertThrows(IOException.class, () -> wrong.descriptorsBeforeOwner(device, descriptors(), "fake-session", "fake-epoch"));
+        assertThrows(IOException.class, () -> wrong.requireOwnerAdmission("fake-session", "fake-epoch"));
+    }
+    private static byte[] fx2Descriptors() {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        add(out,18,1,0,2,255,255,255,64,0x4c,0x73,0x30,0x55,1,0,0,0,0,1); add(out,9,2,171,0,1,1,0,128,50);
+        int[] addresses = {1,129,2,4,134,136};
+        for (int alt = 0; alt < 4; alt++) {
+            add(out,9,4,0,alt,alt == 0 ? 0 : 6,255,255,255,0); if (alt == 0) continue;
+            for (int address : addresses) {
+                int type = alt == 1 || address == 4 || address == 136 ? 2 : alt == 3 && (address == 2 || address == 134) ? 1 : 3;
+                int packet = alt != 1 && (address == 1 || address == 129) ? 64 : 512;
+                add(out,7,5,address,type,packet & 255,packet >> 8,type == 2 ? 0 : 1);
+            }
+        }
+        return out.toByteArray();
+    }
+    private static void add(java.io.ByteArrayOutputStream out, int... bytes) { for (int value : bytes) out.write(value); }
     @Test public void genericPermissionAndEpochRemainFailClosed() throws Exception {
         pending();
         assertEquals("HANDOFF_SESSION_OR_EPOCH_CHANGED", assertThrows(IOException.class,

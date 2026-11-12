@@ -31,6 +31,9 @@ public final class Tbs5530HistoryRecoveryActivity extends Activity {
     private Tbs5530RecoveryPermit permit;
     private Tbs5530RecoveryJournal journal;
     private JSONObject challenge;
+    private boolean witness;
+    private String beforeHash, afterHash, planHash, protocol;
+    private int afterBytes;
     private TextView status;
     private final Tbs5530AutonomousLaunch launches=new Tbs5530AutonomousLaunch();
     private final Runnable tick=new Runnable(){public void run(){
@@ -38,7 +41,7 @@ public final class Tbs5530HistoryRecoveryActivity extends Activity {
         try{
             if(!foreground||SystemClock.elapsedRealtime()-created>=Tbs5530RecoveryPermit.MAX_MS)throw new IOException("Recovery wait expired");
             if(new File(directory,"grant.json").isFile()){
-                permit.accept(); working=true;status.setText("Đang bổ sung đúng hai khóa cấm; không rút/kết nối tuner.");
+                permit.accept(); working=true;status.setText(witness ? "Đang nối lại năm khóa cấm từ witness đã duyệt; giữ tuner rút." : "Đang bổ sung đúng hai khóa cấm; không rút/kết nối tuner.");
                 new Thread(()->apply(),"tbs5530-history-recovery").start();return;
             }
         }catch(IOException|RuntimeException error){finishReport("REFUSED_BEFORE_APPEND",error);return;}
@@ -56,29 +59,38 @@ public final class Tbs5530HistoryRecoveryActivity extends Activity {
             launches.begin(intent.getStringExtra("launch_token"));
             terminal=false;working=false;directory=null;session=null;permit=null;journal=null;challenge=null;
             launch=intent.getStringExtra("launch_token");
+            String mode=intent.getStringExtra("recovery_mode");
+            if(mode!=null&&!"EXACT_HOST_WITNESS_V2".equals(mode))throw new IOException("Unknown recovery mode");
+            witness="EXACT_HOST_WITNESS_V2".equals(mode);
+            beforeHash=witness?Tbs5530HistoryRecovery.WITNESS_BEFORE:BEFORE;
+            afterHash=witness?Tbs5530HistoryRecovery.WITNESS_AFTER:AFTER;
+            planHash=witness?Tbs5530HistoryRecovery.witnessPlanSha256():PLAN;
+            afterBytes=witness?996:747;
+            protocol=witness?"TBS5530-HISTORY-WITNESS-APPLY/v2":"TBS5530-HISTORY-APPLY/v1";
+            if(witness)status.setText("Recovery witness: chỉ nối năm khóa cấm còn thiếu từ bản host đã duyệt; không cấp quyền firmware hoặc B2. Giữ tuner rút.");
             if(!Tbs5530AutonomousLaunch.valid(launch)||!"SM-X926B".equals(Build.MODEL)||Build.VERSION.SDK_INT!=36)
                 throw new IOException("Exact Samsung recovery launch required");
             if(!Tbs5530AutonomousAndroidAccess.manager(this).devices().isEmpty())throw new IOException("Tuner must be disconnected");
             journal=new Tbs5530RecoveryJournal(getNoBackupFilesDir());
-            if(journal.consumed(PLAN))throw new IOException("Recovery plan already consumed");
+            if(journal.consumed(planHash))throw new IOException("Recovery plan already consumed");
             byte[] before=Tbs5530HistoryRecoveryStore.readSnapshot(this,"autonomous-v1-samsung-sm-x926b-api36");
-            if(!BEFORE.equals(Tbs5530HistoryRecovery.hash(before)))throw new IOException("Recovery baseline mismatch");
+            if(!beforeHash.equals(Tbs5530HistoryRecovery.hash(before)))throw new IOException("Recovery baseline mismatch");
             session=UUID.randomUUID().toString();created=SystemClock.elapsedRealtime();
             directory=new File(getFilesDir(),"history-recovery-v1-"+session);if(!directory.mkdir())throw new IOException("Fresh namespace required");
-            challenge=new JSONObject().put("protocol","TBS5530-HISTORY-APPLY/v1").put("session",session).put("launch_token",launch)
+            challenge=new JSONObject().put("protocol",protocol).put("session",session).put("launch_token",launch)
                     .put("model",Build.MODEL).put("api",Build.VERSION.SDK_INT)
                     .put("boot_count",Settings.Global.getInt(getContentResolver(),"boot_count",-1))
                     .put("apk_sha256",Tbs5530AutonomousSession.installedApkHash(this)).put("source_git_sha",BuildConfig.SOURCE_GIT_SHA)
-                    .put("plan_sha256",PLAN).put("before_sha256",BEFORE).put("after_sha256",AFTER)
-                    .put("before_bytes",581).put("after_bytes",747).put("created_ms",created);
+                    .put("plan_sha256",planHash).put("before_sha256",beforeHash).put("after_sha256",afterHash)
+                    .put("before_bytes",581).put("after_bytes",afterBytes).put("created_ms",created);
             if(challenge.getInt("boot_count")<0)throw new IOException("Boot identity unavailable");
             permit=new Tbs5530RecoveryPermit(challenge,new Tbs5530RecoveryPermit.Port(){
                 public long now(){return SystemClock.elapsedRealtime();}
                 public boolean foreground(){return foreground&&!terminal;}
                 public String grant()throws IOException{return Tbs5530AutonomousSession.read(new File(directory,"grant.json"),16384);}
                 public String heartbeat()throws IOException{return Tbs5530AutonomousSession.read(new File(directory,"heartbeat.json"),2048);}
-                public boolean consumed()throws IOException{return journal.consumed(PLAN);}
-                public void consume(String record)throws IOException{journal.consume(PLAN,record);}
+                public boolean consumed()throws IOException{return journal.consumed(planHash);}
+                public void consume(String record)throws IOException{journal.consume(planHash,record);}
             });
             write(new File(directory,"challenge.json"),challenge.toString());
             write(new File(getFilesDir(),"history-recovery-v1-challenge.json"),challenge.toString());
@@ -100,10 +112,10 @@ public final class Tbs5530HistoryRecoveryActivity extends Activity {
         try{
             permit.requireCurrent();
             File candidateFile=new File(directory,"candidate.txt");
-            byte[] candidate=Tbs5530AutonomousSession.read(candidateFile,747).getBytes(StandardCharsets.UTF_8);
+            byte[] candidate=Tbs5530AutonomousSession.read(candidateFile,afterBytes).getBytes(StandardCharsets.UTF_8);
             byte[] before=Tbs5530HistoryRecoveryStore.readSnapshot(this,"autonomous-v1-samsung-sm-x926b-api36");
-            Tbs5530HistoryRecovery.Plan plan=Tbs5530HistoryRecovery.prepare(before,candidate,BEFORE,AFTER);
-            if(!PLAN.equals(plan.sha256))throw new IOException("Pinned recovery plan changed");
+            Tbs5530HistoryRecovery.Plan plan=witness?Tbs5530HistoryRecovery.prepareWitness(before,candidate):Tbs5530HistoryRecovery.prepare(before,candidate,BEFORE,AFTER);
+            if(!planHash.equals(plan.sha256))throw new IOException("Pinned recovery plan changed");
             Tbs5530HistoryRecovery.State state=Tbs5530HistoryRecoveryStore.append(this,plan,permit);
             if(state!=Tbs5530HistoryRecovery.State.APPEND_VERIFIED)throw new IOException("Recovery commit unknown");
             finishReport("APPEND_VERIFIED_NO_HARDWARE_AUTHORIZATION",null);
@@ -113,12 +125,12 @@ public final class Tbs5530HistoryRecoveryActivity extends Activity {
         if(terminal)return;terminal=true;working=false;ui.removeCallbacks(tick);
         launches.runtimeCleanup(true);
         boolean consumed=false;String current="UNAVAILABLE";
-        try{consumed=journal!=null&&journal.consumed(PLAN);}catch(IOException ignored){}
+        try{consumed=journal!=null&&journal.consumed(planHash);}catch(IOException ignored){}
         try{current=Tbs5530HistoryRecovery.hash(Tbs5530HistoryRecoveryStore.readSnapshot(this,"autonomous-v1-samsung-sm-x926b-api36"));}catch(IOException ignored){}
         try{
-            JSONObject report=new JSONObject().put("protocol","TBS5530-HISTORY-APPLY/v1").put("session",session==null?JSONObject.NULL:session)
+            JSONObject report=new JSONObject().put("protocol",protocol).put("session",session==null?JSONObject.NULL:session)
                     .put("launch_token",launch==null?JSONObject.NULL:launch).put("terminal",true).put("result",result)
-                    .put("plan_sha256",PLAN).put("history_sha256",current).put("consumed",consumed).put("hardware_authorized",false)
+                    .put("plan_sha256",planHash).put("history_sha256",current).put("consumed",consumed).put("hardware_authorized",false)
                     .put("full_history_proven",false).put("usb_io_count",0).put("error_class",error==null?"NONE":error.getClass().getSimpleName());
             if(directory!=null)write(new File(directory,"report.json"),report.toString());
             write(new File(getFilesDir(),"history-recovery-v1-report.json"),report.toString());

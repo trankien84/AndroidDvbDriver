@@ -55,6 +55,16 @@ public class Tbs5530RecoveryCoordinatorTest {
             Rig r=new Rig();r.grant.put(field,!r.grant.getBoolean(field));assertThrows(IOException.class,r.permit::accept);assertEquals(0,r.writes);
         }
     }
+    @Test public void witnessedModeBindsProtocolPlanAndAfterSizeWithoutGrantingHardware()throws Exception{
+        Rig r=new Rig();String plan=Tbs5530HistoryRecovery.witnessPlanSha256();
+        for(JSONObject object:new JSONObject[]{r.challenge,r.grant})object.put("protocol","TBS5530-HISTORY-WITNESS-APPLY/v2")
+                .put("plan_sha256",plan).put("after_sha256",Tbs5530HistoryRecovery.WITNESS_AFTER).put("after_bytes",996);
+        r.permit=new Tbs5530RecoveryPermit(r.challenge,r);r.permit.accept();r.permit.consume(plan);
+        assertEquals(1,r.writes);assertFalse(r.grant.getBoolean("hardware_authorized"));assertFalse(r.grant.getBoolean("full_history_proven"));
+        Rig mismatch=new Rig();mismatch.challenge.put("protocol","TBS5530-HISTORY-WITNESS-APPLY/v2").put("after_bytes",996);
+        mismatch.permit=new Tbs5530RecoveryPermit(mismatch.challenge,mismatch);
+        assertThrows(IOException.class,mismatch.permit::accept);assertEquals(0,mismatch.writes);
+    }
     @Test public void heartbeatStopStaleClockForegroundAndGrantMutationAreTerminal()throws Exception{
         for(int fault=0;fault<6;fault++){
             Rig r=new Rig();r.permit.accept();
@@ -106,6 +116,20 @@ public class Tbs5530RecoveryCoordinatorTest {
             assertFalse(fresh.getBoolean("consumed"));assertEquals(0,fresh.getInt("usb_io_count"));
             inst.runOnMainSync(()->activity.onNewIntent(new android.content.Intent(c,Tbs5530HistoryRecoveryActivity.class).putExtra("launch_token",second)));
             assertEquals(text,Tbs5530AutonomousSession.read(report,8192));
+        }finally{inst.runOnMainSync(activity::finish);inst.waitForIdleSync();}
+    }
+    @Test public void witnessedLaunchOnUnapprovedHostRefusesBeforeAnyConsume()throws Exception{
+        org.junit.Assume.assumeTrue("Emulator-only witnessed launch refusal",android.os.Build.MODEL.startsWith("sdk_"));
+        android.app.Instrumentation inst=InstrumentationRegistry.getInstrumentation();android.content.Context c=inst.getTargetContext();
+        String token=UUID.randomUUID().toString();
+        android.content.Intent request=new android.content.Intent(c,Tbs5530HistoryRecoveryActivity.class).putExtra("launch_token",token)
+                .putExtra("recovery_mode","EXACT_HOST_WITNESS_V2").addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+        Tbs5530HistoryRecoveryActivity activity=(Tbs5530HistoryRecoveryActivity)inst.startActivitySync(request);
+        try{
+            inst.waitForIdleSync();JSONObject report=new JSONObject(Tbs5530AutonomousSession.read(new File(c.getFilesDir(),"history-recovery-v1-report.json"),8192));
+            assertEquals(token,report.getString("launch_token"));assertEquals("TBS5530-HISTORY-WITNESS-APPLY/v2",report.getString("protocol"));
+            assertEquals(Tbs5530HistoryRecovery.witnessPlanSha256(),report.getString("plan_sha256"));assertFalse(report.getBoolean("consumed"));
+            assertEquals("REFUSED_BEFORE_APPEND",report.getString("result"));assertEquals(0,report.getInt("usb_io_count"));
         }finally{inst.runOnMainSync(activity::finish);inst.waitForIdleSync();}
     }
     private static byte[] record(char c){char[] chars=new char[64];Arrays.fill(chars,c);return ("FIRMWARE_CONSUMED "+new String(chars)+"\n").getBytes(StandardCharsets.UTF_8);}

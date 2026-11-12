@@ -80,6 +80,49 @@ public class Tbs5530HistoryRecoveryTest {
         assertThrows(IOException.class,()->reordered.advanced(join(record('b'),record('a'),record('c'))));
         assertThrows(IOException.class,()->reordered.require(record('a')));
     }
+    private static byte[][] witnessFixture() throws Exception {
+        String before=System.getenv("TBS5530_HISTORY_BASELINE_FIXTURE"), after=System.getenv("TBS5530_HISTORY_WITNESS_FIXTURE");
+        org.junit.Assume.assumeTrue("Private witnessed history fixture not configured",before!=null&&after!=null);
+        return new byte[][]{java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(before)),java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(after))};
+    }
+    @Test public void exactWitnessAppendRestoresOnlyMissingDenialsAndCannotRunTwice() throws Exception {
+        byte[][] bytes=witnessFixture();
+        Tbs5530HistoryRecovery.Plan plan=Tbs5530HistoryRecovery.prepareWitness(bytes[0],bytes[1]);
+        final byte[][] current={bytes[0].clone()}; final int[] calls={0,0};
+        Tbs5530HistoryRecovery recovery=new Tbs5530HistoryRecovery(plan,new Tbs5530HistoryRecovery.Port(){
+            public void requireCurrent(){}
+            public byte[] readCurrent(){return current[0].clone();}
+            public void consume(String hash){assertEquals(plan.sha256,hash);calls[0]++;}
+            public void appendAndSync(String expected,byte[] suffix){assertEquals(1,calls[0]);assertEquals(415,suffix.length);calls[1]++;current[0]=join(current[0],suffix);}
+        });
+        recovery.apply();assertArrayEquals(bytes[1],current[0]);assertEquals(1,calls[0]);assertEquals(1,calls[1]);
+        assertEquals(Tbs5530HistoryRecovery.State.APPEND_VERIFIED,recovery.state());
+        assertThrows(IOException.class,recovery::apply);
+        assertThrows(IOException.class,()->Tbs5530HistoryRecovery.prepareWitness(bytes[1],bytes[1]));
+    }
+    @Test public void witnessModeRejectsChangedReorderedTruncatedOrSyntheticHistory() throws Exception {
+        byte[][] bytes=witnessFixture();byte[] changed=bytes[1].clone();changed[18]=changed[18]=='a'?(byte)'b':(byte)'a';
+        for(byte[] after:new byte[][]{changed,Arrays.copyOf(bytes[1],995),join(bytes[1],record('f')),join(record('a'),record('b'))})
+            assertThrows(IOException.class,()->Tbs5530HistoryRecovery.prepareWitness(bytes[0],after));
+        assertThrows(IOException.class,()->Tbs5530HistoryRecovery.prepareWitness(Arrays.copyOf(bytes[0],580),bytes[1]));
+        byte[] reordered=bytes[1].clone();System.arraycopy(bytes[1],83,reordered,0,83);System.arraycopy(bytes[1],0,reordered,83,83);
+        assertThrows(IOException.class,()->Tbs5530HistoryRecovery.prepareWitness(bytes[0],reordered));
+    }
+    @Test public void witnessConsumeFailureOrPartialAppendNeverRetriesOrRollsBack() throws Exception {
+        byte[][] bytes=witnessFixture();Tbs5530HistoryRecovery.Plan plan=Tbs5530HistoryRecovery.prepareWitness(bytes[0],bytes[1]);
+        for(int mode=0;mode<2;mode++){
+            final boolean failConsume=mode==0;final byte[][] current={bytes[0].clone()};final int[] calls={0,0};
+            Tbs5530HistoryRecovery recovery=new Tbs5530HistoryRecovery(plan,new Tbs5530HistoryRecovery.Port(){
+                public void requireCurrent(){}
+                public byte[] readCurrent(){return current[0].clone();}
+                public void consume(String hash)throws IOException{calls[0]++;if(failConsume)throw new IOException("Synthetic consume failure");}
+                public void appendAndSync(String expected,byte[] suffix)throws IOException{calls[1]++;current[0]=join(current[0],Arrays.copyOf(suffix,10));throw new IOException("Synthetic partial append");}
+            });
+            assertThrows(IOException.class,recovery::apply);assertEquals(1,calls[0]);assertEquals(failConsume?0:1,calls[1]);
+            assertEquals(failConsume?Tbs5530HistoryRecovery.State.REFUSED:Tbs5530HistoryRecovery.State.COMMIT_UNKNOWN,recovery.state());
+            assertThrows(IOException.class,recovery::apply);assertEquals(failConsume?581:591,current[0].length);
+        }
+    }
     @Test public void pinnedPrivateCandidateCanBeReviewedWithoutWritingAnyStore() throws Exception {
         String beforePath=System.getenv("TBS5530_HISTORY_BASELINE_FIXTURE"),afterPath=System.getenv("TBS5530_HISTORY_CANDIDATE_FIXTURE");
         org.junit.Assume.assumeTrue("Private recovery fixture not configured",beforePath!=null&&afterPath!=null);

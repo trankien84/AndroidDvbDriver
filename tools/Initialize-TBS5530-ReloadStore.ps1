@@ -79,12 +79,34 @@ function Invoke-InitAdb([string[]]$Arguments){
     }finally{$process.Dispose()}
 }
 function Get-InitHashToken([string]$Text){if($Text -cnotmatch '^([a-f0-9]{64})\s+'){throw 'FAIL-STOP: thiếu SHA256.'};return $Matches[1]}
+function Test-InitUsbInventoryEmpty([string]$Dump) {
+    $hosts=[regex]::Matches($Dump,'(?ms)^  host_manager=\{\r?\n(?<body>.*?)^  \}[ \t]*\r?$')
+    if($hosts.Count -ne 1){return $false}
+    $body=$hosts[0].Groups['body'].Value
+    $counts=[regex]::Matches($body,'(?m)^    num_connects=(0|[1-9][0-9]*)[ \t]*\r?\n')
+    if($counts.Count -ne 1 -or $body.Substring(0,$counts[0].Index).Trim().Length -ne 0){return $false}
+    # AOSP writes current devices before num_connects; connections after it is history.
+    $tail=$body.Substring($counts[0].Index+$counts[0].Length)
+    if($tail.Length -eq 0){return $counts[0].Groups[1].Value -ceq '0'}
+    $history=[regex]::Match($tail,'\A    connections=\[\r?\n(?<records>(?: {6}[^\r\n]*\r?\n)*)    \]\r?\n\z')
+    if(-not $history.Success){return $false}
+    $records=$history.Groups['records'].Value
+    $depth=0
+    foreach($brace in [regex]::Matches($records,'[{}\[\]]')){
+        if($brace.Value -ceq '{'){$depth++}
+        elseif($brace.Value -ceq '}'){$depth--;if($depth -lt 0){return $false}}
+        else{return $false}
+    }
+    if($depth -ne 0){return $false}
+    return ($records.Trim().Length -eq 0 -and $counts[0].Groups[1].Value -ceq '0') -or
+        ($records.Trim().Length -gt 0 -and $counts[0].Groups[1].Value -cne '0' -and $records.Trim().StartsWith('{') -and $records.Trim().EndsWith('}'))
+}
 function Assert-InitIdentity {
     if((Invoke-InitAdb @('get-state')) -cne 'device' -or (Invoke-InitAdb @('shell','getprop','ro.product.model')) -cne 'SM-X926B' -or
         (Invoke-InitAdb @('shell','getprop','ro.build.version.sdk')) -cne '36' -or
         [int](Invoke-InitAdb @('shell','settings','get','global','boot_count')) -ne $ExpectedBootCount){throw 'BLOCKED: model/API/boot khác card.'}
-    $usb=Invoke-InitAdb @('shell','dumpsys','usb');$block=[regex]::Match($usb,'(?ms)^  host_manager=\{.*?^  \}').Value
-    if(-not $block -or $block -match 'vendor_id=|vendorId=|device_address='){throw 'BLOCKED: khởi tạo yêu cầu USB inventory rỗng.'}
+    $usb=Invoke-InitAdb @('shell','dumpsys','usb')
+    if(-not(Test-InitUsbInventoryEmpty $usb)){throw 'BLOCKED: khởi tạo yêu cầu USB inventory rỗng và schema đã xác minh.'}
 }
 Assert-InitIdentity
 if((Get-InitHashToken (Invoke-InitAdb @('shell','run-as',$package,'sha256sum','files/autonomous-v1-samsung-sm-x926b-api36-attachments.txt'))) -cne $history){throw 'BLOCKED: history witness thật đã đổi; không init.'}

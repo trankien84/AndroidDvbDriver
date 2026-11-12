@@ -38,4 +38,100 @@ $bash='C:\Program Files\Git\bin\bash.exe'
 if(-not(Test-Path -LiteralPath $bash)){throw 'Missing existing Git Bash for syntax-only validation.'}
 & $bash -n -c $command;if($LASTEXITCODE -ne 0){throw 'Initialization heartbeat shell syntax failed.'};$checks++
 try{New-InitHeartbeatCommand '../other' $false;throw 'Expected malformed session refusal.'}catch{if($_.Exception.Message -cne 'FAIL-STOP: session malformed.'){throw}};$checks++
-Write-Output "PASS: initializer offline cross-language plan/template/helper/heartbeat guards $checks/$checks; no ADB or real store write."
+$inventory=$ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Test-InitUsbInventoryEmpty'},$true)
+if($null -eq $inventory){throw 'Missing empty USB inventory guard.'};Invoke-Expression $inventory.Extent.Text
+# Shape from the observed Samsung host_manager; addresses and timestamps are synthetic.
+$historyOnly=@'
+  host_manager={
+    num_connects=4
+    connections=[
+      {
+        device_address=/dev/bus/usb/001/011
+        mode=0
+        timestamp=1000
+        manufacturer=29516
+        product=21808
+        is_headset={
+          in=false
+          out=false
+        }
+      }
+      {
+        device_address=/dev/bus/usb/001/011
+        mode=-1
+        timestamp=2000
+      }
+      {
+        device_address=/dev/bus/usb/001/012
+        mode=0
+        timestamp=3000
+        manufacturer=29516
+        product=21808
+        is_headset={
+          in=false
+          out=false
+        }
+      }
+      {
+        device_address=/dev/bus/usb/001/012
+        mode=-1
+        timestamp=4000
+      }
+    ]
+  }
+'@
+$historyOnly=$historyOnly.Replace("`r`n","`n")
+$oldBlock=[regex]::Match($historyOnly,'(?ms)^  host_manager=\{.*?^  \}').Value
+if(-not $oldBlock -or $oldBlock -notmatch 'vendor_id=|vendorId=|device_address='){throw 'History fixture does not reproduce the old false refusal.'};$checks++
+$empty="  host_manager={`n    num_connects=0`n  }"
+$emptyList="  host_manager={`n    num_connects=0`n    connections=[`n    ]`n  }"
+$live="    devices={`n      vendor_id=29516`n      product_id=21808`n    }`n"
+$cases=@(
+    @('no history',$empty,$true),
+    @('explicit empty history',$emptyList,$true),
+    @('Samsung history only LF',$historyOnly,$true),
+    @('Samsung history only CRLF',$historyOnly.Replace("`n","`r`n"),$true),
+    @('filters outside host ignored',$historyOnly+"`n  settings_manager={`n    vendor_id=29516`n    device_address=filter-only`n  }",$true),
+    @('live target before history',$historyOnly.Replace('    num_connects=',$live+'    num_connects='),$false),
+    @('live unrelated device',$historyOnly.Replace('    num_connects=',$live.Replace('29516','1')+'    num_connects='),$false),
+    @('empty-looking devices section',$empty.Replace('    num_connects=',"    devices=[]`n    num_connects="),$false),
+    @('missing host','unknown OEM format',$false),
+    @('duplicate host',$empty+"`n"+$historyOnly,$false),
+    @('missing count',$historyOnly.Replace("    num_connects=4`n",''),$false),
+    @('duplicate count',$historyOnly.Replace('    num_connects=4',"    num_connects=4`n    num_connects=4"),$false),
+    @('invalid count',$historyOnly.Replace('num_connects=4','num_connects=unknown'),$false),
+    @('truncated history',$historyOnly.Replace("    ]`n",''),$false),
+    @('unbalanced history record',$historyOnly.Replace("          out=false`n        }","          out=false"),$false),
+    @('unknown host field after history',$historyOnly.Replace("    ]`n","    ]`n    devices=[]`n"),$false),
+    @('unknown host field before count',$empty.Replace('    num_connects=',"    future_field=true`n    num_connects="),$false),
+    @('positive count without history',$empty.Replace('num_connects=0','num_connects=4'),$false),
+    @('zero count with records',$historyOnly.Replace('num_connects=4','num_connects=0'),$false),
+    @('missing host close',$historyOnly.Substring(0,$historyOnly.Length-3),$false)
+)
+foreach($case in $cases){
+    $actual=@(Test-InitUsbInventoryEmpty $case[1])
+    if($actual.Count -ne 1 -or $actual[0] -isnot [bool] -or $actual[0] -ne $case[2]){throw ('USB inventory guard mismatch: '+$case[0])}
+    $checks++
+}
+$identity=$ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Assert-InitIdentity'},$true)
+if($null -eq $identity){throw 'Missing initialization identity guard.'};Invoke-Expression $identity.Extent.Text
+$ExpectedBootCount=1
+$script:inventoryFixture=$historyOnly
+function Invoke-InitAdb([string[]]$Arguments){
+    switch -Exact ($Arguments -join ' '){
+        'get-state' {return 'device'}
+        'shell getprop ro.product.model' {return 'SM-X926B'}
+        'shell getprop ro.build.version.sdk' {return '36'}
+        'shell settings get global boot_count' {return '1'}
+        'shell dumpsys usb' {return $script:inventoryFixture}
+        default {throw 'Unexpected fake ADB command.'}
+    }
+}
+Assert-InitIdentity;$checks++
+foreach($dump in @($historyOnly.Replace('    num_connects=',$live+'    num_connects='),'unknown OEM format')){
+    $script:inventoryFixture=$dump
+    try{Assert-InitIdentity;throw 'Expected live/unknown inventory refusal.'}catch{if($_.Exception.Message -cne 'BLOCKED: khởi tạo yêu cầu USB inventory rỗng và schema đã xác minh.'){throw}}
+    $checks++
+}
+Remove-Variable inventoryFixture -Scope Script
+Write-Output "PASS: initializer offline cross-language plan/template/helper/heartbeat/inventory guards $checks/$checks; no ADB or real store write."

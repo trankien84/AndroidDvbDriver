@@ -1,5 +1,100 @@
 # Port TBS5530 sang Android — trạng thái hiện tại
 
+## 2026-11-12, sau run audit 19:40–19:41 +07 — Vẫn INVALID_TS; đã thu chứng cứ, dừng sửa theo yêu cầu
+
+**Đã chạy đúng một preparation/B2 mới được duyệt, nhận 65.536 byte nhưng TS vẫn lỗi.** Bootstrap/reload đều 132/132, 16 URB đều status 0/actual 4096/errno 0, audit quan sát 35 records/3903 byte có marker và hash seal đúng, SYNCED_CLOSED. App vẫn mất đồng bộ 16 lần, PAT/PMT 0; không TS_SMOKE_PASS hoặc ROOT_CAUSE_CONFIRMED. Bỏ ghi audit từng boundary chưa đủ làm mẫu TS sạch, chưa biết nguyên nhân gốc.
+
+Cửa sổ 16 COPY giảm từ 674,676 xuống 576,444 ms giữa hai run, nhưng vẫn cách nhau 33,802–43,877 ms; đây không phải phép đo riêng chi phí audit hoặc bằng chứng quy lỗi cho guard/kernel/FIFO. TSDuck raw không nhận dạng TS dù exit 0; bản dẫn xuất có 162 discontinuities/7 duplicates và không service, không phải raw PASS. Handoff lần này tiếp tục ghi một operational broadcast và một intent trước descriptor seal/owner; không hai broadcast hoặc timeline B1.
+
+Đã DRAIN_CONFIRMED/RUNTIME_DRAIN_CONFIRMED, outstanding 0/quarantined=false; user xác nhận rút tuner/ngắt nguồn. Đã thu 32 tệp app lưu sẵn, đối soát SHA tablet/host, phân tích hoàn toàn offline; không run/retry thêm. History cuối 1328 byte/16 records/hash 15666f1a…, prefix 1162 byte nguyên; journal 308 byte/a6f07eb2… và anchor 224 byte/a1dbd197… giữ consumed. Không init/recovery/reset/rearm.
+
+**Chốt phiên:** Người dùng yêu cầu chỉ thu chứng cứ/phân tích, không sửa lỗi tiếp khi chưa biết nguyên nhân. Không sửa thêm source/helper/tests sau freeze, không grant hoặc thử phần cứng mới. Chỉ hồ sơ/README/báo cáo kết quả được cập nhật; không stage/commit/push. Bundle mới `phase31-b2-audit-live-20261112-193034-c05c9411` dưới `D:\TSDuck\logs` và `D:\TSDuck\reports`; xem [RESEARCH.md](RESEARCH.md), [ADR-053](DECISIONS.md), [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md).
+
+## 2026-11-12, sau B2 17:55–17:56 +07 — Đã nhận dữ liệu USB, TS chưa đạt; tối ưu ghi nhật ký chỉ kiểm offline
+
+**B2 đã nhận 65.536 byte, nhưng chưa nhận được luồng truyền hình sạch.** Bootstrap gốc và reload đều hoàn tất 132/132; 16 URB (yêu cầu nhận USB) đều status 0, actual 4096, errno 0, outstanding 0 và đã drain. App báo INVALID_TS: 16 lần mất đồng bộ, không PAT/PMT (bảng mô tả chương trình). Trạng thái là `ROOT_CAUSE_CANDIDATE_H_AUTOINLEN` + `B2_POSITIVE_SINGLE_RUN_TRANSPORT_WITH_INVALID_TS`; chưa ROOT_CAUSE_CONFIRMED hoặc TS_SMOKE_PASS.
+
+Handoff thực có một ATTACH_BROADCAST và một ON_NEW_INTENT của attachment operational, sau detach/bootstrap drain/UI reset; descriptor được seal rồi owner mới bắt đầu. Không quan sát hai broadcast, không hồi tố kết quả này thành nguyên nhân B1 cũ. Reload sạch, cửa sổ release→wait end 1630,924231 ms, không detach. Xem timeline và giới hạn trong [RESEARCH.md](RESEARCH.md).
+
+Lượt permission-only trước đã timeout và đóng trước khi tuner connect; lượt preparation mới trên attachment đang cắm được duyệt riêng, không phải retry tự động. History mới 1162 byte/14 records/hash 855d2134…, reload journal e4f2f2f5… và anchor da80da1e… đã consume; không reset về các pins init cũ. User đã xác nhận rút tuner/ngắt nguồn sau drain.
+
+Theo quyền offline mới, chỉ nhật ký quan sát nhận TS B2 được giữ trong RAM có giới hạn rồi ghi bền sau drain; `.started` ghi bền trước receive, `.complete` chỉ sau commit/hash readback. Thiếu audit hoặc commit lỗi không được chứng nhận TS. Grant/consume/history/store/permission/lock và mọi vị trí kiểm quyền giữ nguyên; không đổi TTL, deadline, queue, kích thước hoặc giới hạn thu. Kiểm cuối app JVM 95/95, emulator fake/cache 28/28 và coordinator 41/41 PASS. Đo emulator đầu: đường ghi khi receive giảm từ 214,8714 ms xuống 16,1782 ms cho 34 records, commit sau drain 18,1421 ms; lượt cuối 3662,6792/360,1311/320,9210 ms cho thấy biến thiên lớn, không phải số đo Samsung hay bằng chứng đã sửa TS.
+
+Bundle nhận dữ liệu: `phase31-permission-first-20261112-173615-2b868332`; bundle tối ưu offline: `phase31-ts-quality-offline-20261112-183244-7b4e5c12`, đều dưới `D:\TSDuck\logs` và `D:\TSDuck\reports`. Bước tiếp là chốt kiểm thử/card/hash và xin duyệt riêng một phép thử chất lượng mới; chưa có quyền hardware cho candidate audit. Giữ lint driver cũ/bốn lifecycle FAIL và việc dọn CRLF sau B2; không stage/commit/push. Xem [ADR-052](DECISIONS.md), [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md).
+
+## 2026-11-12, sau initial-fix live — Initial admission qua, upload bị chặn vì thiếu ngân sách thời gian
+
+Run mới riêng trên APK 3ee6cf24… đã được duyệt và đi qua OS permission callback, ON_NEW_INTENT provisional và raw FX2 profile/seal trước bootstrap. Dừng UPLOAD_PREFLIGHT_REFUSED ở FX2_DEFAULT: attempted/native A0 đều 0, còn 189456 ms nhỏ hơn guard 285000 ms trong TTL 300000 ms. Đã drain, history/store/tombstones giữ nguyên, user rút tuner/ngắt nguồn; không retry hoặc TS/H-AUTOINLEN evidence mới.
+
+User duyệt rà/test offline phương án permission-first: chuẩn bị quyền OS bằng Activity permission-only có sẵn trước khi tạo/grant B2 session, không đổi TTL 300 giây/upload guard 285 giây/heartbeat 2 giây/cửa sổ permission 10 giây. Coordinator host mới đã kiểm 34/34 fake guards, không Android/APK/runtime helper thay đổi. Chưa quyền hardware mới; card/approval riêng sẽ được hỏi trong phiên. Xem [ADR-051](DECISIONS.md), [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md). Giữ ROOT_CAUSE_UNRESOLVED/TS_SMOKE_PASS=false.
+
+## 2026-11-12, sau lượt B2 đã đóng — Đã sửa initial attach offline, chưa chạy tuner mới
+
+**Đã sửa nhánh attach ban đầu đến sau polling selection/request, chỉ cho B2.** Scope provisional được tạo sau grant, trước đăng ký listener/discovery; giữ cùng session/epoch/identity/permission attempt, từ chối mọi detach ở phase ban đầu. Sau OS grant mới đọc raw tree có sẵn, bắt buộc profile FX2_DEFAULT đầy đủ trước bootstrap; seal đóng ngoại lệ rồi chuyển sang scope operational cũ. Generic ABA ngoài B2, operational descriptor 50 byte/hash, bootstrap proof, TTL/heartbeat/deadline và pipeline firmware/frontend/native không đổi.
+
+BEFORE một test lịch ghi nhận FAIL đúng state INVALIDATED; AFTER 7 initial + 14 operational + 30 generic permission PASS. App JVM đầy đủ 95/95, build debug/test/release/app lint và emulator fake 20/20 PASS; giữ failure fixture admission-latch ở lượt AFTER đầu, không nới latch. APK candidate SHA `3ee6cf24540bcf294850df4fff6a0a642ec9c3d9ed8345d23cc290dd2a355722`, chưa cài tablet hoặc chạy phần cứng. Các PASS này không chứng minh Samsung live sẽ qua initial attach hoặc nhận TS.
+
+Phần I thực của lượt trước vẫn PASS, stores/history/tombstones đã consume giữ nguyên; B2 trước dừng an toàn trước bootstrap/reload. Card mới cần duyệt riêng cho một run mới nếu người dùng muốn, không retry từ grant cũ. Bundle offline mới `phase31-initial-attach-offline-20261112-165718-83b1da6b` dưới `D:\TSDuck\logs` và reports; xem [ADR-050](DECISIONS.md), [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md). Không stage/commit/push, không TS_SMOKE_PASS.
+
+## 2026-11-12, phiên 15:39 +07 — Kết quả: Phần I PASS; một B2 dừng trước bootstrap/reload, đã drain và rút tuner
+
+**Đã hoàn tất recovery witness và init no-tuner. B2 duy nhất đã chạy nhưng không tới phép thử reload.** Dừng `ATTACH_DUPLICATE_OR_ABA_UNVERIFIED` tại NEED_ANDROID_USB_PERMISSION, trước bootstrap: firmware/reload/native receive đều null, app EP0 mirror 0 records, không có byte TS. Vì vậy không có thông tin mới về H-AUTOINLEN, không root-cause confirmed; giữ Phase 3.1/ROOT_CAUSE_UNRESOLVED/TS_SMOKE_PASS=false.
+
+- **Phần I PASS thực:** Recovery một lần 581→996 byte/7→12 records, prefix 581 byte nguyên; journal recovery 906 byte/hash 7254d8e7… giữ. Init một lần đúng journal 138 byte/anchor 94 byte/marker 99 byte và hashes đã khóa; tombstone init 1131 byte/SHA `1f5aa7333d6f9019f653677970241c5ba54180531d56b387a2a70dcbd8ed32e8`. History 996 byte/12 records/b6b5935a… trước/sau exact, installed APK 9493d0b6… đúng, USB I/O tuner 0 và monitor 30/current empty/host history không đổi.
+- **H1 runtime mới:** SELECTED → +10,075 ms PERMISSION_REQUEST → +23,127 ms một ATTACH_BROADCAST cùng identity → +25,291 ms guard invalidate. Cả bốn events ở main, trước bootstrap, không ON_NEW_INTENT/detach/callback/operational owner trong journal. Một broadcast đến sau polling selection đủ kích guard ở lượt này; chưa chứng minh hai delivery operational hoặc nguyên nhân B1 cũ. Operational handoff/reload chưa được thử.
+- **Chốt sau B2:** Helper exit 1 đúng terminal fail, DRAIN_CONFIRMED; history/store/anchor/marker/init tombstone không đổi, session ledger chỉ SESSION_GRANTED. Không retry/split launch hoặc sửa guard rồi chạy lại. Hậu kiểm fd phụ bị timeout nên UNKNOWN, không nhận fd 0; terminal drain đã xác minh, user xác nhận rút tuner/ngắt nguồn chữ Y sau drain. Không hậu kiểm USB mới sau rút.
+
+Đã có [ADR-049](DECISIONS.md) và báo cáo/timeline trong bundle `phase31-witness-recovery-20261112-154425-686a238c` dưới `D:\TSDuck\logs` và reports. Bước tiếp chỉ đề xuất điều tra/sửa offline nhánh attach ban đầu với test tái hiện, card/phê duyệt mới trước lượt phần cứng khác; không dùng grant B2 này cho lượt tiếp. Không stage/commit/push.
+
+## 2026-11-12, phiên 15:39 +07 — Recovery witness v2 đã kiểm phần mềm, chờ exact live approval
+
+**Đã thêm đường khôi phục chỉ nối đúng năm khóa cấm còn thiếu; chưa ghi history tablet.** User duyệt triển khai offline, không sửa recovery v1 mặc định hoặc parser history. V2 khóa before 581 byte/7 records/e398459c… và after 996 byte/12 records/b6b5935a…, giữ prefix, journal exact-plan O_EXCL/fsync trước append; partial/authority loss không retry hoặc rollback. Full history trước witness vẫn UNKNOWN.
+
+JVM focused 10/10, helper 8/8, initializer regression 33/33, encoding 4/4 và emulator final 18/18 PASS; debug/release/AndroidTest/app lint PASS có phạm vi, release vắng recovery. Emulator riêng đã dừng. APK mới SHA `9493d0b66027827a532a6aa3f0f9db868b67062c0a3b9a4397e45cbb7800fada`, recovery helper `0762fb16eae0d9ab547b2400b34730ea673660bb087da1cae8dc36694ecc12b5`, plan `da1ccd0a385706147d405a90529594b407d21301d61676b682e14f1c6ba38eb2`; cần duyệt exact card trước install/apply. Tablet read-only thấy marker initialized, không .bak/.new, journal v1/v2 đều vắng; không tái dùng v1 đã từng chạy.
+
+Bundle `phase31-witness-recovery-20261112-154425-686a238c` dưới `D:\TSDuck\logs` và reports giữ source/tests/APK/card mới. Chưa recovery/init/B2 thật, H1 UNKNOWN và TS_SMOKE_PASS=false. Trong phiên sẽ hỏi người dùng tại chốt cần duyệt, không tự mở B2 trước Phần I PASS và câu riêng. Không stage/commit/push; xem [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md).
+
+## 2026-11-12, phiên 15:25 +07 — Đã cài lại đúng APK; history hiện tại thiếu năm records, init vẫn chặn
+
+**Cài lại PASS, nhưng Phần I chưa PASS.** Người dùng xác nhận đã lỡ gỡ app và yêu cầu cài lại. Đã `install -r` đúng APK một lần, installed SHA `11983e5c56ba20ec2e32b583fb95ceb68a01493f5094d9335ff0933d0e20d920`. Trước cài thấy màn hình Dozing nên đã báo, chờ người dùng mở rồi mới cài; không đổi khóa màn hình hoặc tự bật.
+
+History sau cài có 581 byte/7 records/hash `e398459ceddb2c8f35ddc61b81ee66a31ec1aee300c33bb603dc9f593b0b31f9`, khớp snapshot cũ và là prefix chính xác của witness 996 byte/12 records/hash b6b5935a… ngoài host. Thiếu 415 byte/5 records; chưa có trace để kết luận cơ chế dữ liệu cũ trở lại. Ba reload targets và tombstone đều ABSENT, không được dùng để tự init khi history fence chưa đạt.
+
+Không mở app thủ công, initializer, grant, restore/rearm hoặc tuner I/O; B2 NOT RUN, H1 UNKNOWN, TS_SMOKE_PASS=false. Bước tiếp chỉ đề xuất kế hoạch khôi phục có đối soát phần history thiếu và journal chống dùng lại, được duyệt riêng trước mọi ghi app; không thay witness bằng bản bảy records. Bundle `phase31-app-reinstall-20261112-152643-2f333465` dưới `D:\TSDuck\logs` và reports có installed hash/current bytes/prefix proof. Xem [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md).
+
+## 2026-11-12, 15:18 +07 — Card init v2 đã được duyệt; dừng vì run-as không nhận package
+
+**Phần I vẫn BLOCKED trước install/init; không đọc được history thật.** Sau khi người dùng duyệt exact card v2 và xác nhận tuner rút/nguồn chữ Y ngắt/màn hình mở, preflight mới qua model/API/boot/current USB nhưng `run-as` trả `unknown package: info.martinmarinov.dvbdriver`. ADB exit 0, song stdout 54 byte là thông báo lỗi, không phải history 996 byte/12 records. Guard hash dừng đúng, không dùng lỗi này làm dữ liệu hoặc tự chấp nhận witness mới.
+
+Không install, launch initializer, grant, tombstone/store hoặc tuner I/O; không ADB thêm sau stop. Không kết luận app/data đã mất hoặc tự cài để tạo history rỗng. Cần điều tra chỉ đọc package/user/profile trước một kế hoạch phục hồi riêng; chưa thực hiện. B2 NOT RUN, H1 UNKNOWN, ROOT_CAUSE_UNRESOLVED, TS_SMOKE_PASS=false. Helper v2 đã kiểm 33/33 mỗi shell và giữ hash đã duyệt; snapshot freeze/card ở bundle `phase31-b2-live-20261112-133010-a5b7ea58` giữ nguyên, sáu hồ sơ chỉ bổ sung kết quả sau stop. Xem [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md).
+
+## 2026-11-12, phiên 13:28 +07 — Sửa guard USB sau preflight dừng; card init mới chờ duyệt
+
+**Đã sửa lỗi thứ hai: helper nhầm lịch sử USB với thiết bị đang cắm.** Preflight thật qua Samsung SM-X926B/API36/boot47, màn hình Awake, rồi dừng trước install vì history còn `device_address`. Raw có history connect/disconnect, không có current `devices` trong host block. Người dùng duyệt sửa offline helper/tests và khóa card mới, chưa duyệt init với hash mới.
+
+- Guard mới tách phần current trước `num_connects` khỏi `connections` lịch sử, từ chối schema lạ/truncated hoặc bất kỳ current field nào. Kiểm mới PS7/PS5.1 mỗi shell 33/33 PASS, encoding 4/4 PASS; raw thật offline PASS, injected live device bị chặn, 100 lần truncated 60 ms. Giữ attempt regex test timeout và fixture CRLF lỗi làm evidence.
+- APK/runtime B2/plan/templates/TTL120/heartbeat2 giây không đổi; initializer helper mới SHA `edd2961fa7b9fc94abbf1bb663820d4ebca00b72b9b3d20f9fb8bc39f4513351`. Không dùng phê duyệt hash cũ để chạy helper mới; bundle `phase31-b2-live-20261112-133010-a5b7ea58` dưới `D:\TSDuck\logs` và reports có card/manifest mới.
+- **Chốt:** Chưa install/launch/grant/tombstone/store, history và APK installed chưa đọc ở lượt này; Phần I vẫn BLOCKED, B2 NOT RUN, H1 UNKNOWN, TS_SMOKE_PASS=false. Chỉ xét preflight/init mới sau duyệt exact card mới; nếu PASS vẫn dừng chờ câu `TIẾP TỤC B2`. Không ADB thêm sau failure, không stage/commit/push. Xem [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md).
+
+## 2026-11-12, phiên 13:14 +07 — Đã sửa wrapper và kiểm offline; chưa chạy lại tablet
+
+**Lỗi báo nhầm `MODEL_MISMATCH` đã được sửa và kiểm offline 12/12 PASS.** Bản wrapper mới ngoài Git bỏ giá trị trả về của lệnh chờ sao chép bất đồng bộ; hàm nay trả đúng một chuỗi, không còn kèm `VoidTaskResult`. Kiểm toàn bộ preflight bằng tiến trình giả cũng PASS; không phải kết quả Samsung thật. Phần I thực vẫn BLOCKED/NOT RUN sau chốt dừng trước, B2 NOT RUN và H1 UNKNOWN.
+
+- Bản sửa/hash và tests nằm trong bundle `phase31-wrapper-fix-20261112-131739-13025118` dưới `D:\TSDuck\logs` và reports. Giữ wrapper lỗi/bundle cũ nguyên để truy vết; 14 tệp source/helper ngoài docs và 11 artifacts frozen không đổi, không sửa lint/lifecycle/CRLF hoặc rủi ro detach đã hoãn.
+- Lượt này không dùng ADB tablet, cài APK, launch initializer, grant/store write hoặc tuner. Khi cần ADB tiếp, nếu kiểm thấy màn hình tắt phải báo người dùng mở lại; không tự bật màn hình hoặc đổi timeout khóa máy.
+- Bước tiếp chỉ đề xuất: một preflight Samsung mới, chỉ sau quyết định cho phép đọc lại. Chưa có PASS mục 2.4 hoặc hash tombstone mới; không tự mở init/B2, không stage/commit/push. Xem [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md).
+
+## 2026-11-12, phiên bắt đầu 12:55 +07 — Phần I dừng ở preflight host; chưa cài APK hoặc khởi tạo store
+
+**Phần I BLOCKED, không PASS; B2 NOT RUN.** Wrapper thu evidence mới ngoài Git báo nhầm `MODEL_MISMATCH` vì trả thêm `System.Threading.Tasks.VoidTaskResult` vào pipeline. ADB thực trả đúng `SM-X926B`, exit 0; đã tái hiện nguyên nhân hoàn toàn offline bằng MemoryStream. Dừng ngay theo quy tắc không retry, không sửa helper đã freeze hoặc gọi ADB thêm. Chưa install, launch initializer, publish grant, tạo tombstone/store hoặc gửi USB I/O tới tuner.
+
+- **Nền đã kiểm:** Branch `chore/modernize-android-build`, HEAD `c4afcf9d1cd125670106f26dd84034908322377e`, tree sạch lúc bắt đầu; 20/20 tệp freeze, 11/11 artifacts và hai manifest khớp size/hash. Initializer guards offline 9/9 PASS mới, không suy thành actual init PASS.
+- **Quyền và trạng thái:** Người dùng đã xác nhận rút tuner khỏi Samsung và ngắt nguồn chữ Y. Chưa đọc `dumpsys usb`, boot, history hoặc installed APK trong preflight bị dừng; ba targets/tombstone và mọi điều kiện actual init vẫn NOT RUN. Không có hash tombstone mới hoặc timeline handoff mới; H1 giữ UNKNOWN.
+- **Disposition được duyệt:** Driver lint debug/release cũ là “pre-existing, không chặn B2 debug”; bốn lifecycle FAIL emulator ngoài allowlist là giới hạn môi trường, vẫn giữ FAIL. Không sửa hoặc suppress. **CRLF: dọn sau B2**, không đổi bytes source freeze trong nhiệm vụ này.
+- **Rủi ro giữ nguyên:** Sau observe/select operational, `detached()` vẫn reject mọi detach đúng VID:PID dù identity khác. Detach FX2 cũ đến muộn có thể gây `USB_DETACHED`; chưa quan sát ở lượt này. Nếu gặp trong B2 được duyệt sau này, so `device_identity_sha256` trong events rồi dừng, không tự sửa/chạy lại.
+
+**Điểm dừng:** Giữ tuner rút; cần quyết định riêng để sửa/kiểm wrapper offline và cho phép preflight mới. Câu `TIẾP TỤC B2` không đủ mở B2 khi Phần I chưa PASS. Giữ `Phase 3.1`, `ROOT_CAUSE_CANDIDATE_H_AUTOINLEN`, `ROOT_CAUSE_UNRESOLVED`, `TS_SMOKE_PASS=false`. Bundle `phase31-b2-live-20261112-125721-9a964d76` dưới `D:\TSDuck\logs` và `D:\TSDuck\reports`; xem [RESEARCH.md](RESEARCH.md), [DECISIONS.md](DECISIONS.md), [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md). Không stage/commit/push hoặc thay source/helper frozen.
+
 ## 2026-11-12, phiên bắt đầu 11:20 +07 — Đã sửa handoff offline; hai card mới chờ duyệt, chưa init/B2 thật
 
 **Đã bỏ chặn nhầm attach đến muộn trong một phạm vi hẹp trước owner; chưa chứng minh Samsung sẽ handoff thành công.** H1 xác nhận B1 đủ 132/132 rồi lỗi duplicate/ABA tại NEED_ANDROID_USB_PERMISSION, nhưng raw thiếu từng event nên hai attach và race thật vẫn UNKNOWN. Giữ `Phase 3.1`, `ROOT_CAUSE_CANDIDATE_H_AUTOINLEN`, `ROOT_CAUSE_UNRESOLVED`, `TS_SMOKE_PASS=false`.

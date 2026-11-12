@@ -29,6 +29,7 @@ final class Tbs5530AutonomousSession {
     boolean reloadEnabled() { return frontendExperiment == Tbs5530FrontendExperiment.B2_RELOAD_AFTER_SET_CONFIG; }
     private final Tbs5530HistoryFence.Store historyStore;
     private final Tbs5530HistoryFence historyFence;
+    private Tbs5530ReceiveAudit receiveAudit;
     final boolean controlMirrorEnabled, explicitSetInterfaceAlt0, controlPlaneOnly, sonyTsOutputReadback;
     final String launchToken;
     final java.util.Map<Tbs5530SonyTsOutputReadback.Stage,Tbs5530SonyTsOutputReadback.Snapshot> sonySnapshots = new java.util.EnumMap<>(Tbs5530SonyTsOutputReadback.Stage.class);
@@ -300,7 +301,12 @@ final class Tbs5530AutonomousSession {
                 if ("phase31-challenge.json".equals(name)) {
                     try { program = new JSONObject(text); } catch (org.json.JSONException error) { throw new IOException(error); }
                 }
-                Tbs5530AutonomousSession.this.write(name.replace("phase31", "program"), text);
+                String target = name.replace("phase31", "program");
+                if (plan == null && reloadEnabled() && Tbs5530AutonomousPlans.nativeUrb(readApi)
+                        && name.equals("phase31-boundaries-" + attempt + ".jsonl")) {
+                    if (receiveAudit == null) receiveAudit = new Tbs5530ReceiveAudit(new File(directory, target));
+                    receiveAudit.write(text.getBytes(StandardCharsets.UTF_8));
+                } else Tbs5530AutonomousSession.this.write(target, text);
             }
             public boolean consumed(String value) { return policy.consumed(value); }
             public void consume(String value) throws IOException {
@@ -521,6 +527,9 @@ final class Tbs5530AutonomousSession {
         return new JSONObject().put("option",Tbs5530SonyTsOutputReadback.OPTION).put("enabled",sonyTsOutputReadback)
                 .put("maximum_snapshots",2).put("snapshots",snapshots).put("during_pending","NOT_AVAILABLE_NO_CONCURRENT_I2C");
     }
+    void finishReceiveAudit(boolean drained) throws IOException {
+        if (receiveAudit != null) receiveAudit.finishAfterDrain(drained);
+    }
     void report(String result, long bytes, long packets, int errno) throws IOException {
         try {
             JSONObject json = new JSONObject().put("policy", Tbs5530AutonomousPolicy.VERSION).put("state", policy.state().name())
@@ -539,7 +548,9 @@ final class Tbs5530AutonomousSession {
                     .put("native_return_status", preNativeRefusal ? "NOT_CALLED_PRE_NATIVE_REFUSAL" : "SEE_TYPED_RESULT_AND_BOUNDARIES")
                     .put("error_class", errorClass).put("cause_class", causeClass)
                     .put("raw_received_bytes", capture == null ? 0 : capture.bytes())
-                    .put("raw_capture", capture == null ? "NOT_STARTED" : capture.durable() ? "SYNCED_CLOSED" : "NOT_CERTIFIED");
+                    .put("raw_capture", capture == null ? "NOT_STARTED" : capture.durable() ? "SYNCED_CLOSED" : "NOT_CERTIFIED")
+                    .put("receive_audit", receiveAudit == null ? "NOT_STARTED" : receiveAudit.state())
+                    .put("receive_audit_bytes", receiveAudit == null ? 0 : receiveAudit.bytes());
             File permissionEvidence = new File(directory, "permission.json");
             JSONObject permission = permissionEvidence.isFile() ? new JSONObject(read(permissionEvidence, 8192)) : null;
             boolean matchingPermission = permission != null && id.equals(permission.optString("session"));
@@ -597,6 +608,7 @@ final class Tbs5530AutonomousSession {
                     && "NO_ERRORS_IN_BOUNDED_SAMPLE".equals(ts.qualityObservation())
                     && cleanupConfirmed && policy.state() == Tbs5530AutonomousPolicy.State.REPORT
                     && capture != null && capture.durable() && capture.bytes() == ts.bytes
+                    && (!reloadEnabled() || receiveAudit != null && "SYNCED_CLOSED".equals(receiveAudit.state()))
                     && (urb == null || !urb.quarantined && urb.outstanding == 0));
             json.put("ts_metrics", ts == null ? JSONObject.NULL : tsMetrics(ts));
             write("report.json", json.toString());
