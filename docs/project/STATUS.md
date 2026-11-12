@@ -1,5 +1,16 @@
 # Port TBS5530 sang Android — trạng thái hiện tại
 
+## 2026-11-12, phiên bắt đầu 11:20 +07 — Đã sửa handoff offline; hai card mới chờ duyệt, chưa init/B2 thật
+
+**Đã bỏ chặn nhầm attach đến muộn trong một phạm vi hẹp trước owner; chưa chứng minh Samsung sẽ handoff thành công.** H1 xác nhận B1 đủ 132/132 rồi lỗi duplicate/ABA tại NEED_ANDROID_USB_PERMISSION, nhưng raw thiếu từng event nên hai attach và race thật vẫn UNKNOWN. Giữ `Phase 3.1`, `ROOT_CAUSE_CANDIDATE_H_AUTOINLEN`, `ROOT_CAUSE_UNRESOLVED`, `TS_SMOKE_PASS=false`.
+
+- **Hướng A:** Scope trong bộ nhớ cùng session/physical epoch, quan sát detach/attach qua runtime close/UI reset; chỉ giữ tạm attach cùng identity/token/generation trước owner, rồi bắt buộc raw descriptor50/hash exact trước mọi claim/control/Bulk. Sau seal hoặc có detach/identity/epoch khác vẫn fail; generic PermissionState/invalidate và proof bootstrap private không đổi. Không split launch/proof bền hoặc rearm ledger.
+- **BEFORE/AFTER:** Test lịch giả BEFORE FAIL đúng ATTACH_DUPLICATE_OR_ABA_UNVERIFIED; corrected 14 handoff/30 permission/8 B2 focused PASS. Full JVM fresh driver 481/app 88/usbxfer 32 PASS, 0 SKIP. Native core 4096/8192 và FX2 plan 132 PASS; PS7/PS5.1 heartbeat 82/init 9/encoding 4 và focused export 38 PASS; Python 77/generator 8 PASS. Giữ FAIL fixture descriptor đầu trước khi sửa fixture đúng raw.
+- **Build/emulator:** Debug/release/AndroidTest/app lint và bốn ABI/JNI/release isolation PASS có phạm vi; release fresh 155 tasks. Emulator driver 19 PASS; app 48 có 44 PASS/4 FAIL lifecycle trên model ngoài allowlist, trong đó handoff mới 3/init 5 PASS. Standalone driver lint debug/release vẫn FAIL cũ ngoài diff. Không nới heartbeat/deadline/host guard hoặc nói mọi gate xanh.
+- **Freeze:** Hai card mới dưới `D:\TSDuck\reports\phase31-handoff-offline-20261112\frozen-cards`, pin commit nền e8cb2ceab7c6fd7a741fd8230381b4f59935540c cộng diff/manifest phiên này, APK và helper mới. Footer in đúng số tệp/path/hash. BOM phục hồi cho PowerShell non-ASCII; hai Python files chỉ đổi LF. Bootstrap original/reload JNI 132/delay 100 ms + wait 1500 ms/MANUAL0/drive 54/8×4096/golden giữ nguyên.
+
+**Điểm dừng:** Duyệt card khởi tạo store không tuner trước; chỉ sau init verified mới xét card B2 riêng cùng disposition lint đề xuất “pre-existing, không chặn B2 debug” và giới hạn lifecycle emulator đã ghi. Card không là grant. Không cài Samsung, init store thật, USB transfer hoặc thao tác tuner trong phiên này. Handoff bất ngờ vẫn phải dừng trước reload, không A0 reload/retry; chỉ tốn lượt rút/cắm và physical epoch/bootstrap consume tương ứng. Emulator riêng đã dừng, không listener ở cổng 5580/5581; không stage/commit/push, branch/HEAD nền giữ nguyên. Xem [RESEARCH.md](RESEARCH.md), [ADR-048](DECISIONS.md), [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md).
+
 ## 2026-11-12, phiên 07:38 +07 — B2 đã kiểm phần mềm; card chờ duyệt, chưa có quyền chạy thật
 
 **Đã tìm được một ứng viên giải thích lỗi: SET_CONFIGURATION gọi firmware routine đổi AUTOINLEN từ 512 thành 1024 byte.** Cổng A `SUPPORTED_OFFLINE`, không phải root cause đã xác nhận. Giữ `Phase 3.1`, `ROOT_CAUSE_UNRESOLVED`, candidate `ROOT_CAUSE_CANDIDATE_H_AUTOINLEN` và `TS_SMOKE_PASS=false`; chỉ xét đổi sau B2 dương tính và một lần lặp độc lập được duyệt.

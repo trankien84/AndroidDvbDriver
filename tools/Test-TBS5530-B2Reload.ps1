@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-or-later
+﻿# SPDX-License-Identifier: GPL-2.0-or-later
 # Offline negative fixtures only. Every invocation must stop before ADB lookup/execution.
 [CmdletBinding()]
 param()

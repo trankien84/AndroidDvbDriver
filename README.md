@@ -100,6 +100,14 @@ as if they are coming from a real device. This mode is extremely useful during d
 Note that this driver does not provide channel/programme scanning/playback capabilities or any transport stream processing.
 If you would like to write an app for DVB playback, you have to implement all of these yourself.
 
+## B2 debug: handoff cùng phiên và helper PowerShell
+
+B2 chỉ là phép thử H-AUTOINLEN có giới hạn, chưa xác nhận nhận TS trên Android. Sau bootstrap sạch bằng backend original, app giữ proof private trong cùng session/physical epoch; launch operational riêng không được mượn proof. Attach operational đến muộn có thể được giữ tạm trước owner, nhưng phải cùng deviceId/path/VID:PID, không detach xen giữa, OS permission còn đúng và raw descriptor đủ 50 byte/hash đã pin trước claim/control/Bulk. Sau bước đóng cửa nhận sự kiện trước owner, mọi attach tiếp vẫn dừng theo ABA guard; generic permission và driver khác không đổi. Xem [ADR-048](docs/project/DECISIONS.md).
+
+App ghi `handoff-events.jsonl` bằng cùng clock elapsed ns để phân biệt broadcast, intent, UI publication và permission. [Helper runtime](tools/Invoke-TBS5530-AutonomousSession.ps1) chỉ thu và đối chiếu hash journal sau drain, kể cả dừng trước reload. Không tăng heartbeat/deadline hoặc tự retry. Handoff Samsung thực vẫn chưa được kiểm; fake/emulator không chứng minh OEM sẽ giao event đúng thời hạn.
+
+Các helper Phase 3.1 có tiếng Việt dùng UTF-8 BOM để Windows PowerShell 5.1 không đọc nhầm dấu nháy; PS7 vẫn được hỗ trợ. [Initializer helper](tools/Initialize-TBS5530-ReloadStore.ps1) dùng SHA API tương thích cả hai shell. Kiểm offline encoding bằng [Test-TBS5530-ScriptEncoding.ps1](tools/Test-TBS5530-ScriptEncoding.ps1). Không thay cách cấp quyền: card init store không tuner và card B2 là hai phê duyệt riêng; không chạy helper live chỉ vì tests PASS. Init store thật/B2 vẫn NOT RUN; hash APK/helper/source mới phải được freeze và duyệt lại.
+
 # Auto start
 
 The driver will emmit `info.martinmarinov.dvbdriver.DVB_DEVICE_ATTACHED` action when a compatible USB tuner has 

@@ -1,5 +1,37 @@
 # TBS5530 test matrix
 
+## 2026-11-12, phiên bắt đầu 11:20 +07 — Sửa handoff cùng phiên, không phần cứng
+
+| Gate mới | Kết quả thực | Bằng chứng / giới hạn |
+| --- | --- | --- |
+| Baseline Git | PASS | Branch chore/modernize-android-build, HEAD e8cb2ceab7c6fd7a741fd8230381b4f59935540c, sạch trước sửa; không stage/commit/push |
+| H1 raw timeline | PASS integrity 56 inputs / nguyên nhân UNKNOWN | Đủ 132 B1 + đúng guard/stage/drain; không per-event trace để chứng minh hai attach hoặc race |
+| H2 BEFORE, nhánh Activity trích nguyên | FAIL đúng 1/1, exit 1 | ATTACH_DUPLICATE_OR_ABA_UNVERIFIED; lịch giả reselect→request→một attach; không raw Samsung replay |
+| H2 AFTER đầu | 42 PASS/2 FAIL trên 44 | Hai positive dùng fake descriptor khác hash; giữ logs, không nới hash guard |
+| H2 AFTER descriptor B1 đúng | PASS 14 handoff + 30 permission | Có pre/post UI publication, pending callback, detach/ABA, id/path/VID:PID/hash/length, owner admission, epoch/session/generation |
+| B2 focused | PASS 8/8 | Tbs5530Fx2ReloadTest; golden MANUAL0, original proof, 132 reload và delay không đổi |
+| Full driver JVM fresh | PASS 481/481 / 0 SKIP | TBS 464 + ngoài TBS 17, đủ private history/TS fixtures đã hash; không chỉ task UP-TO-DATE |
+| Full app/usbxfer JVM fresh | PASS 88/88 và 32/32 / 0 SKIP | App 74 cũ + 14 handoff; runner 76/76 tasks executed |
+| Native C core | PASS 8×4096 và 8×8192 fake | Real core/canary/fault injection; GCC -std=c11 -Wall -Wextra -Werror; B2 live vẫn chỉ 8×4096 |
+| Native FX2 plan | PASS 132/132 ordinals + invalid inputs | Synthetic image, 8196 payload byte, không USB syscall |
+| PS7 và PS5.1 helper | PASS mỗi shell | Heartbeat 82, B2Reload 19, Frontend 23, Launch 57, Initializer 9, Encoding 4 cùng AutonomousSession regression; không cộng checks trùng nhau |
+| Helper export handoff sau drain | PASS 38 focused checks mỗi shell | Optional journal/hash Android-host, kể cả stop trước reload; heartbeat/deadline/STOP không đổi |
+| Python AUTOINLEN/Gate B | PASS 77/77, 0 SKIP | Trước/sau LF đều có private firmware/CSV; CLI report bytes giữ nguyên |
+| Generator card | PASS 8/8 | Footer số tệp + từng path/byte/hash; reject object footer/schema sai/overwrite; cards lịch sử không sửa |
+| Debug/release/AndroidTest build | PASS | Combined 377 tasks: 48 executed/329 UP-TO-DATE; release rerun riêng 155/155 executed |
+| App lint debug/release | PASS, 0 errors | 30/10 warnings tương ứng, không suppress; không thay driver standalone lint |
+| Driver lint debug/release | FAIL cũ ngoài diff | UsbPermissionObtainer.java:105 / UnspecifiedRegisterReceiverFlag; đề xuất disposition cần duyệt, không sửa |
+| Emulator API37/x86_64 app full đã chọn | 44 PASS/4 FAIL trên 48 | Bốn FAIL đều AutonomousLaunchLifecycle trên emulator model ngoài allowlist; không xóa FAIL hoặc sửa host/deadline |
+| Emulator handoff mới | PASS 3/3 trong 48 | Core thật/main-thread publication/worker seal với identity/descriptor giả; không USB manager/store thật |
+| Emulator initializer | PASS 5/5 trong 48 | Tbs5530ReloadInitApprovalTest, cache fixtures riêng, không production no_backup |
+| Emulator driver | PASS 19/19 | Gồm OriginalBootstrapReload 3, OperationalHandoff, AndroidBootstrapPort, BootstrapIsolation |
+| ELF/JNI/release isolation | PASS 12 ELF / bốn ABI | Debug 8/release 4, ba reload JNI symbols mỗi debug ABI; ELF64 LOAD 0x4000; release không handoff/reload/init/diagnostic lib |
+| Editor Problems | LIMITATION | Debug/test source ngoài editor classpath; Gradle compile/JVM/instrumentation là căn cứ |
+| Cleanup emulator | PASS | Dừng đúng emulator-5580, attached process exit 0, cổng 5580/5581 không listener |
+| Samsung install, actual store/history/init, handoff/B2/TS | NOT RUN | Không quyền hardware hoặc real-store write; template không phải installed witness, TS_SMOKE_PASS=false |
+
+Logs/XML/APK/hash manifests dưới `D:\TSDuck\logs\phase31-handoff-offline-20261112`; timeline/reports/two cards dưới reports cùng bundle. Agent native task thất bại model 400 trước execution, parent chạy native trực tiếp thành công; không coi lỗi agent là code/test FAIL hoặc relaunch cùng mục tiêu. Lượt AFTER đầu và bốn lifecycle failures giữ nguyên; không tuyên bố mọi gate đều PASS. [ADR-048](DECISIONS.md) và [RESEARCH.md](RESEARCH.md) ghi ranh giới hướng A, các UNKNOWN và reopen trigger.
+
 ## 2026-11-12, phiên 07:38 +07 — Cổng A H-AUTOINLEN và baseline phần mềm; B2 live NOT RUN
 
 | Kiểm mới | Kết quả | Bằng chứng / giới hạn |

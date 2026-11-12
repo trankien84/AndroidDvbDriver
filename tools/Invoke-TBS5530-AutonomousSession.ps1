@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-or-later
+﻿# SPDX-License-Identifier: GPL-2.0-or-later
 # One bounded debug session; no package changes, reconnect or USB ownership changes.
 [CmdletBinding()]
 param(
@@ -131,9 +131,11 @@ function Get-TBS5530AdbDeadline([string]$Operation, [string[]]$DeviceArguments, 
             throw 'FAIL-STOP: native export không thuộc exact allowlist của session đã drain.'
         }
         $remote = $DeviceArguments[4]
+    } elseif ($Operation -cin @('HANDOFF_EVENTS_READ','HANDOFF_EVENTS_HASH')) {
+        $remote = 'files/autonomous-v1-' + $Session + '/handoff-events.jsonl'
     }
-    $expected = if ($Operation -cin @('CONTROL_TRACE_READ','NATIVE_A0_READ')) { @('exec-out', 'run-as', 'info.martinmarinov.dvbdriver', 'cat', $remote) }
-        elseif ($Operation -cin @('CONTROL_TRACE_HASH','NATIVE_A0_HASH')) { @('shell', 'run-as', 'info.martinmarinov.dvbdriver', 'sha256sum', $remote) }
+    $expected = if ($Operation -cin @('CONTROL_TRACE_READ','NATIVE_A0_READ','HANDOFF_EVENTS_READ')) { @('exec-out', 'run-as', 'info.martinmarinov.dvbdriver', 'cat', $remote) }
+        elseif ($Operation -cin @('CONTROL_TRACE_HASH','NATIVE_A0_HASH','HANDOFF_EVENTS_HASH')) { @('shell', 'run-as', 'info.martinmarinov.dvbdriver', 'sha256sum', $remote) }
         else { throw 'FAIL-STOP: deadline export không áp dụng cho thao tác runtime.' }
     if ($DeviceArguments.Count -ne $expected.Count) { throw 'FAIL-STOP: export không đúng read-only allowlist.' }
     for ($i = 0; $i -lt $expected.Count; $i++) {
@@ -180,6 +182,25 @@ function Invoke-PinnedAdb([string[]]$DeviceArguments, [string]$InputText = '', [
 function Get-TBS5530Sha256Token([string]$Text) {
     if ($Text -cmatch '^([a-f0-9]{64})(?:\s|$)') { return $Matches[1] }
     throw 'Invalid Android SHA-256 response.'
+}
+function Export-TBS5530HandoffEvents([string]$Session, [object]$Report, [string]$Destination) {
+    if (-not (Test-TBS5530DrainedTerminal $Report) -or $Session -cnotmatch '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$') {
+        throw 'FAIL-STOP: handoff journal export requires a verified drained session.'
+    }
+    $remote = 'files/autonomous-v1-' + $Session + '/handoff-events.jsonl'
+    $command = 'if [ -f ' + $remote + ' ]; then printf PRESENT; fi'
+    $present = Invoke-PinnedAdb @('shell', 'run-as', 'info.martinmarinov.dvbdriver', 'sh', '-c', "'$command'") -Operation HANDOFF_EVENTS_EXISTS
+    if ($present -ceq '') { return }
+    if ($present -cne 'PRESENT') { throw 'FAIL-STOP: unexpected handoff journal presence response.' }
+    $local = Join-Path $Destination ('b2-' + $Session + '-handoff-events.jsonl')
+    if (Test-Path -LiteralPath $local) { throw 'Không ghi đè evidence đã có.' }
+    $text = Invoke-PinnedAdb @('exec-out', 'run-as', 'info.martinmarinov.dvbdriver', 'cat', $remote) '' $true -Operation HANDOFF_EVENTS_READ -DrainedReport $Report
+    [IO.File]::WriteAllText($local, $text, [Text.UTF8Encoding]::new($false))
+    $sourceHash = Get-TBS5530Sha256Token (Invoke-PinnedAdb @('shell', 'run-as', 'info.martinmarinov.dvbdriver', 'sha256sum', $remote) -Operation HANDOFF_EVENTS_HASH -DrainedReport $Report)
+    if ($sourceHash -cne (Get-FileHash -LiteralPath $local -Algorithm SHA256).Hash.ToLowerInvariant()) {
+        throw 'FAIL-STOP: handoff journal Android/host hash mismatch; evidence retained.'
+    }
+    return $local
 }
 function Get-TBS5530AutonomousExitCode([object]$Report) {
     if ($null -eq $Report) { return 1 }
@@ -569,6 +590,10 @@ if ($ExplicitSetInterfaceAlt0) {
     $evidence = Join-Path $OutputDirectory ('phase31-interface-' + $challenge.session + '.json')
     if (Test-Path -LiteralPath $evidence) { throw 'Không ghi đè evidence đã có.' }
     $terminalReport | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $evidence -Encoding utf8
+}
+if ($b2Reload -and (Test-TBS5530DrainedTerminal $terminalReport)) {
+    $script:adbStage = 'EVIDENCE_EXPORT'
+    Export-TBS5530HandoffEvents $challenge.session $terminalReport $OutputDirectory | Out-Null
 }
 if ($ControlMirror -and (Test-TBS5530DrainedTerminal $terminalReport)) {
     $script:adbStage = 'EVIDENCE_EXPORT'

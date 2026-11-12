@@ -31,14 +31,16 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
     private Tbs5530AndroidRuntime runtime;
     private Tbs5530AndroidUsbFacade facade;
     private Tbs5530AndroidUsbFacade.Manager manager;
-    private Tbs5530OperationalHandoff handoff;
-    private Tbs5530AndroidBootstrap bootstrap;
+    private volatile Tbs5530OperationalHandoff handoff;
+    private volatile Tbs5530AndroidBootstrap bootstrap;
+    private volatile Tbs5530SameSessionHandoff sameSessionHandoff;
+    private String handoffEvents = "";
     private Tbs5530SonyTsOutputReadback sonyReadback;
     private Tbs5530UsbBinding.Registration events, permissionRequest;
-    private Tbs5530UsbBinding.Device selected;
+    private volatile Tbs5530UsbBinding.Device selected;
     private volatile Tbs5530OperationalApproval approval;
     private volatile boolean foreground, stopped, busy, waitingGrant = true, reserved;
-    private boolean uploaded;
+    private volatile boolean uploaded;
     private volatile boolean cleanupFault;
     private TextView status;
     private volatile String result = "WAIT_HOST_SESSION_GRANT";
@@ -103,6 +105,7 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
         reservation = new Object(); pendingLaunch = null; attachPromptPaused = false;
         runtime = null; facade = null; manager = null; handoff = null; bootstrap = null; sonyReadback = null;
         events = null; permissionRequest = null; selected = null; approval = null;
+        sameSessionHandoff = null; handoffEvents = "";
         uploaded = false; stopped = false; busy = false; waitingGrant = true; reserved = false; cleanupFault = false;
         bytes = 0; packets = 0; errno = -1; result = "WAIT_HOST_SESSION_GRANT";
         session = null;
@@ -156,6 +159,8 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
                         || actual.getProductId() != fresh.productId || actual.getDeviceId() != fresh.id
                         || !actual.getDeviceName().equals(fresh.path)) {
                     permission.invalidate(); publishPermission(); fail("ATTACH_INTENT_IDENTITY_UNVERIFIED");
+                } else if (sameSessionHandoff != null) {
+                    attachedDevice(fresh, "ON_NEW_INTENT");
                 } else if (!attachPermissionAllowed() && bootstrap == null && permission.attempt() != null) {
                     permission.invalidate(); publishPermission(); fail("ATTACH_INTENT_GENERATION_UNVERIFIED");
                 }
@@ -200,29 +205,60 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
         facade = new Tbs5530AndroidUsbFacade(getApplicationContext(), manager);
         events = facade.listen(new Tbs5530UsbBinding.Events() {
             public void attached(Tbs5530UsbBinding.Device device) {
-                if (workflow != workflowGeneration || stopped || !target(device) || selected == null) return;
-                if (handoff != null && handoff.reloadWindow()) {
-                    handoff.reloadReenumerated(); return;
-                }
-                Tbs5530OneShotBootstrap.Snapshot current = bootstrap == null ? null : bootstrap.snapshot();
-                boolean knownTransition = current != null && !bootstrap.cleanupPending()
-                        && Tbs5530AutonomousPolicy.bootstrapTransitionKnown(current.state,
-                        current.completed, current.failure, current.cleanupFailure, current.boundaries);
-                if (current == null) {
-                    Tbs5530PermissionState.Attach event = permission.attach(device);
-                    fail(event == Tbs5530PermissionState.Attach.AMBIGUOUS_DUPLICATE
-                            ? "ATTACH_DUPLICATE_OR_ABA_UNVERIFIED" : "ATTACH_IDENTITY_MISMATCH");
-                } else if (!current.pending && !knownTransition) fail("UNEXPECTED_ATTACH_EVENT");
+                if (workflow == workflowGeneration && !stopped && target(device)) attachedDevice(device, "ATTACH_BROADCAST");
             }
             public void detached(Tbs5530UsbBinding.Device device) {
-                if (workflow == workflowGeneration && !stopped && selected != null && selected.equals(device) && bootstrap == null) {
-                    permission.invalidate();
-                    if (handoff != null && handoff.reloadWindow()) { handoff.reloadReenumerated(); return; }
-                    fail("USB_DETACHED");
-                }
+                if (workflow != workflowGeneration || stopped || !target(device)) return;
+                try {
+                    recordHandoff("DETACH_BROADCAST", device);
+                    if (handoff != null && handoff.reloadWindow()) {
+                        permission.invalidate(); handoff.reloadReenumerated(); return;
+                    }
+                    if (sameSessionHandoff != null) sameSessionHandoff.detached(device);
+                    if (selected != null && selected.equals(device) && bootstrap == null) {
+                        permission.invalidate(); fail("USB_DETACHED");
+                    }
+                } catch (IOException error) { permission.invalidate(); fail(error.getMessage()); }
             }
         });
         discover();
+    }
+    private void attachedDevice(Tbs5530UsbBinding.Device device, String source) {
+        try {
+            recordHandoff(source, device);
+            if (handoff != null && handoff.reloadWindow()) { handoff.reloadReenumerated(); return; }
+            if (sameSessionHandoff != null) sameSessionHandoff.observeAttach(device);
+            if (selected == null) return;
+            Tbs5530AndroidBootstrap active = bootstrap;
+            Tbs5530OneShotBootstrap.Snapshot current = active == null ? null : active.snapshot();
+            boolean knownTransition = current != null && !active.cleanupPending()
+                    && Tbs5530AutonomousPolicy.bootstrapTransitionKnown(current.state,
+                    current.completed, current.failure, current.cleanupFailure, current.boundaries);
+            if (current == null) {
+                if (sameSessionHandoff != null) {
+                    sameSessionHandoff.attach(permission, device, session.id, session.handoffEpochKey());
+                    recordHandoff("DUPLICATE_PROVISIONAL_DESCRIPTOR_REQUIRED", device);
+                } else {
+                    Tbs5530PermissionState.Attach event = permission.attach(device);
+                    fail(event == Tbs5530PermissionState.Attach.AMBIGUOUS_DUPLICATE
+                            ? "ATTACH_DUPLICATE_OR_ABA_UNVERIFIED" : "ATTACH_IDENTITY_MISMATCH");
+                }
+            } else if (!current.pending && !knownTransition) fail("UNEXPECTED_ATTACH_EVENT");
+        } catch (IOException error) { permission.invalidate(); fail(error.getMessage()); }
+    }
+    private synchronized void recordHandoff(String event, Tbs5530UsbBinding.Device device) throws IOException {
+        if (session == null || !session.reloadEnabled()) return;
+        try {
+            org.json.JSONObject row = new org.json.JSONObject().put("event", event)
+                    .put("elapsed_ns", SystemClock.elapsedRealtimeNanos()).put("thread", Thread.currentThread().getName())
+                    .put("workflow", workflowGeneration).put("bootstrap_present", bootstrap != null)
+                    .put("selected", selected != null).put("busy", busy).put("permission_state", permission.state().name())
+                    .put("permission_generation", permission.generation())
+                    .put("device_identity_sha256", device == null ? org.json.JSONObject.NULL
+                            : Tbs5530AutonomousPlans.hash(device.path + ":" + device.id));
+            handoffEvents += row.toString() + "\n";
+            session.write("handoff-events.jsonl", handoffEvents);
+        } catch (org.json.JSONException error) { throw new IOException(error); }
     }
     private static boolean target(Tbs5530UsbBinding.Device d) { return Tbs5530PermissionState.target(d); }
     private Tbs5530UsbBinding.Device single() throws IOException {
@@ -248,6 +284,7 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
         if (uploaded) attachPermissionWindow.close();
         Tbs5530PermissionState.Attempt attempt = permission.attempt();
         publishPermission(); result = "USER_ACTION_REQUIRED";
+        recordHandoff("PERMISSION_REQUEST", device);
         permission.dispatched(attempt);
         final long workflow = workflowGeneration;
         permissionRequest = facade.requestPermission(device, attempt.token, (correlation, actual, allowed) -> ui.post(() -> {
@@ -255,6 +292,7 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
             Tbs5530PermissionState.Callback decision = permission.callback(correlation, attempt.generation, actual, allowed);
             if (decision == Tbs5530PermissionState.Callback.IGNORED) return;
             try {
+                recordHandoff("PERMISSION_CALLBACK_" + decision.name(), actual);
                 closePermissionRequest(); session.require(); refreshPermissionReceipt(); publishPermission();
                 if (decision == Tbs5530PermissionState.Callback.DENIED) { fail("PERMISSION_DENIED"); return; }
                 if (decision == Tbs5530PermissionState.Callback.INVALIDATED) { fail("PERMISSION_CALLBACK_MISMATCH"); return; }
@@ -271,7 +309,9 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
             result = "WAIT_DEVICE"; return;
         }
         if (selected != null && !selected.equals(device)) { permission.invalidate(); throw new IOException("Unexpected generation change"); }
+        if (sameSessionHandoff != null) sameSessionHandoff.select(device);
         selected = device;
+        recordHandoff("SELECTED", device);
         boolean osPermission = manager.hasPermission(device);
         if (permission.attempt() == null) {
             permission.begin(device, osPermission, SystemClock.elapsedRealtime()); publishPermission();
@@ -296,6 +336,10 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
                         session.initialNegotiatedUsbSpeed = raw.negotiatedUsbSpeed(); session.initialRawObserved = true;
                     }
                     observation = Tbs5530OperationalProfile.observe(descriptors); requirePhysical();
+                    if (sameSessionHandoff != null) {
+                        sameSessionHandoff.descriptorsBeforeOwner(device, descriptors, session.id, session.handoffEpochKey());
+                        recordHandoff("DESCRIPTOR_VERIFIED_OWNER_ADMISSION_SEALED", device);
+                    }
                 }
                 finally { raw.close(); }
                 session.policy.observe(Tbs5530AutonomousPlans.hash(device.path + ":" + device.id), permission.generation(),
@@ -320,6 +364,7 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
                     Tbs5530FirmwareValidation.ENTRY, Tbs5530FirmwareValidation.Format.RAW_LINEAR);
         }
         requirePhysical();
+        if (session.reloadEnabled()) sameSessionHandoff = new Tbs5530SameSessionHandoff(session.id, session.handoffEpochKey());
         bootstrap = new Tbs5530AndroidBootstrap(getApplicationContext(), runtime, device, plan, session.firmwareGuard(this::requirePhysical), () -> {
             requirePhysical();
             session.consumeFirmwareAttachment(Tbs5530AutonomousPlans.hash(device.path + ":" + device.id));
@@ -335,6 +380,14 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
         session.bootstrapSnapshot = snapshot;
         if (snapshot.pending || bootstrap.cleanupPending()) { ui.postDelayed(this::awaitBootstrap, 50); return; }
         attachPermissionAllowed();
+        try {
+            if (session.reloadEnabled() && Tbs5530AutonomousPolicy.bootstrapTransitionKnown(snapshot.state,
+                    snapshot.completed, snapshot.failure, snapshot.cleanupFailure, snapshot.boundaries)) {
+                if (sameSessionHandoff == null) throw new IOException("HANDOFF_SCOPE_UNAVAILABLE");
+                recordHandoff("BOOTSTRAP_DRAINED_BEFORE_UI_POST", selected);
+            }
+        } catch (IOException error) { fail(error); return; }
+        final Tbs5530AndroidBootstrap completedBootstrap = bootstrap;
         runtime.execute(() -> {
             try {
                 if (session.preNativeRefusal && ("ATTACHMENT_ALREADY_CONSUMED".equals(session.stopReason)
@@ -348,14 +401,16 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
                 if (!Tbs5530AutonomousPolicy.bootstrapTransitionKnown(snapshot.state, snapshot.completed,
                         snapshot.failure, snapshot.cleanupFailure, snapshot.boundaries))
                     throw new IOException("Firmware uncertain; no retry");
-                session.bootstrapProof = session.reloadEnabled() ? bootstrap.cleanProof() : null;
-                session.policy.uploadComplete(snapshot.completed, bootstrap.cleanupPending());
-                bootstrap.close();
+                session.bootstrapProof = session.reloadEnabled() ? completedBootstrap.cleanProof() : null;
+                session.policy.uploadComplete(snapshot.completed, completedBootstrap.cleanupPending());
+                completedBootstrap.close();
+                recordHandoff("BOOTSTRAP_CLOSED_UI_POST_QUEUED", selected);
                 ui.post(() -> {
                     if (stopped) return;
                     try {
                         closePermissionRequest(); permission.firmwareTransition(); publishPermission();
                         bootstrap = null; selected = null; busy = false;
+                        recordHandoff("UI_POST_WAIT_REENUMERATION", null);
                         result = "WAIT_REENUMERATION";
                     } catch (IOException | RuntimeException error) { fail(error); }
                 });
@@ -367,6 +422,11 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
         if (session.reloadEnabled() && (!uploaded || session.bootstrapProof == null || session.bootstrapSnapshot == null
                 || session.bootstrapSnapshot.pending || bootstrap != null))
             throw new IOException("B2 blocks operational-only launch without same-session clean original bootstrap/API-boundary/drain proof");
+        if (session.reloadEnabled()) {
+            if (sameSessionHandoff == null) throw new IOException("HANDOFF_SCOPE_UNAVAILABLE");
+            sameSessionHandoff.requireOwnerAdmission(session.id, session.handoffEpochKey());
+            recordHandoff("OPERATIONAL_OWNER_START", device);
+        }
         handoff = new Tbs5530OperationalHandoff(getApplicationContext(), runtime, this::requirePhysical, session.readApi, session.id, session.reloadEnabled());
         if (session.controlMirror != null) handoff.controlMirror(session.controlMirror);
         if (session.reloadEnabled()) handoff.reloadNativeAudit(session.directory);
@@ -499,6 +559,8 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
         if (approval == null) throw new IOException("No current per-program approval"); return approval;
     }
     private void fail(String reason) {
+        if (!stopped) try { recordHandoff("GUARD_FAILURE_" + reason, selected); }
+        catch (IOException error) { cleanupFault = true; }
         if (session != null && "NONE".equals(session.stopReason)) {
             session.failureStage = session.policy.state().name(); session.stopReason = reason;
         }

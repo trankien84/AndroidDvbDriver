@@ -1,5 +1,46 @@
 # Architecture decision record (ADR)
 
+## ADR-048 — Giữ handoff trong cùng phiên, chỉ trì hoãn phán quyết attach trước owner và kiểm descriptor chính xác
+
+**Date:** 2026-11-12, phiên bắt đầu 11:20 +07
+
+**Status:** Đã triển khai và kiểm offline/fake/emulator; chưa kiểm handoff Samsung hoặc duyệt init/B2 chạy thật. Giữ Phase 3.1, `ROOT_CAUSE_CANDIDATE_H_AUTOINLEN`, `ROOT_CAUSE_UNRESOLVED`, `TS_SMOKE_PASS=false`.
+
+### Context / evidence
+
+B1 đủ bootstrap 132/132 rồi dừng `ATTACH_DUPLICATE_OR_ABA_UNVERIFIED` tại `NEED_ANDROID_USB_PERMISSION`; permission cuối INVALIDATED, drain sạch và chưa frontend. Raw không ghi từng broadcast, `onNewIntent`, `ui.post`, lúc chọn device hoặc callback grant. Vì vậy chưa xác nhận có hai attach hoặc data race thật. Theo source, chỉ một broadcast đến sau polling đã chọn operational và tạo attempt cũng đủ gây lỗi; đây là lịch giả phù hợp terminal, không phải timeline runtime đã khôi phục đầy đủ. Các lỗi UI timeout ngày 07/11 và 10/11 là các sự kiện riêng, không đổi thành lỗi duplicate.
+
+### Decision — Hướng A, không tạo proof bền cho split launch
+
+Chỉ B2 được tạo `Tbs5530SameSessionHandoff` trong bộ nhớ của đúng session và physical epoch đã duyệt, trước bootstrap. Bộ quan sát ghi attach/detach liên tục qua cửa sổ runtime close → UI reset; detach của FX2 cũ được chấp nhận chỉ trước lần đầu quan sát/chọn operational. Sau mốc đó, bất kỳ detach target nào đều khóa lỗi, kể cả path/id được dùng lại. Intent và broadcast B2 đi chung bộ kiểm; generic `Tbs5530PermissionState.attach()` và `invalidate()` giữ nguyên cho mọi đường ngoài phạm vi này.
+
+Attach cùng deviceId/path/VID:PID, cùng session/epoch, cùng permission attempt/generation còn hợp lệ và chưa vào owner chỉ được giữ **tạm thời**, không coi là proof descriptor hoặc quyền I/O. Sau OS permission thật, dùng raw descriptor đã có qua kết nối quan sát không claim, không control/Bulk; phải đúng 50 byte và SHA `22e2f1df9f66c58dbb6c554e400b6b8abcb78ee4f277e03679bc0fac7a25add5` trước khi mở operational owner. Kiểm này đồng thời đóng cửa nhận attach trùng; mọi attach sau đó vẫn `ATTACH_DUPLICATE_OR_ABA_UNVERIFIED`, bảo thủ hơn điều kiện chỉ cấm sau owner đã mở. Descriptor sai, detach, identity/session/epoch/generation sai đều khóa lỗi, không phục hồi khi dữ liệu cũ xuất hiện lại.
+
+Bootstrap proof private sạch/cùng phiên/132/132/drain vẫn bắt buộc trước operational/reload; không nhận host flag, JSON receipt hoặc launch riêng. Giữ nguyên original `UsbDeviceConnection.controlTransfer` cho bootstrap, JNI `USBDEVFS_CONTROL` cho reload 132 ordinals, delay 100 ms + wait 1500 ms, MANUAL0/drive 54/8×4096 và golden `75875b84fc3f959b35d436560ae19ccf7e52b890173f1f5e24984367f64fe228`. Không đổi heartbeat 2 giây, TTL 300 giây hoặc budget reload.
+
+Các field chia sẻ `bootstrap`, `selected`, `handoff`, `uploaded` và scope mới có publication rõ bằng `volatile`; runtime giữ local `completedBootstrap` trước close, UI vẫn là nơi reset permission/selection. Đây là phòng race từ source, không phải kết luận race đã xảy ra. Nhật ký B2 `handoff-events.jsonl` ghi cùng clock elapsed ns, thread, source event, generation/state, close/post/selected/request/callback/first fail; không ghi path/token nguyên văn. Helper chỉ thu journal sau drain, kể cả dừng trước reload.
+
+### PowerShell encoding
+
+Chọn UTF-8 BOM, không bắt buộc PS7 để chạy helper. Bốn script Phase 3.1 có non-ASCII được sửa đều có BOM; initializer dùng `SHA256.Create().ComputeHash()` và `BitConverter` thay API chỉ có trên .NET mới. Guard/init-plan/hash bytes không đổi. PS7 và PS5.1 đều chạy lại helper heartbeat 82/82, initializer 9/9 và encoding 4/4; giữ lỗi parser/HashData BEFORE làm evidence. Hai Python files AUTOINLEN chỉ đổi CRLF→LF, 77/77 regression PASS.
+
+### Alternatives / trade-offs
+
+- Hướng B với proof bền O_EXCL/O_NOFOLLOW/fsync và consume một lần: không chọn vì thêm trust boundary, state bền và split-session workflow trong khi lỗi có thể xử lý trước owner. `run-as` có thể sửa app-private proof; host hash fence chỉ phát hiện thay bytes sau khi host đã pin, không xác thực được proof do app bị kiểm soát tạo từ đầu. Không triển khai hoặc cấp quyền dùng proof bền.
+- Bỏ generic duplicate guard hoặc tự xin attempt/epoch mới: không chọn vì có thể che ABA, stale grant và rearm attachment đã consume.
+- Chỉ tăng UI/heartbeat/deadline: không chọn; không phân biệt lỗi event với OEM timeout và làm đổi giới hạn B2.
+- Đổi bootstrap sang JNI để lấy syscall proof: không chọn; vẫn là biến thứ hai trái ADR-047.
+
+Sửa này không chứng minh Samsung sẽ giao event đúng thời hạn hoặc không bỏ sót detach ở tầng OS. Listener liên tục, descriptor exact và scope trong bộ nhớ thu hẹp rủi ro nhưng không biến identity equality thành proof vật lý tuyệt đối. Lượt thật còn có thể dừng trước reload; không có A0 reload, không retry, chỉ tốn một lần rút/cắm và physical epoch/bootstrap consume tương ứng.
+
+### Validation / reopen trigger
+
+BEFORE: lịch giả chọn operational → request pending → một attach cùng identity thất bại đúng `ATTACH_DUPLICATE_OR_ABA_UNVERIFIED`; nhánh được trích nguyên từ Activity trước sửa, không tự nhận đã replay raw trace Samsung. AFTER: 14/14 handoff JVM, 30/30 generic permission và 8/8 B2 focused PASS; full driver 481/app 88/usbxfer 32 PASS, không SKIP. Emulator mới 3/3 handoff và driver 19/19 PASS; app tổng 48 có 44 PASS/4 FAIL lifecycle trên model emulator ngoài allowlist, giữ nguyên failure và không nới host guard. Driver lint debug/release vẫn FAIL cũ ngoài diff; không suppress hoặc tự đổi disposition thành được duyệt.
+
+Chỉ mở lại lựa chọn A nếu có event journal thật chỉ ra listener gap, detach/ABA, descriptor không đủ chứng minh, attach hợp lệ đến sau seal hoặc Samsung vẫn timeout. Khi đó dừng và nghiên cứu offline, không tự chuyển sang B, không nới guard hay dùng split launch. Init store không tuner phải được duyệt và kiểm riêng trước khi xét card B2 đúng hashes. Hai card mới pin commit nền `e8cb2ceab7c6fd7a741fd8230381b4f59935540c` cộng diff/manifest của phiên này, không dùng APK hoặc source-set hash cũ.
+
+**Records:** [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md); report/timeline/card mới trong bundle `phase31-handoff-offline-20261112` dưới `D:\TSDuck`. Không cài Samsung, init store thật hoặc USB transfer trong phiên này.
+
 ## ADR-047 — Xem lại quy tắc một lượt nạp: lượt A0 thứ hai sau SET_CONFIGURATION là bước chức năng, không phải retry
 
 **Date:** 2026-11-12, phiên 07:38 +07

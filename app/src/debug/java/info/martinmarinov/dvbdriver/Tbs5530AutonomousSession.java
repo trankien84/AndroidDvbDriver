@@ -380,6 +380,11 @@ final class Tbs5530AutonomousSession {
         if (!reloadEnabled() || !recoveryConfirmed || recoveryEpoch.isEmpty()) throw new IOException("No approved B2 physical epoch");
         if (expires - SystemClock.elapsedRealtime() < 132L * 2000 + 100 + Tbs5530Fx2Reload.WAIT_MS + 5000)
             throw new IOException("Insufficient bounded session budget before reload consume");
+        return handoffEpochKey();
+    }
+    String handoffEpochKey() throws IOException {
+        require();
+        if (!reloadEnabled() || !recoveryConfirmed || recoveryEpoch.isEmpty()) throw new IOException("No approved B2 physical epoch");
         return Tbs5530AutonomousPlans.hash(hostProfile + ":" + recoveryEpoch);
     }
     Tbs5530OneShotBootstrap.Guard firmwareGuard(Boundary physical) {

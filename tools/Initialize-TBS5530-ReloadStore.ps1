@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-or-later
+﻿# SPDX-License-Identifier: GPL-2.0-or-later
 # Exact first initialization through the debug caller only; no USB open, install, retry or direct store write.
 [CmdletBinding()]
 param(
@@ -21,7 +21,11 @@ $store='8ac0c7dbfcc4240bbb0e36d83faf5c073bafd0345133def28d17ee568f6d32e3'
 $anchor='63de1971b15ea4b5d66b08697cee4a5a1c450260fb5e21a58d2b28afd43b31c4'
 $marker='6be60f6d30960aebaec234eb059d666f0d785fed4c3793bb952b365caf1ef6a2'
 $protocol='TBS5530-RELOAD-INITIALIZE/v1'
-function Get-InitSha([byte[]]$Bytes) { return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($Bytes)).ToLowerInvariant() }
+function Get-InitSha([byte[]]$Bytes) {
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($Bytes))).Replace('-', '').ToLowerInvariant() }
+    finally { $sha.Dispose() }
+}
 function Get-ReloadInitializationPlan {
     return $protocol+'|host=SM-X926B:36|history='+$history+'|historyBytes=996|historyRecords=12'+
         '|store='+$store+'|storeBytes=138|anchor='+$anchor+'|anchorBytes=94|marker='+$marker+

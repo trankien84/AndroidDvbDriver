@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-or-later
+﻿# SPDX-License-Identifier: GPL-2.0-or-later
 # Offline only: valid preflight returns before ADB lookup, all negative invocations refuse before execution.
 [CmdletBinding()]
 param([Parameter(Mandatory)][string]$TemplateDirectory,[Parameter(Mandatory)][string]$PlanPath)

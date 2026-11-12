@@ -1,5 +1,48 @@
 # Research log (append-only)
 
+## 2026-11-12, phiên bắt đầu 11:20 +07 — H1–H3: thu hẹp lỗi handoff cùng phiên trước B2, chỉ offline
+
+**Đã sửa đường attach đến muộn trước owner, chưa chứng minh nguyên nhân thực tế của Samsung.** Giữ Phase 3.1, `ROOT_CAUSE_CANDIDATE_H_AUTOINLEN`, `ROOT_CAUSE_UNRESOLVED`, `TS_SMOKE_PASS=false`. Baseline xác minh sạch: `chore/modernize-android-build` / `e8cb2ceab7c6fd7a741fd8230381b4f59935540c`. Không cài Samsung, khởi tạo reload store thật, tuner/USB transfer, VM/SSH/WSL hoặc sửa references. Bundle mới: `phase31-handoff-offline-20261112` dưới `D:\TSDuck\reports` và logs; hai bundle cũ giữ nguyên.
+
+### H1 — Timeline quan sát được và giới hạn
+
+Report `h1-timeline.md`/JSON có 56 input hashes tính lại, không mismatch; Activity B1 SHA `962cdfcdf51084f6b73ed5f0a96aff0f09f32ae997ce4714d5af54a0f462ef54` khớp blob `5c1c3a0a02df5aeb63258b01b80e9ccc0116515e`. Dùng source lịch sử này giải nghĩa B1, không dùng nhánh reload mới để suy ngược. PermissionState và facade lịch sử khớp bytes current; nguồn là file hiện có, không trace mới.
+
+| Lượt Samsung | Dữ kiện quan sát được | Không đủ dữ liệu |
+| --- | --- | --- |
+| 07/11 recovered | 132/132 sạch, duration 2891 ms; terminal `ATTACH_PERMISSION_UI_TIMEOUT` tại WAIT_REENUMERATION; host có disconnect→connect gap 1950 ms | Không có anchor nối clocks hoặc callback trace; Logcat private 0 byte; không gán chắc host pair cho terminal |
+| 10/11 lifecycle | Full 132/duration 3230 ms; cùng lỗi UI timeout; host gap 1983 ms | Không biết thứ tự broadcast/intent/UI reset/request/grant trong app |
+| 10/11 Sony | Full 132/duration 2834 ms, UI timeout trước operational; bootstrap elapsed ns có đủ boundaries | Host snapshot không chứa timestamp attach/detach; callbacks UNKNOWN |
+| 11/11 B1 | Sequence 1 start `101749016846328 ns`, sequence 132 end `101752361429174 ns`; 132 full-length, API window 3344,582846 ms; report duration 3545 ms là phạm vi khác | Re-enumeration host B1, thời điểm từng callback/UI post/selected/request/grant và attach count đều UNKNOWN |
+| 11/11 terminal B1 | `ATTACH_DUPLICATE_OR_ABA_UNVERIFIED`, stage NEED_ANDROID_USB_PERMISSION, permission INVALIDATED, drain confirmed, chưa frontend/native receive | Không có snapshot bootstrap PENDING riêng; tên lỗi không chứng minh đã nhận hai broadcasts |
+| 11/11 operational-only sau đó | Permission preflight từ elapsed `101796983` chờ tới `101845025 ms` OS verified; session mới có 191 controls/0 A0, tám URB -75/actual 0 | Không được gọi là same-session handoff thành công hoặc proof về callback grant của bootstrap |
+
+Kết luận giả thuyết 1.1: **chưa đủ dữ liệu** để xác nhận hai attach, broadcast cộng intent hoặc data race runtime/UI thực sự gây lỗi. Source chứng minh một broadcast đầu tiên đến muộn sau polling chọn operational và tạo permission attempt cũng đủ gây guard. Broadcast listener chạy trực tiếp trên main; callback permission mới được post vào UI. Lịch giả phải có UI reset hoàn tất → discover reselect → begin/request → attach guard; chỉ nói event đến khi `ui.post` còn chờ là chưa đủ. Không nối elapsed ns với wall-clock từ filemtime hoặc coi metadata filter trong dumpsys là một intent đã nhận.
+
+### H2 — BEFORE và AFTER có chứng cứ riêng
+
+Trước sửa acceptance, trích nguyên nhánh `permission.attach(device)`/reason từ Activity vào router chung, không thay hành vi, rồi chạy lịch giả `firmwareTransition → selected operational → permission PENDING/dispatched → một attach cùng Device`. `h2-before-wired.log/XML` ghi **1 test/1 FAIL**, exit 1, đúng `java.io.IOException: ATTACH_DUPLICATE_OR_ABA_UNVERIFIED`. Source/test BEFORE được giữ ngoài Git. Đây là replay logic với lịch bị source ràng buộc, không phải replay raw event Samsung vốn không tồn tại.
+
+AFTER đầu có 44 tests/2 FAIL vì fixture descriptor tổng hợp từ test cũ không cùng hash đã pin; giữ XML/log. Đối chiếu raw B1 50 byte, không serial string, sửa đúng iManufacturer/iProduct trong fixture từ 0/0 thành 1/2, không nới hash guard. Lượt corrected **14 handoff + 30 generic permission + 8 B2 focused PASS**, exit 0. Full JVM fresh sau đó driver 481/app 88/usbxfer 32 PASS, 0 SKIP; không dùng kết quả sau để xóa FAIL trước.
+
+Negative tests xác nhận: detach trước UI publication hoặc sau selection khóa `USB_DETACHED`; deviceId/path/VID:PID khác khóa `ATTACH_IDENTITY_MISMATCH`; descriptor hash/length khác khóa `HANDOFF_DESCRIPTOR_MISMATCH`; attach sau admission của owner khóa `ATTACH_DUPLICATE_OR_ABA_UNVERIFIED`; khác session/epoch khóa `HANDOFF_SESSION_OR_EPOCH_CHANGED`; invalid generation không được hồi phục. Các kết quả negative là tests PASS vì đúng refusal, không phải live failure. Emulator có 3/3 handoff fake trên main/worker PASS; driver 19/19 gồm original-bootstrap/reload và cleanup PASS, không có USB thật.
+
+### H3 — Ranh giới hướng A và readiness
+
+[ADR-048](DECISIONS.md) chọn giữ sự kiện cùng identity tạm thời trước owner, không thay generic ABA. Scope cùng session/epoch quan sát từ trước bootstrap, ghi các attach/detach qua runtime close và UI reset; sau lần đầu quan sát/chọn operational không cho detach xen giữa. Giữ đúng token/generation permission; OS grant vẫn bắt buộc. Sự kiện chỉ hợp lệ để tiếp tục khi raw tree đúng 50 byte/hash `22e2f1df9f66c58dbb6c554e400b6b8abcb78ee4f277e03679bc0fac7a25add5` được kiểm trước claim/control/Bulk; dùng kết nối quan sát descriptor, không gửi GET_DESCRIPTOR hoặc vendor request mới. Seal đóng ngoại lệ trước operational owner; các event đến muộn hơn vẫn bị chặn.
+
+Scope không phải bootstrap proof. Proof private 132/132/cùng phiên/cùng epoch/drain và budget reload vẫn kiểm như trước. Không proof bền, split launch, host flag hoặc rearm store. Publication các field chia sẻ được làm rõ; journal `handoff-events.jsonl` ghi source, clock elapsed ns, thread, selection/permission generation và mốc close/post/admission/failure. Helper export journal sau drain với hash đối chiếu, kể cả stop trước reload. Handoff Samsung vẫn NOT RUN; OS bỏ sót event hoặc UI timeout vẫn có thể chặn và tốn epoch, không tự retry.
+
+Bootstrap backend, reload JNI 132, delay 100 ms + wait 1500 ms, MANUAL0/drive 54/native 8×4096/golden không đổi; driver/usbxfer production và bốn references không sửa. H-AUTOINLEN là ứng viên độc lập với lỗi handoff; sửa acceptance chưa chứng minh nhận được TS.
+
+### Kiểm liên quan và điểm dừng
+
+Encoding BOM phục hồi cho bốn `.ps1` Phase 3.1 có non-ASCII; initializer dùng SHA API tương thích .NET Framework. PS7/PS5.1 đều có heartbeat 82/initializer 9/encoding 4 PASS; Python chỉ LF và 77/77 PASS. Generator card có 8/8 tests, footer dùng số tệp và từng path/hash thay object serialization. Giữ FAIL parser/HashData BEFORE và card cũ không đổi.
+
+Build debug/release/AndroidTest và app lint PASS có phạm vi; release fresh 155/155 tasks executed, full JVM 76/76. ELF/JNI đủ bốn ABI, 12 ELF kiểm tĩnh PASS, ELF64 LOAD=0x4000, release không có handoff/reload/init/diagnostic library. App emulator tổng 48 có 44 PASS/4 FAIL ở lifecycle dùng model ngoài allowlist; không sửa hoặc nới guard để ép PASS. Driver lint debug/release FAIL cũ tại UsbPermissionObtainer:105 vẫn nguyên. Chi tiết số/commands ở [TEST-MATRIX.md](TEST-MATRIX.md) và `b2-final-validation.md` trong bundle mới; không gọi toàn gate là PASS.
+
+Kết thúc bằng hai card mới: init store no-tuner riêng trước, sau init verified mới xét card B2. Chỉ pin source bằng commit nền cộng tracked diff và manifest chứa cả tệp mới của phiên này, không tái dùng source-set/APK cũ. Disposition lint được đề xuất, chưa được người dùng duyệt; chưa có quyền init hoặc B2 chạy thật.
+
 ## 2026-11-12, phiên 07:38 +07 — H-AUTOINLEN được ủng hộ offline, chưa xác nhận nguyên nhân trên Android
 
 **Cổng A: `SUPPORTED_OFFLINE`.** Firmware có đường SET_CONFIGURATION đổi độ dài AUTOIN từ 512 thành 1024 byte sau init; hai capture Windows nhận Bulk có một lượt A0 thứ hai sau configuration, còn VM cold và Android đã ghi một bootstrap rồi operational không A0. Đây là ứng viên nguyên nhân có nguồn và tương quan, không phải bản sửa phần cứng đã xác nhận. Giữ `Phase 3.1`, ghi `ROOT_CAUSE_CANDIDATE_H_AUTOINLEN`; trạng thái nguyên nhân vẫn chưa được giải quyết và `TS_SMOKE_PASS=false` tới khi có B2 dương tính cùng một lần lặp độc lập được duyệt.

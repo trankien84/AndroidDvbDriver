@@ -1,5 +1,18 @@
 # Kiểm kê môi trường
 
+## 2026-11-12, phiên bắt đầu 11:20 +07 — Sửa handoff và kiểm emulator riêng, không Samsung
+
+- **Checkout:** Xác minh sạch trước sửa, branch chore/modernize-android-build / e8cb2ceab7c6fd7a741fd8230381b4f59935540c. Không stage/commit/push/reset/clean/sync references hoặc đổi toolchain. Source/fixtures/logs hiện tại và kết quả chạy mới là chuẩn; không dùng hash APK cũ.
+- **Declared/installed:** Đọc lại AGP 9.5.0, Gradle 9.8.2 có checksum, compileSdk 37.2, Build-Tools 37.0.0, minSdk 21, Java 8, NDK 30.0.16248370 và CMake 4.1.2 từ build và source.properties. JAVA_HOME process đúng JDK 25; Wrapper chạy trên JDK đang có. Không khảo sát latest stable vendor, install/update SDK/dependencies hoặc chỉnh môi trường persistent.
+- **Shell/helper:** PS 7.6.9 và Windows PS 5.1.19041.7844, RemoteSigned, không Bypass/Unblock-File. UTF-8 BOM cho bốn scripts non-ASCII sửa trong Phase 3.1; initializer SHA API tương thích .NET Framework đã kiểm thực. Chỉ child PS5.1 bỏ PSModulePath kế thừa từ PS7 để dùng module mặc định; không đổi global policy/PATH.
+- **Native/Python:** GCC 16.2.0 hiện có compile `-Wall -Wextra -Werror` cho hai fixtures, không USB syscall; exe riêng đã xóa. Python 3.12.2 tại `C:\Python312\python.exe` được agent cấu hình trước commands, không pip; 77/77 có private firmware/CSV. Node 26.7.0 chạy generator 8/8. Raw firmware/history/TS/APK/trace riêng vẫn ngoài Git dưới `D:\TSDuck`.
+- **Emulator:** Android CLI help/list đọc lại; CLI không liệt kê AVD, native `-list-avds` có TBS5530_Runtime_API37. Đọc config/system image, kiểm cổng rồi launch riêng emulator-5580 bằng emulator 37.2.13 với read-only/no-snapshot/no-window/no-audio; không USB passthrough/wipe/AVD sửa. Chờ hữu hạn 240 giây xác nhận API 37/x86_64, boot log 115157 ms. ADB MCP list đúng serial ban đầu offline; SDK ADB được pin `-s emulator-5580` cho mọi install/instrumentation/emu kill, không shell/cài trên physical aliases.
+- **Test scope:** App 48 có 44 PASS/4 FAIL lifecycle do Activity trên emulator model ngoài allowlist không tạo session; không sửa guard hoặc gọi failure là SKIP. Driver 19, handoff mới 3 và initializer 5 PASS trong phạm vi fake đã chọn. Actual Samsung lifecycle/current history/store/handoff/B2 vẫn NOT RUN. Sau emu kill, process sở hữu exit 0 và cổng 5580/5581 không listener; không có tuner owner/URB mới cần drain.
+- **GitNexus:** Gateway xác minh đúng canonical path/branch nhưng index ban đầu sau HEAD 1 commit. CLI 1.6.12 help có index-only; một refresh index-only với 2 workers exit 0, báo success 127.7 giây nhưng context MCP sau đó vẫn trả staleness behind 1 dù có symbol. Không force/repair hoặc chứng nhận graph fresh/FTS hoàn chỉnh; graph chỉ gợi bề mặt regression, source/diff/tests là căn cứ. Không tạo instruction/skill/config hoặc context files cho index.
+- **Delegation:** H1/helper offline có reports và hashes; task native agent lỗi 400 model trước execution, parent tự chạy native thành công, không relaunch hoặc thay model. Không VM/SSH/WSL/USBPcap/TSDuck live, USB ownership hoặc Samsung commands trong phiên này.
+
+Bundle mới `phase31-handoff-offline-20261112` giữ commands/logs/XML/hashes và hai cards mới; xem [TEST-MATRIX.md](TEST-MATRIX.md), [RESEARCH.md](RESEARCH.md), [WORKLOG.md](WORKLOG.md). Không dùng evidence emulator để xác nhận tuner hoặc TS.
+
 ## 2026-11-12, phiên 07:38 +07 — Offline H-AUTOINLEN, chưa thao tác Samsung hoặc tuner
 
 - **Checkout:** Xác minh đúng `chore/modernize-android-build` / HEAD `5c1c3a0a02df5aeb63258b01b80e9ccc0116515e`, working tree sạch trước sửa. Bốn references chỉ đọc tại exact SHA trong [RESEARCH.md](RESEARCH.md), không sync/fetch hoặc sửa references. Không stage/commit/push/reset/rearm.
