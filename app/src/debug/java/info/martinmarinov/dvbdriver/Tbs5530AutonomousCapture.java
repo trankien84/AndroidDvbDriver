@@ -13,7 +13,11 @@ final class Tbs5530AutonomousCapture implements Tbs5530TsSmoke.ChunkObserver, Au
     private long bytes;
     private boolean closed, durable, writeFailed;
     Tbs5530AutonomousCapture(File directory, int maximumBytes) throws IOException {
-        if (maximumBytes != 65536) throw new IOException("Raw capture limits not allowlisted");
+        this(directory, maximumBytes, false);
+    }
+    Tbs5530AutonomousCapture(File directory, int maximumBytes, boolean nativeStream) throws IOException {
+        if (nativeStream ? maximumBytes < 65536 || maximumBytes > 16 * 1024 * 1024 : maximumBytes != 65536)
+            throw new IOException("Raw capture limits not allowlisted");
         File file = new File(directory, "received.ts");
         if (!file.createNewFile()) throw new IOException("Raw capture already exists; no overwrite");
         output = new FileOutputStream(file); limit = maximumBytes;

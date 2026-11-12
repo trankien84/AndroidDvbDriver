@@ -55,6 +55,43 @@ public class Tbs5530FrontendExperimentApprovalTest {
         assertThrows(IOException.class,() -> new Tbs5530AutonomousSession(c,"NATIVE_USBFS_URB_8X4096","SM-X926B",36,46,
                 true,false,null,false,true,"MANUAL_PLP0_K36"));
     }
+    @Test public void b3UsesSessionJournalWithoutReadingLegacyHistoryAndBindsQueue() throws Exception {
+        Context c = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        Tbs5530AutonomousSession s = new Tbs5530AutonomousSession(c, "NATIVE_USBFS_STREAM", "SM-X926B", 36, 46,
+                true, false, null, false, false, "B2_RELOAD_AFTER_SET_CONFIG", () -> { throw new IOException("Legacy history unavailable"); });
+        s.configureStream(32, 16384);
+        JSONObject grant = new JSONObject(Tbs5530AutonomousSession.read(new File(c.getFilesDir(), "autonomous-v1-challenge.json"), 16384));
+        assertTrue(grant.isNull("attachment_history_sha256"));
+        assertEquals(32, grant.getInt("b3_queue_depth"));
+        grant.put("profile", "EXPERIMENTAL_DIAGNOSTIC").put("bounded_user_authorization", true).put("rf_in_confirmed", true)
+                .put("expires_elapsed_ms", s.policy.created() + 300000).put("physical_recovery_epoch", "44444444-4444-4444-8444-444444444444")
+                .put("physical_recovery_confirmed", true).put("host_script_sha256", new String(new char[64]).replace('\0', 'a'));
+        try {
+            grant.put("b3_queue_depth", 16); s.write("grant.json", grant.toString()); assertThrows(IOException.class, s::acceptGrant);
+            grant.put("b3_queue_depth", 32); s.write("grant.json", grant.toString());
+            s.write("heartbeat.json", new JSONObject().put("session", s.id).put("elapsed_ms", android.os.SystemClock.elapsedRealtime()).put("stop", false).toString());
+            s.policy.foreground(true); s.acceptGrant(); s.require();
+            assertThrows(IOException.class, () -> s.configureStream(16, 16384));
+            assertEquals(0, s.controlMirror.count());
+            s.report("SYNTHETIC_NO_IO", 0, 0, -1);
+            JSONObject report = new JSONObject(Tbs5530AutonomousSession.read(new File(s.directory, "report.json"), 16384));
+            assertTrue(report.getString("history_guard_warning").contains("LEGACY_HISTORY_NOT_AUTHORITY"));
+            assertFalse(report.getBoolean("ts_smoke_pass"));
+            assertFalse(new File(s.directory, "b3-reload-journal.txt").exists());
+        } finally { s.policy.stop(); if (s.controlMirror != null) s.controlMirror.finish(); }
+    }
+    @Test public void b3RejectsUnchangedApiWithWrongPipelineHostOrReceiveBounds() throws Exception {
+        Context c = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        assertThrows(IOException.class, () -> new Tbs5530AutonomousSession(c, "NATIVE_USBFS_STREAM", "SM-X926B", 36, 46,
+                true, false, null, false, false, "MANUAL_PLP0_K36"));
+        assertThrows(IOException.class, () -> new Tbs5530AutonomousSession(c, "NATIVE_USBFS_STREAM", "GM1900", 30, 46,
+                true, false, null, false, false, "B2_RELOAD_AFTER_SET_CONFIG"));
+        Tbs5530AutonomousSession s = new Tbs5530AutonomousSession(c, "NATIVE_USBFS_STREAM", "SM-X926B", 36, 46,
+                true, false, null, false, false, "B2_RELOAD_AFTER_SET_CONFIG");
+        assertThrows(IOException.class, () -> s.configureStream(33, 16384));
+        assertThrows(IOException.class, () -> s.configureStream(16, 16385));
+        s.policy.stop();
+    }
     private static byte[] syntheticHistory() {
         return ("FIRMWARE_CONSUMED " + new String(new char[64]).replace('\0','c') + "\n")
                 .getBytes(java.nio.charset.StandardCharsets.UTF_8);

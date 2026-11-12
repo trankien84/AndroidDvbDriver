@@ -1,5 +1,82 @@
 # Architecture decision record (ADR)
 
+## ADR-055 — Nhận liên tục trong native, tách kiểm quyền và ghi chứng cứ khỏi vòng nóng
+
+**Date:** 2026-11-12, triển khai B3 sau kiểm analyzer.
+
+**Status:** Implemented và kiểm offline tới 21:56 +07; các gate chính PASS có phạm vi, giữ driver lint/lifecycle/fake heartbeat FAIL đã ghi. Samsung B3 NOT RUN, chờ card và OK B3.
+
+### Context / Evidence
+
+Analyzer stdlib mới có 42/42 tests PASS. Hai raw B2 giữ SHA gốc, đều có 17 đoạn và 16 chỗ đứt gần offset 2048 trong URB; CC trong đoạn 0 lỗi trên 104/109 phép so sánh, không phải 100/108 như giả định đầu. Windows cold2 đúng SHA `70fced47614ff8ec17c9e78f79fca16408c23e6bcadcfb6ad25a4c69cd7f9ded` sau prefix có đồng bộ liên tục nhưng 1705 lỗi CC, 3054 TEI và 14 dịch vụ; không dùng làm đối chứng chất lượng sạch. Ước lượng PCR chuẩn UNKNOWN, giá trị chẩn đoán 27,487 Mbps chỉ có điều kiện. Hình thái 2048 và vòng Java chậm đủ làm giả thuyết thiết kế, chưa tự chứng minh nguyên nhân trên phần cứng.
+
+### Decision
+
+Đường `NATIVE_USBFS_STREAM` chỉ debug dùng lại bootstrap/reload/frontend B2. Mặc định 16 URB × 16384 byte, 4 MiB hoặc 2 giây, có thể chỉnh riêng queue/buffer trong ADR-054. Khoảng dự trữ danh nghĩa 76 ms tại 27,5 Mbps là phép tính thiết kế, không chứng nhận hàng đợi kernel còn hoạt động. Giữ đường cũ để đối chiếu.
+
+Cấp phát trước URB, payload, vùng thu và audit; submit cả queue liên tiếp, reap/copy/resubmit trong native trên worker riêng với UI. Watchdog Java kiểm nguồn quyền/heartbeat thật mỗi 100 ms, chỉ đặt atomic stop; native có deadline riêng, dừng ngay ở lỗi đầu rồi discard/drain tối đa một giây. Không có callback Java, parser, serialize JSON hoặc ghi file trong vòng native. Sau drain mới xuất raw và audit; không giải phóng vùng kernel còn tham chiếu hoặc đóng fd đã quarantine.
+
+Audit giữ slot/sequence và thời điểm submit/reap, status/actual, thống kê outstanding/minimum/starvation quan sát, khoảng reap→resubmit, byte/thời gian. `submitted − reaped` chỉ phản ánh sổ theo dõi phần mềm: completion đã xong nhưng chưa reap vẫn được tính outstanding. Không dùng giá trị 0 starvation này một mình để chứng minh không có khoảng trống tại bus; phải đối chiếu mất sync/CC và mô phỏng có đồng hồ nguồn độc lập.
+
+Permit nhận giữ trong RAM sau kiểm đầy đủ và consume một lần; watchdog vẫn đọc heartbeat từ file thật và kiểm foreground, permission, owner, generation và lock. Ledger/history cũ giữ nguyên, report cảnh báo thay vì bắt recovery. Reload B3 có journal riêng trong namespace của lượt, còn ngân sách tối đa ba lượt thuộc receipt của phiên host và cold epoch do người dùng xác nhận; không dùng namespace mới để thử lại firmware không chắc chắn.
+
+B3 giữ TTL 300 giây. Thời gian người bấm permission 30 giây không còn phải chừa 285 giây cho upload: preflight bootstrap yêu cầu còn ít nhất 30 giây, reload còn 15 giây, mỗi chương trình I/O có deadline tổng 15 giây tính từ lúc thực sự bắt đầu; vẫn giữ từng syscall timeout và dừng không retry khi tổng ngân sách hết. Legacy không đổi. Đây là chấp nhận dừng sớm trên host quá chậm, không cam kết chạy hết 132 syscall ở timeout xấu nhất.
+
+B3 bỏ đúng 2048 byte đầu để kiểm cấu trúc, chấp nhận tối đa 187 byte căn đầu và phần packet chưa đủ cuối mẫu. Sau đó phải có PAT/PMT hợp lệ, không mất sync, CC/TEI/malformed 0; mọi native lỗi, watchdog stop hoặc drain chưa chắc chắn đều không chứng nhận. Raw gốc không bị chỉnh hoặc bỏ các khoảng lỗi ở giữa.
+
+### Alternatives / Trade-offs
+
+Không kéo dài vòng Java cũ, không nhận từng chunk qua JNI và không tăng queue để che một completion lỗi. RAM và audit có giới hạn nên có thể dừng vì thiếu chỗ thay vì ghi đè dữ liệu cũ. Watchdog không bảo đảm lịch chạy thời gian thực; deadline native và evidence về mất gói vẫn bắt buộc. Windows lỗi CC/TEI không làm hạ tiêu chí Android, còn phép so throughput ±10% phải ghi rõ bitrate tham chiếu có điều kiện.
+
+### Validation / Reopen trigger
+
+Cần mô phỏng nguồn 27,5 Mbps/FIFO 2048 và jitter độc lập với consumer, test lỗi đầu/giữa, stop/deadline/drain/quarantine, JVM/report/parser, build bốn ABI/release isolation/emulator. Chưa có kết quả B3 thực hoặc ROOT_CAUSE_CONFIRMED. Chỉ trình card sau phần mềm và giữ toàn bộ failures thật.
+
+### Kết quả B3 thực và chốt sau ngân sách đã duyệt
+
+Hai lượt chuẩn bị đầu dừng trước I/O tuner; người dùng sau đó cho tăng ngân sách và duyệt card permission-first `cd79b751…`, tổng hữu hạn năm lượt, không vô hạn. Dùng permission-only kiểm quyền thật trước grant để tránh hộp thoại mở app gây mất foreground; không bỏ guard. Ba lượt nhận tiếp theo giữ cùng APK `1a15959d…` và bootstrap/reload/golden, chỉ đổi receive: 16×16384, 32×16384, 16×65536. Cả ba bootstrap/reload 132/132, không detach, first data status/errno 0 và drain sạch; không lượt nào đạt chất lượng.
+
+Raw lần lượt 1835008/1720320/917504 byte, throughput 7,336/6,879/3,667 Mbps; sau prefix đều một đoạn sync/0 break nhưng CC 166/140/50, TEI 0/0/66 và PMT 0/14/0. Lượt 32×16384 có 14 PMT/PID-service khớp Windows, vẫn FAIL CC/rate. Counter 6/5/2 chỉ horizon risk; giảm khi tăng kích thước không chứng minh cải thiện. Gap native lớn 170–406 ms ở 16 KiB và 582/905 ms ở 64 KiB, không resubmit chậm. Thiếu kernel-completion/poll/scheduling telemetry nên nguyên nhân gap vẫn UNKNOWN; không ghi ROOT_CAUSE_CONFIRMED hoặc TS_SMOKE_PASS.
+
+Sau hardware đóng/người dùng rút tuner, sửa riêng classification offline: data thành công dừng deadline/risk không bị gán completed USB error bởi last status −2 của discard. Giữ report/ảnh APK đã chạy, candidate mới chưa thử Samsung; focused/full JVM và build/lint/release isolation kiểm lại có phạm vi. Ngân sách đã hết, bước tiếp chỉ telemetry/phân tích offline có thể phân biệt, không tự tăng tiếp hoặc bước production.
+
+## ADR-054 — Cải tổ quy tắc sau khi định vị được lỗi
+
+**Date:** 2026-11-12, nhiệm vụ B3 sau baseline `9bee570aa5e59879e11b7c5b8b1086b80c5fb05b`.
+
+**Status:** Accepted cho triển khai offline theo yêu cầu người dùng; phần cứng chỉ mở sau card có hash và câu `OK B3`. Chưa xác nhận nguyên nhân gốc hoặc TS smoke.
+
+### Context / Evidence
+
+Hai B2 lịch sử đều nhận 65536 byte với 16 completion status 0 sau reload ảnh gốc, nhưng raw mất đồng bộ. Audit hoãn ghi vẫn có khoảng COPY 33–44 ms. Nhiệm vụ mới yêu cầu kiểm độc lập các đoạn TS và đối chứng Windows trước khi xây vòng nhận liên tục; mô hình FIFO giữ 2048 byte và chi phí kiểm quyền là giả thuyết cần đối chiếu, không phải kết luận phần cứng mới.
+
+### Decision
+
+ADR này thay thế toàn bộ giới hạn triển khai chỉ-hoãn-audit của ADR-052, nhưng giữ nguyên kết quả B2 và nguyên tắc không chứng nhận raw dẫn xuất. Thay thế một phần ADR-046/047 về một lượt nạp, receipt/store và cấm chỉnh queue; ADR-048 về các chốt history/init và duyệt riêng từng lần chuẩn bị; ADR-051 về cửa sổ thao tác người và ngân sách upload. Mở lại chốt chỉ-offline của ADR-053 cho nhiệm vụ mới này, không sửa lịch sử các run đã đóng. Các ngoại lệ chỉ áp dụng đường debug B3, không đổi legacy/B1/B2 hoặc production.
+
+| Guard / giới hạn | Quyết định cho B3 | Lý do và phạm vi |
+| --- | --- | --- |
+| Firmware / vendor / frontend | Giữ tuyệt đối | Chỉ ảnh gốc SHA `b97cf208bb586f706b26aa5450de6bb97375a3e3eabe833cddb0ae3a4f69d0dc`, 8192 byte, bootstrap rồi reload 132 A0 sau SET_CONFIGURATION; giữ delay 100 + 1500 ms, MANUAL0, drive `54/54`, `8A 0A00`; không EEPROM, LNB/DC, vệ tinh, B7 hoặc `8A 04xx` |
+| Grant, model, physical epoch, permission, owner, foreground, lock | Giữ | Kiểm đầy đủ ngay trước receive; identity hoặc firmware không chắc chắn vẫn dừng, không bỏ an toàn để đạt PASS |
+| Kiểm quyền theo syscall receive | Thay bằng kiểm theo phiên và watchdog | Permit giữ trong RAM; watchdog đọc nguồn heartbeat thật và kiểm lại không quá 200 ms, timeout heartbeat 2 giây; lỗi đặt cờ native dừng, discard và drain |
+| Audit / parser / file receive | Chuyển khỏi vòng nóng | Cấp phát RAM trước, ghi observation và phân tích sau drain; không chứng nhận nếu mất audit hoặc drain chưa chắc chắn |
+| Queue / URB / lượng thu | Nới có giới hạn | 8–32 URB, 4096–65536 byte bội 512, tối đa 16 MiB và 10 giây; mặc định 16 × 16384, card đầu 4 MiB hoặc 2 giây |
+| Địa chỉ URB | Cho phép tái dùng sau reap thành công | Slot và sequence kiểm riêng; cấm tái dùng URB còn outstanding |
+| History / ledger / reload store lịch sử | Cảnh báo, không chặn B3 chỉ vì lệch hoặc thiếu lịch sử | Giữ bytes cũ và ghi report; không reset/rearm hoặc phục hồi để vượt chốt. B3 có ngân sách phiên riêng tối đa ba lượt gắn xác nhận power-cycle của người dùng; không lấy lịch sử làm quyền ghi |
+| Consume phiên B3 / lỗi firmware không chắc chắn | Giữ | Mỗi lượt có dấu bắt đầu và kết quả; không vượt ba lượt, không tự retry partial upload; `-75` hoặc detach sau reload đóng cả phiên |
+| Permission dialog | Nới từ 10 lên 30 giây | Chỉ là thời gian chờ người bấm OK; không tự bấm, không Always/default |
+| TTL 300 giây / upload preflight 285 giây | Giữ TTL; tách chờ người khỏi dự toán I/O | Chỉ bắt đầu ngân sách I/O sau permission thật; B3 kiểm phần upload có dự toán riêng trong thời gian grant còn lại thay vì bắt buộc còn 285 giây. Không gia hạn grant đã hết hạn hoặc heartbeat |
+| Duyệt và lặp | Một card, một phiên, tối đa ba lượt | Đợi `OK B3`; mỗi lượt người dùng power-cycle ít nhất 5 giây. Có thể chuẩn bị lại trước I/O đổi trạng thái nếu card còn lượt; không thêm chốt init/recovery riêng vì lịch sử |
+| Release / toolchain / dữ liệu | Giữ tuyệt đối | Debug-only; giữ minSdk 21, Java 8 và pins hiện có; không firmware/raw/TS/APK/grant/serial/IP trong Git, không references/VM/snapshot, không stage/commit/push |
+
+### Alternatives / Trade-offs
+
+Không bỏ kiểm quyền hoặc dùng heartbeat giả. Chấp nhận độ trễ phát hiện tối đa một chu kỳ watchdog cộng độ trễ lập lịch; native có deadline độc lập và hủy/drain có giới hạn. Không dùng vòng Java cũ làm chuẩn hiệu năng, nhưng giữ `NATIVE_USBFS_URB_8X4096` để hồi quy. Việc chuyển history sang cảnh báo không cho phép nạp lại trạng thái firmware chưa biết: quyền phiên mới và xác nhận cold power-cycle vẫn bắt buộc.
+
+### Validation / Reopen trigger
+
+Triển khai phải có test watchdog, giới hạn, lỗi completion và drain, mô phỏng starvation, kiểm analyzer trên hai raw B2 và Windows, rồi gates build/release isolation. Nếu chưa đủ evidence thì ghi NOT RUN/BLOCKED, không suy PASS. Chỉ hai lượt B3 PASS độc lập theo card mới được ghi ROOT_CAUSE_CONFIRMED và TS_SMOKE_PASS trên Samsung debug; Phase 4 chỉ là kế hoạch.
+
 ## ADR-053 — Đóng phép thử audit chất lượng; chỉ giữ chứng cứ, không sửa tiếp khi chưa rõ nguyên nhân
 
 **Date:** 2026-11-12, sau run 19:40–19:41 +07

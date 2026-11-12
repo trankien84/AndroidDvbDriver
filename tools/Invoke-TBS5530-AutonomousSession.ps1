@@ -7,7 +7,7 @@ param(
     [Parameter(Mandatory)][ValidateRange(21, 99)][int]$ExpectedApi,
     [Parameter(Mandatory)][ValidateRange(0, 2147483647)][int]$ExpectedBootCount,
     [ValidateSet('AUTO_VERIFIED', 'EXPERIMENTAL_DIAGNOSTIC')][string]$Profile = 'AUTO_VERIFIED',
-    [ValidateSet('SYNC_NATIVE_ERRNO', 'QUEUED_USB_REQUEST_8X4096', 'NATIVE_USBFS_URB_8X4096', 'NATIVE_USBFS_URB_8X8192')][string]$ReadApi = 'SYNC_NATIVE_ERRNO',
+    [ValidateSet('SYNC_NATIVE_ERRNO', 'QUEUED_USB_REQUEST_8X4096', 'NATIVE_USBFS_URB_8X4096', 'NATIVE_USBFS_URB_8X8192', 'NATIVE_USBFS_STREAM')][string]$ReadApi = 'SYNC_NATIVE_ERRNO',
     [ValidateRange(10, 300)][int]$DurationSeconds = 300,
     [string]$FirmwarePath,
     [string]$PhysicalRecoveryEpoch,
@@ -29,10 +29,39 @@ param(
     [ValidatePattern('^[a-f0-9]{64}$')][string]$ExpectedAttachmentHistorySha256,
     [switch]$ControlPlaneOnly,
     [string]$AndroidCliPath,
-    [string]$OutputDirectory = 'D:\TSDuck\logs'
+    [string]$OutputDirectory = 'D:\TSDuck\logs',
+    [string]$B3CardPath,
+    [ValidatePattern('^[a-f0-9]{64}$')][string]$ExpectedB3CardSha256,
+    [ValidatePattern('^[a-f0-9]{64}$')][string]$ExpectedB3HelperSha256,
+    [string]$B3SessionDirectory,
+    [ValidateRange(1, 3)][int]$B3AttemptOrdinal = 1,
+    [ValidateRange(8, 32)][int]$B3QueueDepth = 16,
+    [ValidateRange(4096, 65536)][int]$B3UrbBytes = 16384,
+    [ValidateRange(5, 3600)][int]$PhysicalColdSeconds = 5,
+    [switch]$ApproveB3SessionBudget,
+    [switch]$RfInConfirmed
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if ($ReadApi -ceq 'NATIVE_USBFS_STREAM') {
+    if ($Profile -cne 'EXPERIMENTAL_DIAGNOSTIC' -or $FrontendExperiment -cne 'B2_RELOAD_AFTER_SET_CONFIG' -or
+        -not $ControlMirror -or $AutoUsbPermission -or $ExplicitSetInterfaceAlt0 -or $SonyTsOutputReadback -or
+        $ControlPlaneOnly -or $AndroidCliPath -or $ExpectedAttachmentHistorySha256 -or $ExpectedReloadStoreSha256 -or $ExpectedReloadAnchorSha256) {
+        throw 'BLOCKED: B3 chỉ nhận pipeline B2/mirror; không UI tự động, phép thử ghép hoặc historical pins.'
+    }
+    $b3Parameters = @{} + $PSBoundParameters
+    foreach ($key in @('ReadApi','Profile','FrontendExperiment','ControlMirror','AutoUsbPermission','ExplicitSetInterfaceAlt0',
+        'SonyTsOutputReadback','ControlPlaneOnly','AndroidCliPath','ExpectedAttachmentHistorySha256','ExpectedReloadStoreSha256','ExpectedReloadAnchorSha256')) {
+        $b3Parameters.Remove($key)
+    }
+    & (Join-Path $PSScriptRoot 'Invoke-TBS5530-B3Session.ps1') @b3Parameters
+    exit $LASTEXITCODE
+}
+if ($B3CardPath -or $ExpectedB3CardSha256 -or $ExpectedB3HelperSha256 -or $B3SessionDirectory -or $ApproveB3SessionBudget -or $RfInConfirmed -or
+    $PSBoundParameters.ContainsKey('B3AttemptOrdinal') -or $PSBoundParameters.ContainsKey('B3QueueDepth') -or
+    $PSBoundParameters.ContainsKey('B3UrbBytes') -or $PSBoundParameters.ContainsKey('PhysicalColdSeconds')) {
+    throw 'BLOCKED: tùy chọn B3 không thuộc đường legacy.'
+}
 if (-not $GrantBoundedSession -or -not $ProofOfGuardPassed) { throw 'BLOCKED: cần quyền phiên bounded và kết quả proof-of-guard trước khi chạy thật.' }
 $b2Reload = $FrontendExperiment -ceq 'B2_RELOAD_AFTER_SET_CONFIG'
 if ($b2Reload) {

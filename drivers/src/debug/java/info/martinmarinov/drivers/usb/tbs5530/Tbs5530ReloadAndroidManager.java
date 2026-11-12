@@ -46,6 +46,17 @@ final class Tbs5530ReloadAndroidManager implements Tbs5530AndroidUsbFacade.Manag
         if (owned == null || !owned.claimed) throw new IOException("Claimed operational owner required");
         return owned.next();
     }
+    info.martinmarinov.usbxfer.NativeUsbfsStream.Result receiveStream() throws IOException {
+        if (owned == null) throw new IOException("No owned stream connection");
+        owned.worker();
+        if (!owned.claimed || owned.receive != null) throw new IOException("Stream requires a fresh claimed owner");
+        UsbInterface intf = owned.intf(0);
+        UsbEndpoint endpoint = null;
+        for (int e = 0; e < intf.getEndpointCount(); e++) if (intf.getEndpoint(e).getAddress() == 0x82) endpoint = intf.getEndpoint(e);
+        owned.receive = receiveFactory.create(owned.connection, intf, endpoint);
+        if (!(owned.receive instanceof Tbs5530NativeStreamBackend)) throw new IOException("Foreign stream backend");
+        return ((Tbs5530NativeStreamBackend)owned.receive).receive();
+    }
     private final class Raw implements Tbs5530AndroidUsbFacade.RawConnection {
         final UsbDevice device;
         final UsbDeviceConnection connection;
@@ -114,8 +125,9 @@ final class Tbs5530ReloadAndroidManager implements Tbs5530AndroidUsbFacade.Manag
         public void close() throws IOException {
             if (closed) return;
             worker();
-            try { if (receive != null) receive.close(); if (nativeControl != null) nativeControl.close(); }
-            finally { connection.close(); closed = true; }
+            if (receive != null) receive.close();
+            if (nativeControl != null) nativeControl.close();
+            connection.close(); closed = true;
         }
     }
 }

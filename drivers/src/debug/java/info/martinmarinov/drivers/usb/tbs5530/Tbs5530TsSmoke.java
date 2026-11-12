@@ -8,9 +8,9 @@ import java.util.Objects;
 public final class Tbs5530TsSmoke {
     public enum Status { STRUCTURE_CONFIRMED, INVALID_TS, NO_DATA_OR_USB_FAILURE, LIMIT_REACHED }
     public enum ReadApi {
-        SYNC_NATIVE_ERRNO, QUEUED_USB_REQUEST_8X4096, NATIVE_USBFS_URB_8X4096, NATIVE_USBFS_URB_8X8192;
+        SYNC_NATIVE_ERRNO, QUEUED_USB_REQUEST_8X4096, NATIVE_USBFS_URB_8X4096, NATIVE_USBFS_URB_8X8192, NATIVE_USBFS_STREAM;
         public boolean isNativeUrb() {
-            return this == NATIVE_USBFS_URB_8X4096 || this == NATIVE_USBFS_URB_8X8192;
+            return this == NATIVE_USBFS_URB_8X4096 || this == NATIVE_USBFS_URB_8X8192 || this == NATIVE_USBFS_STREAM;
         }
     }
     public interface Clock { long nanos(); }
@@ -29,7 +29,7 @@ public final class Tbs5530TsSmoke {
         default void beforeFirstBulk() throws IOException { throw new IOException("Readback hook unavailable"); }
     }
     public static final class Limits {
-        public final int maxBytes, maxReads, durationMillis, readTimeoutMillis, readChunkBytes;
+        public final int maxBytes, maxReads, durationMillis, readTimeoutMillis, readChunkBytes, queueDepth;
         public final boolean prepareEndpoint, explicitSetInterfaceAlt0, sonyTsOutputReadback;
         public final ReadApi readApi;
         public long maximumMillis() { return durationMillis + 2000L + (prepareEndpoint ? 5000L : 0)
@@ -55,7 +55,25 @@ public final class Tbs5530TsSmoke {
         }
         public Limits(int maxBytes, int maxReads, int durationMillis, int readTimeoutMillis, int readChunkBytes,
                       boolean prepareEndpoint, ReadApi readApi, boolean explicitSetInterfaceAlt0, boolean sonyReadback) {
+            this(maxBytes, maxReads, durationMillis, readTimeoutMillis, readChunkBytes, prepareEndpoint,
+                    readApi, explicitSetInterfaceAlt0, sonyReadback, readApi == ReadApi.NATIVE_USBFS_STREAM ? 16 : 8);
+        }
+        public Limits(int maxBytes, int maxReads, int durationMillis, int readTimeoutMillis, int readChunkBytes,
+                      boolean prepareEndpoint, ReadApi readApi, boolean explicitSetInterfaceAlt0, boolean sonyReadback, int queueDepth) {
             this.readApi = Objects.requireNonNull(readApi);
+            this.queueDepth = queueDepth;
+            if (readApi == ReadApi.NATIVE_USBFS_STREAM) {
+                if (queueDepth < 8 || queueDepth > 32 || readChunkBytes < 4096 || readChunkBytes > 65536
+                        || readChunkBytes % 512 != 0 || maxBytes < queueDepth * readChunkBytes || maxBytes > 16 * 1024 * 1024
+                        || maxReads < 1 || maxReads > 65536 || durationMillis < 1 || durationMillis > 10000
+                        || readTimeoutMillis < 1 || readTimeoutMillis > 2000 || prepareEndpoint || explicitSetInterfaceAlt0 || sonyReadback)
+                    throw new IllegalArgumentException("Invalid bounded native stream configuration");
+                this.maxBytes = maxBytes; this.maxReads = maxReads; this.durationMillis = durationMillis;
+                this.readTimeoutMillis = readTimeoutMillis; this.readChunkBytes = readChunkBytes;
+                this.prepareEndpoint = false; this.explicitSetInterfaceAlt0 = false; sonyTsOutputReadback = false;
+                return;
+            }
+            if (queueDepth != 8) throw new IllegalArgumentException("Legacy queue depth must remain eight");
             this.explicitSetInterfaceAlt0 = explicitSetInterfaceAlt0; sonyTsOutputReadback=sonyReadback;
             if (sonyReadback && (explicitSetInterfaceAlt0 || prepareEndpoint || readApi != ReadApi.NATIVE_USBFS_URB_8X4096
                     || maxBytes != 65536 || maxReads != 16 || durationMillis != 5000 || readTimeoutMillis != 500 || readChunkBytes != 4096))
@@ -81,8 +99,23 @@ public final class Tbs5530TsSmoke {
             this.readTimeoutMillis = readTimeoutMillis; this.readChunkBytes = readChunkBytes;
         }
     }
+    public static final class StreamMetrics {
+        public final int bytes, minOutstanding, firstStatus, firstErrno, outstanding;
+        public final long submitted, completed, elapsedNanos, starvationCount, maxResubmitNanos, medianResubmitNanos;
+        public final boolean quarantined;
+        public final String stopReason;
+        StreamMetrics(info.martinmarinov.usbxfer.NativeUsbfsStream.Result stream) {
+            bytes = stream.data.length; minOutstanding = stream.minOutstanding; firstStatus = stream.firstStatus;
+            firstErrno = stream.firstErrno; outstanding = stream.outstanding; submitted = stream.submitted;
+            completed = stream.completed; elapsedNanos = stream.elapsedNanos; starvationCount = stream.starvationCount;
+            maxResubmitNanos = stream.maxResubmitNanos; medianResubmitNanos = stream.medianResubmitNanos;
+            quarantined = stream.quarantined; stopReason = stream.stopReason;
+        }
+        public double bytesPerSecond() { return elapsedNanos > 0 ? bytes * 1_000_000_000.0 / elapsedNanos : 0; }
+    }
     public static final class Result {
         public final Status status;
+        public final StreamMetrics nativeStream;
         public final int bytes, reads;
         public final long elapsedNanos;
         public final Tbs5530TsParser.Snapshot packets;
@@ -92,6 +125,12 @@ public final class Tbs5530TsSmoke {
         public final boolean endpointPrepared;
         Result(Status status, int bytes, int reads, long elapsedNanos, Tbs5530TsParser.Snapshot packets,
                int lastReadResult, int requested, int timeout, long readWallNanos, boolean endpointPrepared, int errno) {
+            this(status, bytes, reads, elapsedNanos, packets, lastReadResult, requested, timeout, readWallNanos, endpointPrepared, errno, null);
+        }
+        Result(Status status, int bytes, int reads, long elapsedNanos, Tbs5530TsParser.Snapshot packets,
+               int lastReadResult, int requested, int timeout, long readWallNanos, boolean endpointPrepared, int errno,
+               info.martinmarinov.usbxfer.NativeUsbfsStream.Result stream) {
+            nativeStream = stream == null ? null : new StreamMetrics(stream);
             lastReadErrno = errno;
             this.endpointPrepared = endpointPrepared;
             this.status = status; this.bytes = bytes; this.reads = reads; this.elapsedNanos = elapsedNanos; this.packets = packets;
@@ -116,6 +155,9 @@ public final class Tbs5530TsSmoke {
     private final Clock clock;
     private final ReadApi readApi;
     private final ChunkObserver observer;
+    interface StreamReceiver { info.martinmarinov.usbxfer.NativeUsbfsStream.Result receive(Limits limits) throws IOException; }
+    private StreamReceiver streamReceiver;
+    void streamReceiver(StreamReceiver receiver) { streamReceiver = Objects.requireNonNull(receiver); }
     private boolean used;
 
     public Tbs5530TsSmoke(Tbs5530Session session, long generation, Tbs5530Bridge bridge,
@@ -190,6 +232,27 @@ public final class Tbs5530TsSmoke {
                 permission.audit("SONY_READBACK_BEFORE_FIRST_URB_COMPLETE",0,0);
                 dataStarted = clock.nanos();
             }
+            if (readApi == ReadApi.NATIVE_USBFS_STREAM) {
+                if (streamReceiver == null) throw new IOException("Native stream receiver unavailable");
+                permission.requireCurrent(generation); requireLocked();
+                info.martinmarinov.usbxfer.NativeUsbfsStream.Result stream = streamReceiver.receive(limits);
+                if (stream.quarantined || stream.outstanding != 0) throw new IOException("Native stream drain not certified");
+                byte[] data = stream.data;
+                if (data.length > 0) {
+                    observer.accept(data, data.length);
+                    int skip = Math.min(2048, data.length);
+                    parser.accept(data, skip, data.length - skip);
+                }
+                Tbs5530TsParser.Snapshot parsed = parser.snapshot();
+                boolean clean = stream.firstStatus == 0 && stream.firstErrno == 0
+                        && ("BYTE_LIMIT".equals(stream.stopReason) || "DEADLINE".equals(stream.stopReason));
+                Status result = !clean ? Status.NO_DATA_OR_USB_FAILURE : stream.starvationCount == 0 && b3StructureConfirmed(parsed) ? Status.STRUCTURE_CONFIRMED
+                        : data.length == 0 ? Status.NO_DATA_OR_USB_FAILURE : Status.INVALID_TS;
+                permission.audit("TS_SMOKE_FINISHED", (int)stream.completed, data.length);
+                return new Result(result, data.length, (int)stream.completed, stream.elapsedNanos, parsed,
+                        stream.firstStatus == 0 ? data.length : -1, limits.readChunkBytes, limits.durationMillis,
+                        stream.elapsedNanos, false, stream.firstErrno, stream);
+            }
             byte[] buffer = new byte[Math.min(limits.readChunkBytes, limits.maxBytes)];
             while (bytes < limits.maxBytes && reads < limits.maxReads) {
                 permission.requireCurrent(generation); requireLocked();
@@ -242,6 +305,11 @@ public final class Tbs5530TsSmoke {
                 else throw cleanup;
             }
         }
+    }
+    static boolean b3StructureConfirmed(Tbs5530TsParser.Snapshot parsed) {
+        return parsed.packets >= 3 && parsed.synchronizedToStream && parsed.hasValidProgramStructure()
+                && parsed.syncLosses == 0 && parsed.continuityErrors == 0 && parsed.transportErrorPackets == 0
+                && parsed.malformedPackets == 0 && parsed.scrambledPackets == 0 && parsed.discardedBytes <= 187;
     }
     private long elapsed(long started) throws IOException {
         long elapsed = clock.nanos() - started;

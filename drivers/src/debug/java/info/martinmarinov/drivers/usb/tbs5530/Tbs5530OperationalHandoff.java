@@ -25,6 +25,7 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
         volatile Tbs5530TsSmoke.Limits limits;
         volatile Consent pollGuard;
         volatile Tbs5530NativeUsbfsBackend backend;
+        volatile Tbs5530NativeStreamBackend streamBackend;
         volatile boolean k36AutoTuneConfirmed;
         boolean reloadRequired;
         Tbs5530ReloadAndroidManager reloadManager;
@@ -54,7 +55,9 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
         this(context, runtime, consent, readApi, reloadConfiguration(runId, readApi, reloadRequired));
     }
     private static NativeConfiguration reloadConfiguration(String runId, Tbs5530TsSmoke.ReadApi api, boolean required) throws IOException {
-        if (required && api != Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096) throw new IOException("B2 requires native4096");
+        if (required && api != Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096 && api != Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_STREAM)
+            throw new IOException("Reload requires native4096 or the bounded native stream");
+        if (api == Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_STREAM && !required) throw new IOException("B3 requires the B2 reload pipeline");
         NativeConfiguration configuration = new NativeConfiguration(runId); configuration.reloadRequired = required; return configuration;
     }
     private Tbs5530OperationalHandoff(Context context, Tbs5530AndroidRuntime runtime, Consent consent,
@@ -68,6 +71,16 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
         if (api == Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO) return new Tbs5530AndroidUsbFacade.AndroidManager(context.getApplicationContext());
         if (Tbs5530AutonomousPlans.nativeUrb(api)) {
             Tbs5530AndroidUsbFacade.ReceiveBackendFactory factory = (connection, intf, endpoint) -> {
+                        if (api == Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_STREAM) {
+                            Tbs5530NativeStreamBackend backend = new Tbs5530NativeStreamBackend(connection, intf, endpoint,
+                                    context.getFilesDir(), configuration.runId, configuration.limits, () -> {
+                                        consent.requireCurrent();
+                                        if (configuration.pollGuard == null) throw new IOException("Stream watchdog unavailable");
+                                        configuration.pollGuard.requireCurrent();
+                                    });
+                            configuration.streamBackend = backend;
+                            return backend;
+                        }
                         Tbs5530NativeUsbfsBackend backend = new Tbs5530NativeUsbfsBackend(connection, intf, endpoint, context.getFilesDir(),
                                 configuration.runId, configuration.limits, () -> {
                                     consent.requireCurrent();
@@ -285,6 +298,9 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
                     nativeConfiguration.pollGuard = () -> {
                         session.requireUsable(token);
                         if (!operationalOwner()) throw new IOException("Claimed active exclusive owner required");
+                        if (readApi == Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_STREAM
+                                && (!session.isFrontendInitialized() || !session.isFrontendLocked() || !session.isStreaming()))
+                            throw new IOException("B3 frontend lock or stream state lost");
                         permission.requireCurrent(token);
                         if (limits.explicitSetInterfaceAlt0 && (!nativeConfiguration.k36AutoTuneConfirmed
                                 || !permission.explicitSetInterfaceAlt0Approved()))
@@ -306,7 +322,19 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
                 }
             };
         }
-        return new Tbs5530TsSmoke(session, generation, new Tbs5530Bridge(controlIo(), session, generation), bulkIo(), effective, clock, readApi, observer);
+        Tbs5530TsSmoke smoke = new Tbs5530TsSmoke(session, generation, new Tbs5530Bridge(controlIo(), session, generation), bulkIo(), effective, clock, readApi, observer);
+        if (readApi == Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_STREAM) smoke.streamReceiver(limits -> {
+            consent.requireCurrent(); session.requireUsable(generation); requireReloadComplete();
+            if (!session.isFrontendLocked() || !session.isStreaming() || nativeConfiguration.reloadManager == null)
+                throw new IOException("Locked owned B3 stream required");
+            final info.martinmarinov.usbxfer.NativeUsbfsStream.Result[] result = new info.martinmarinov.usbxfer.NativeUsbfsStream.Result[1];
+            session.transaction(generation, () -> {
+                try { result[0] = nativeConfiguration.reloadManager.receiveStream(); }
+                catch (IOException error) { throw new Tbs5530ControlIo.TransferException(Tbs5530ControlIo.FailureKind.IO_FAILURE, "Native stream failed", error); }
+            });
+            return result[0];
+        });
+        return smoke;
     }
     void programCompleted(Tbs5530Frontend.Plan plan) {
         if (nativeConfiguration == null) return;
@@ -332,7 +360,9 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
     /** Read on the owner worker or after completion/cleanup; never races a native syscall. */
     public NativeReceiveSnapshot nativeReceiveSnapshot() {
         Tbs5530NativeUsbfsBackend backend = nativeConfiguration == null ? null : nativeConfiguration.backend;
-        return backend == null ? null : new NativeReceiveSnapshot(backend.snapshot(), backend.quarantined(), backend.interfaceSelectionSnapshot());
+        if (backend != null) return new NativeReceiveSnapshot(backend.snapshot(), backend.quarantined(), backend.interfaceSelectionSnapshot());
+        Tbs5530NativeStreamBackend stream = nativeConfiguration == null ? null : nativeConfiguration.streamBackend;
+        return stream == null ? null : new NativeReceiveSnapshot(stream.snapshot(), stream.quarantined(), null);
     }
     public static final class NativeReceiveSnapshot {
         public final long attempted, submitted, completed, outstanding, copiedBytes, cleanupBytes, completionSequence;

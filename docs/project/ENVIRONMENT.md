@@ -1,5 +1,29 @@
 # Kiểm kê môi trường
 
+## 2026-11-12, sau B3 — Samsung đã thử ba cấu hình, tuner đã rút; candidate report mới chưa cài
+
+Samsung SM-X926B/API36/boot47 dùng APK `1a15959d99bef5052b555cdfa3db3771489c1f80a3048bcf391736195fba45e7` trong ba lượt receive thật. Đã drain cả ba, người dùng xác nhận rút tuner/ngắt nguồn sau lượt cuối. Giữ history cũ 1328 byte và reload store/anchor lịch sử; B3 journal theo session không reset chúng. Không VM/WSL/driver/ownership/toolchain thay đổi, không EEPROM hoặc LNB/DC.
+
+Sau live chỉ sửa classification report và kiểm host. APK candidate debug mới SHA `0a57ef9d9bb2976795826f02cc0444e5901e35736192aa8b250263f132f6107c`, chưa cài Samsung hoặc chạy tuner. Đã xuất chỉ đọc APK đang cài đúng hash run và lưu riêng với APK candidate/debug-test/release trong reports/final-apks. Màn hình lúc đầu không Awake nên dừng trước xuất; sau người dùng mở mới kiểm và pull, không tự bật/đổi khóa máy. 87 tệp source đã dùng Samsung được đối soát frozen SHA và lưu ngoài Git, tách bản sửa report sau live.
+
+Toolchain/pins vẫn như mốc trước. Native core không thay sau live, JVM cuối app 99/driver 485 PASS + 5 SKIP/usbxfer 49; build/app lint/release isolation/ABI PASS. Emulator candidate report cuối dùng instance riêng read-only/no-snapshot, focused 12/12 PASS; đã emu kill đúng serial và attached process exit 0. Không dùng Samsung làm emulator test. Ngân sách hữu hạn tổng năm lượt đã hết, không service nhận USB hoặc helper live do phiên còn chạy.
+
+## 2026-11-12, chốt B3 offline tới 21:56 +07 — Emulator đã đóng, Samsung chỉ đọc inventory
+
+Candidate APK debug trên host SHA `1a15959d99bef5052b555cdfa3db3771489c1f80a3048bcf391736195fba45e7`, chưa cài Samsung. JNI stream/legacy build bốn ABI, hai ABI 64-bit ELF align 16 KiB; release isolation đạt. Toolchain/pins không đổi. Chạy emulator instance riêng 5580 với read-only/no-snapshot/no-window/no-audio, không USB passthrough; boot readiness đầu timeout, giữ process rồi kiểm thấy boot_completed=1 trước tests, không restart. Sau test emu kill đúng serial, attached process exit 0, cổng 5580/5581 không listener; log emulator có thông báo snapshot nội bộ khi thoát dù flags không lưu, không suy đã tạo snapshot VM hoặc thay AVD bền.
+
+Đã dùng alias ADB xác minh Samsung model SM-X926B/API36/boot47/Awake cho card, không install/launch app hoặc tuner I/O mới. Định danh/IP/log raw giữ private ngoài Git. Không dùng adb mặc định từ scrcpy; mọi lệnh thiết bị dùng đúng SDK adb.exe và explicit serial. Firmware ngoài Git đã kiểm đúng 8192 byte/SHA b97cf208…; chưa chuyển lên tablet trong nhiệm vụ này. B3 vẫn chờ card/OK B3 và xác nhận cold thực từng lượt.
+
+59 tệp Phase 3.1 Java/C/Python được chuẩn hóa LF; `.ps1` giữ BOM/line ending gốc. Agent helper/natives chỉ fake/offline; host heartbeat fixture Git Bash timeout vẫn FAIL, không cài package hoặc đổi policy. Không VM/WSL/driver/ownership/persistent environment thay đổi. Hồ sơ và manifest ngoài Git ghi các limits này.
+
+## 2026-11-12, chuẩn bị B3 từ 20:31 +07 — Chỉ offline, chưa thay Samsung
+
+Đã kiểm baseline branch `chore/modernize-android-build`, HEAD `9bee570aa5e59879e11b7c5b8b1086b80c5fb05b`, tree sạch. JDK 25.0.5.0.3 qua Machine JAVA_HOME junction, Gradle Wrapper 9.8.2/AGP 9.5.0; source.properties NDK 30.0.16248370/CMake 4.1.2/Build-Tools 37.0.0/ADB 37.0.1/emulator 37.2.13. Giữ SDK `D:\Android\Sdk`, AVD `D:\Android\AVD`, minSdk 21 và Java 8, không cài/nâng toolchain hoặc đổi biến môi trường bền.
+
+Python đã có `C:\Python312\python.exe`, analyzer chỉ stdlib; native host tests dùng GCC 16.2.0 đã có, không MSYS2 shell hoặc cài dependencies mới. AVD hiện có TBS5530_Runtime_API37/x86_64, chưa boot trong mốc này. Không ADB Samsung, install APK, USB ownership, VM/WSL hoặc hardware I/O mới; trạng thái Samsung cuối phiên trước là lịch sử, chưa đo lại.
+
+GitNexus CLI 1.6.12 có help nhưng status không hoàn tất sau hơn 254 giây, đã dừng đúng process tree của phiên; không force/rebuild/repair hoặc chứng nhận index hiện hành. Nguồn hiện tại, diff, JVM và host native tests là căn cứ. Evidence main/analyzer có bundle riêng dưới D:\TSDuck; mọi serial/grant/raw/APK/firmware chỉ ngoài Git.
+
 ## 2026-11-12, audit quality live đã đóng — Samsung hiện giữ candidate mới và consumed witnesses mới
 
 Preflight 19:32 +07 xác minh SM-X926B/API 36/user 0/boot 47/Awake/current USB empty, exact installed APK cũ 3ee6cf24… rồi install-r một lần candidate SHA `1efb3aaf796e7c4427a66c713908d5be5f41e18a7c645c1d3c906facd8789839`. Sáu witnesses/history 1162 byte trước/sau exact, không uninstall/clear/rearm. User xác nhận cold off ≥5 giây/đèn tắt/RF IN như B1 và đã cắm trước preparation theo card mới; không default USB hoặc auto-tap.

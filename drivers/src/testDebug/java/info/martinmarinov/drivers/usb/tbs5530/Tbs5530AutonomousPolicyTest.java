@@ -118,6 +118,21 @@ public class Tbs5530AutonomousPolicyTest {
         Rig r = new Rig(); r.operational(); r.failAppend = true;
         assertThrows(IOException.class, () -> r.policy.consume(ATTEMPT, PLAN, 10000)); assertFalse(r.policy.consumed(ATTEMPT));
     }
+    @Test public void b3HumanWaitDoesNotConsumeLegacyUploadReserveButIoStillHasBudget() throws Exception {
+        final long[] now = {1000};
+        Tbs5530AutonomousPolicy.Ledger ledger = new Tbs5530AutonomousPolicy.Ledger() {
+            public void check() { }
+            public void append(String event, String attempt, String plan) { }
+        };
+        Tbs5530AutonomousPolicy b3 = new Tbs5530AutonomousPolicy(() -> now[0], ledger, true);
+        b3.foreground(true); b3.grant(Tbs5530AutonomousPolicy.Profile.EXPERIMENTAL_DIAGNOSTIC, 301000, now[0]);
+        now[0] = 61000; b3.heartbeat(now[0]);
+        b3.observe("COLD", 1, true, Tbs5530OperationalProfile.Kind.FX2_DEFAULT);
+        b3.requireUploadStartBudget();
+        now[0] = 271001; b3.heartbeat(now[0]);
+        assertThrows(IOException.class, b3::requireUploadStartBudget);
+        b3.stop(); assertThrows(IOException.class, () -> b3.heartbeat(now[0]));
+    }
     @Test public void uploadBudgetPreflightHasNoConsumptionAndStillRechecksAtStart() throws Exception {
         Rig r = new Rig(); r.fx2();
         r.policy.requireUploadStartBudget(); assertEquals(1, r.audit.size());

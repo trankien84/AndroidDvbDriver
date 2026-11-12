@@ -19,7 +19,7 @@ public class NativeUsbfsBoundaryTest {
     private static Method nativeCreate() throws Exception {
         Class.forName("info.martinmarinov.usbxfer.NativeUsbfsUrb$Bindings", true,
                 NativeUsbfsUrb.class.getClassLoader());
-        Method method = NativeUsbfsUrb.class.getDeclaredMethod("create", int.class, int.class);
+        Method method = NativeUsbfsUrb.class.getDeclaredMethod("create", int.class, int.class, int.class);
         method.setAccessible(true);
         return method;
     }
@@ -28,7 +28,7 @@ public class NativeUsbfsBoundaryTest {
         Method create = nativeCreate();
         for (int fd : new int[]{-1, Integer.MIN_VALUE}) {
             for (int budget : new int[]{8, 16, 256}) {
-                assertEquals(0L, ((Long) create.invoke(null, fd, budget)).longValue());
+                assertEquals(0L, ((Long) create.invoke(null, fd, budget, 4096)).longValue());
             }
         }
     }
@@ -37,10 +37,19 @@ public class NativeUsbfsBoundaryTest {
         Method create = nativeCreate();
         // This does not open or use fd 0: JNI create rejects budget before allocation or any ioctl.
         for (int budget : new int[]{Integer.MIN_VALUE, 0, 7, 257, Integer.MAX_VALUE}) {
-            assertEquals(0L, ((Long) create.invoke(null, 0, budget)).longValue());
+            assertEquals(0L, ((Long) create.invoke(null, 0, budget, 4096)).longValue());
         }
     }
 
+    @Test public void streamJniLoadsAndRejectsBadFdOrBoundsWithoutAnyIo() throws Exception {
+        Class<?> stream = Class.forName("info.martinmarinov.usbxfer.NativeUsbfsStream");
+        Class.forName("info.martinmarinov.usbxfer.NativeUsbfsStream$Bindings", true, stream.getClassLoader());
+        Method create = stream.getDeclaredMethod("create", int.class, int.class, int.class, int.class, int.class);
+        create.setAccessible(true);
+        assertEquals(0L, ((Long)create.invoke(null, -1, 16, 16384, 4194304, 2000)).longValue());
+        assertEquals(0L, ((Long)create.invoke(null, 0, 7, 16384, 4194304, 2000)).longValue());
+        assertEquals(0L, ((Long)create.invoke(null, 0, 16, 16385, 4194304, 2000)).longValue());
+    }
     @Test public void publicConstructorRejectsNegativeFdWithoutConsentOrAudit() throws Exception {
         AtomicInteger consentCalls = new AtomicInteger();
         StringWriter audit = new StringWriter();

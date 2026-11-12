@@ -23,7 +23,28 @@ final class Tbs5530AutonomousSession {
     final Tbs5530AutonomousPlans golden;
     final Tbs5530TsSmoke.ReadApi readApi;
     final Tbs5530FrontendExperiment frontendExperiment;
-    final Tbs5530ReloadLedger reloadLedger;
+    Tbs5530ReloadLedger reloadLedger;
+    final boolean nativeStream;
+    private String historyWarning = "NONE";
+    private volatile boolean receiving;
+    private long bootstrapIoDeadline = Long.MAX_VALUE, reloadIoDeadline = Long.MAX_VALUE;
+    private void requireBootstrapIoBudget() throws IOException {
+        if (nativeStream && SystemClock.elapsedRealtime() >= bootstrapIoDeadline) throw new IOException("B3 bootstrap I/O deadline; no retry");
+    }
+    void requireReload() throws IOException {
+        require();
+        if (nativeStream && SystemClock.elapsedRealtime() >= reloadIoDeadline) throw new IOException("B3 reload I/O deadline; no retry");
+    }
+    int streamQueueDepth = 16, streamUrbBytes = 16384;
+    void configureStream(int depth, int bytes) throws IOException {
+        if (!nativeStream || accepted || depth < 8 || depth > 32 || bytes < 4096 || bytes > 65536 || bytes % 512 != 0)
+            throw new IOException("Invalid B3 receive configuration");
+        streamQueueDepth = depth; streamUrbBytes = bytes;
+        try {
+            challenge.put("b3_queue_depth", depth).put("b3_urb_bytes", bytes).put("b3_max_bytes", 4 * 1024 * 1024).put("b3_duration_ms", 2000);
+            Tbs5530DurableFile.write(new File(root, PREFIX + "-challenge.json"), challenge.toString().getBytes(StandardCharsets.UTF_8));
+        } catch (org.json.JSONException error) { throw new IOException(error); }
+    }
     volatile Tbs5530AndroidBootstrap.CleanProof bootstrapProof;
     volatile Tbs5530Fx2Reload.Snapshot reloadSnapshot;
     boolean reloadEnabled() { return frontendExperiment == Tbs5530FrontendExperiment.B2_RELOAD_AFTER_SET_CONFIG; }
@@ -106,7 +127,10 @@ final class Tbs5530AutonomousSession {
     Tbs5530AutonomousSession(Context context, String requestedApi, String model, int api, int boot, boolean mirror,
                             boolean explicitAlt0, String launch, boolean controlOnly, boolean sonyReadback, String experiment,
                             Tbs5530HistoryFence.Store injectedHistory) throws IOException {
+        nativeStream = "NATIVE_USBFS_STREAM".equals(requestedApi);
         frontendExperiment = Tbs5530FrontendExperiment.parse(experiment);
+        if (nativeStream && frontendExperiment != Tbs5530FrontendExperiment.B2_RELOAD_AFTER_SET_CONFIG)
+            throw new IOException("B3 requires the unchanged B2 firmware and frontend pipeline");
         frontendExperiment.requireOptions(requestedApi, mirror, explicitAlt0, controlOnly, sonyReadback);
         sonyTsOutputReadback=sonyReadback;
         if (sonyReadback && (controlOnly || explicitAlt0 || !mirror || !"NATIVE_USBFS_URB_8X4096".equals(requestedApi)))
@@ -122,16 +146,37 @@ final class Tbs5530AutonomousSession {
         historyPrefix = Tbs5530VerifiedHost.historyPrefix(hostProfile);
         contextForLedger = context.getApplicationContext();
         if (reloadEnabled() && (!"SM-X926B".equals(model) || api != 36)) throw new IOException("B2 first host is Samsung SM-X926B/API36 only");
-        reloadLedger = reloadEnabled() ? new Tbs5530ReloadLedger(new Tbs5530ReloadStore(contextForLedger)) : null;
-        historyStore = frontendExperiment == Tbs5530FrontendExperiment.BASELINE_AUTO ? null
+        reloadLedger = reloadEnabled() && !nativeStream ? new Tbs5530ReloadLedger(new Tbs5530ReloadStore(contextForLedger)) : null;
+        historyStore = nativeStream || frontendExperiment == Tbs5530FrontendExperiment.BASELINE_AUTO ? null
                 : injectedHistory != null ? injectedHistory : () -> Tbs5530HistoryRecoveryStore.readSnapshot(contextForLedger, historyPrefix);
         historyFence = historyStore == null ? null : new Tbs5530HistoryFence(historyStore.read());
         root = context.getFilesDir(); directory = new File(root, PREFIX + "-" + id);
         if (!directory.mkdir()) throw new IOException("Cannot create fresh session namespace");
+        if (nativeStream) {
+            historyWarning = "LEGACY_HISTORY_NOT_AUTHORITY_B3_SESSION_BUDGET_AND_COLD_EPOCH_REQUIRED";
+            reloadLedger = new Tbs5530ReloadLedger(new Tbs5530ReloadLedger.Storage() {
+                private byte[] journal = Tbs5530ReloadLedger.bytes(Tbs5530ReloadLedger.HEADER);
+                private byte[] anchor = Tbs5530ReloadLedger.bytes(Tbs5530ReloadLedger.ANCHOR_HEADER);
+                public byte[] read() { return journal.clone(); }
+                public byte[] anchor() { return anchor.clone(); }
+                public void appendAndSync(byte[] expected, byte[] oldAnchor, byte[] suffix, byte[] anchorSuffix) throws IOException {
+                    if (!java.util.Arrays.equals(journal, expected) || !java.util.Arrays.equals(anchor, oldAnchor))
+                        throw new IOException("B3 session reload journal changed");
+                    byte[] next = java.util.Arrays.copyOf(journal, journal.length + suffix.length);
+                    System.arraycopy(suffix, 0, next, journal.length, suffix.length);
+                    byte[] nextAnchor = java.util.Arrays.copyOf(anchor, anchor.length + anchorSuffix.length);
+                    System.arraycopy(anchorSuffix, 0, nextAnchor, anchor.length, anchorSuffix.length);
+                    Tbs5530DurableFile.write(new File(directory, "b3-reload-journal.txt"), next);
+                    Tbs5530DurableFile.write(new File(directory, "b3-reload-anchor.txt"), nextAnchor);
+                    journal = next; anchor = nextAnchor;
+                }
+            });
+        }
         golden = new Tbs5530AutonomousPlans(frontendExperiment);
         write("ledger.jsonl", "");
         policy = new Tbs5530AutonomousPolicy(SystemClock::elapsedRealtime, new Tbs5530AutonomousPolicy.Ledger() {
             public void check() throws IOException {
+                if (nativeStream && policy != null && policy.state() == Tbs5530AutonomousPolicy.State.TS_CAPTURE) return;
                 if (!ledger.equals(read(new File(directory, "ledger.jsonl"), 1024 * 1024))) throw new IOException("Session ledger corrupted");
             }
             public void append(String event, String attempt, String plan) throws IOException {
@@ -142,7 +187,7 @@ final class Tbs5530AutonomousSession {
                     String next = ledger + value + "\n"; write("ledger.jsonl", next); ledger = next;
                 } catch (org.json.JSONException error) { throw new IOException(error); }
             }
-        });
+        }, nativeStream);
         try {
             if (boot < 0) throw new IOException("Unverified Android boot");
             challenge.put("policy", Tbs5530AutonomousPolicy.VERSION).put("session", id).put("host_profile", hostProfile).put("model", model)
@@ -199,6 +244,10 @@ final class Tbs5530AutonomousSession {
                     "firmware_protocol", "created_elapsed_ms", "golden_sha256", "ts_variant", "frontend_experiment", "source_git_sha", "app_apk_sha256"}) {
                 if (!challenge.get(key).toString().equals(grant.get(key).toString())) throw new IOException("Grant scope mismatch: " + key);
             }
+            if (nativeStream) {
+                for (String key : new String[]{"b3_queue_depth", "b3_urb_bytes", "b3_max_bytes", "b3_duration_ms"})
+                    if (!challenge.get(key).toString().equals(grant.get(key).toString())) throw new IOException("B3 receive scope mismatch: " + key);
+            }
             if (historyFence != null) {
                 if (!historyFence.sha256().equals(grant.opt("attachment_history_sha256")))
                     throw new IOException("Host-pinned attachment history scope mismatch");
@@ -248,7 +297,8 @@ final class Tbs5530AutonomousSession {
     }
     void require() throws IOException {
         if (policy.state() != Tbs5530AutonomousPolicy.State.ERROR_UNCERTAIN) lastStage = policy.state().name();
-        if (!accepted || !grantText.equals(read(new File(directory, "grant.json"), 16384))) throw new IOException("Grant changed or unavailable");
+        if (!accepted || !(receiving && policy.state() == Tbs5530AutonomousPolicy.State.TS_CAPTURE)
+                && !grantText.equals(read(new File(directory, "grant.json"), 16384))) throw new IOException("Grant changed or unavailable");
         policy.heartbeat(heartbeat()); policy.requireSession();
         if (reloadLedger != null) reloadLedger.require();
         if (historyFence != null) synchronized (Tbs5530AutonomousSession.class) { historyFence.require(historyStore.read()); }
@@ -308,10 +358,17 @@ final class Tbs5530AutonomousSession {
                     receiveAudit.write(text.getBytes(StandardCharsets.UTF_8));
                 } else Tbs5530AutonomousSession.this.write(target, text);
             }
+            public void requireLiveReceive() throws IOException {
+                require(); boundary.require(); policy.requireOwner(owner, generation, true);
+            }
+            public long receiveHeartbeat() throws IOException { return heartbeat(); }
             public boolean consumed(String value) { return policy.consumed(value); }
             public void consume(String value) throws IOException {
                 if (!attempt.equals(value)) throw new IOException("Foreign attempt ID");
-                try { policy.consume(value, program.getString("plan_sha256"), maximum); }
+                try {
+                    policy.consume(value, program.getString("plan_sha256"), maximum);
+                    if (nativeStream && plan == null) receiving = true;
+                }
                 catch (org.json.JSONException error) { throw new IOException(error); }
             }
         };
@@ -360,6 +417,11 @@ final class Tbs5530AutonomousSession {
                 preNativeRefusal = true; stopReason = "UPLOAD_PREFLIGHT_REFUSED";
                 failureStage = policy.state().name(); throw error;
             }
+            if (nativeStream) {
+                write("b3-bootstrap-consumed.txt", "B3_SESSION_BOOTSTRAP_CONSUMED\n" + handoffEpochKey() + "\n");
+                bootstrapIoDeadline = SystemClock.elapsedRealtime() + 15000;
+                return;
+            }
             File history = new File(root, historyPrefix + "-attachments.txt");
             android.content.SharedPreferences marker = contextForLedger.getSharedPreferences(historyPrefix + "-history", Context.MODE_PRIVATE);
             if (!history.exists()) {
@@ -384,8 +446,9 @@ final class Tbs5530AutonomousSession {
     String reloadEpochKey() throws IOException {
         require();
         if (!reloadEnabled() || !recoveryConfirmed || recoveryEpoch.isEmpty()) throw new IOException("No approved B2 physical epoch");
-        if (expires - SystemClock.elapsedRealtime() < 132L * 2000 + 100 + Tbs5530Fx2Reload.WAIT_MS + 5000)
+        if (expires - SystemClock.elapsedRealtime() < (nativeStream ? 15000 : 132L * 2000 + 100 + Tbs5530Fx2Reload.WAIT_MS + 5000))
             throw new IOException("Insufficient bounded session budget before reload consume");
+        if (nativeStream) reloadIoDeadline = SystemClock.elapsedRealtime() + 15000;
         return handoffEpochKey();
     }
     String handoffEpochKey() throws IOException {
@@ -398,9 +461,9 @@ final class Tbs5530AutonomousSession {
             // General transition/observation checks must not require the released upload attachment.
             public void requireCurrent() throws IOException { require(); }
             public void requireStartBudget() throws IOException { requireDeviceIo(); require(); physical.require(); }
-            public void requireWrite(int ordinal) throws IOException { requireDeviceIo(); require(); physical.require(); }
-            public void requireNative(int ordinal) throws IOException { requireDeviceIo(); require(); physical.require(); policy.uploadNative(ordinal); }
-            public void requireDispatch(int ordinal) throws IOException { requireDeviceIo(); require(); physical.require(); policy.uploadDispatch(ordinal); }
+            public void requireWrite(int ordinal) throws IOException { requireDeviceIo(); require(); physical.require(); requireBootstrapIoBudget(); }
+            public void requireNative(int ordinal) throws IOException { requireDeviceIo(); require(); physical.require(); requireBootstrapIoBudget(); policy.uploadNative(ordinal); }
+            public void requireDispatch(int ordinal) throws IOException { requireDeviceIo(); require(); physical.require(); requireBootstrapIoBudget(); policy.uploadDispatch(ordinal); }
             public String runEpoch() { return id; }
             public String physicalEpochKey() { return reloadEnabled() ? Tbs5530AutonomousPlans.hash(hostProfile + ":" + recoveryEpoch) : null; }
         };
@@ -527,6 +590,12 @@ final class Tbs5530AutonomousSession {
         return new JSONObject().put("option",Tbs5530SonyTsOutputReadback.OPTION).put("enabled",sonyTsOutputReadback)
                 .put("maximum_snapshots",2).put("snapshots",snapshots).put("during_pending","NOT_AVAILABLE_NO_CONCURRENT_I2C");
     }
+    static boolean completedStreamError(Tbs5530TsSmoke.StreamMetrics stream) {
+        return stream != null && completedStreamError(stream.firstStatus, stream.firstErrno, stream.outstanding, stream.quarantined);
+    }
+    static boolean completedStreamError(int firstStatus, int firstErrno, int outstanding, boolean quarantined) {
+        return !quarantined && outstanding == 0 && (firstStatus < 0 || firstErrno > 0);
+    }
     void finishReceiveAudit(boolean drained) throws IOException {
         if (receiveAudit != null) receiveAudit.finishAfterDrain(drained);
     }
@@ -550,7 +619,20 @@ final class Tbs5530AutonomousSession {
                     .put("raw_received_bytes", capture == null ? 0 : capture.bytes())
                     .put("raw_capture", capture == null ? "NOT_STARTED" : capture.durable() ? "SYNCED_CLOSED" : "NOT_CERTIFIED")
                     .put("receive_audit", receiveAudit == null ? "NOT_STARTED" : receiveAudit.state())
-                    .put("receive_audit_bytes", receiveAudit == null ? 0 : receiveAudit.bytes());
+                    .put("receive_audit_bytes", receiveAudit == null ? 0 : receiveAudit.bytes())
+                    .put("history_guard_warning", historyWarning);
+            if (tsResult != null && tsResult.nativeStream != null) {
+                Tbs5530TsSmoke.StreamMetrics stream = tsResult.nativeStream;
+                json.put("native_stream", new JSONObject().put("bytes", stream.bytes)
+                        .put("submitted", stream.submitted).put("completed", stream.completed)
+                        .put("starvation_counter", stream.starvationCount).put("min_outstanding", stream.minOutstanding)
+                        .put("max_reap_resubmit_ns", stream.maxResubmitNanos).put("median_reap_resubmit_ns", stream.medianResubmitNanos)
+                        .put("elapsed_ns", stream.elapsedNanos).put("throughput_bytes_per_second", stream.bytesPerSecond())
+                        .put("first_status", stream.firstStatus).put("first_errno", stream.firstErrno)
+                        .put("outstanding", stream.outstanding).put("quarantined", stream.quarantined)
+                        .put("stop_reason", stream.stopReason).put("stale_prefix_bytes", 2048)
+                        .put("starvation_scope", "SOFTWARE_QUEUE_OBSERVATION_NOT_HARDWARE_COMPLETION_PROOF"));
+            }
             File permissionEvidence = new File(directory, "permission.json");
             JSONObject permission = permissionEvidence.isFile() ? new JSONObject(read(permissionEvidence, 8192)) : null;
             boolean matchingPermission = permission != null && id.equals(permission.optString("session"));
@@ -594,7 +676,9 @@ final class Tbs5530AutonomousSession {
                     .put("actual_length", urb.actualLength).put("slot", urb.slot).put("quarantined", urb.quarantined));
             boolean nativeKnown = urbKnown || ts != null && Tbs5530AutonomousPolicy.nativeReturnKnown(synchronous,
                     ts.reads, ts.lastReadResult, ts.lastReadErrno);
-            boolean completedError = urbKnown && urb.urbStatus < 0 || ts != null && ts.status == Tbs5530TsSmoke.Status.NO_DATA_OR_USB_FAILURE
+            boolean completedError = ts != null && ts.nativeStream != null
+                    ? completedStreamError(ts.nativeStream)
+                    : urbKnown && urb.urbStatus < 0 || ts != null && ts.status == Tbs5530TsSmoke.Status.NO_DATA_OR_USB_FAILURE
                     && Tbs5530AutonomousPolicy.completedReceiveError(synchronous, ts.reads, ts.lastReadResult, ts.lastReadErrno);
             json.put("native_return_known", nativeKnown);
             json.put("receive_error", !completedError ? "NOT_CLASSIFIED_AS_COMPLETED_ERROR"

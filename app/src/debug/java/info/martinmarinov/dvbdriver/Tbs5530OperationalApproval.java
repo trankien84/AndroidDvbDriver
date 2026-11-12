@@ -21,6 +21,11 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
         void write(String name, String text) throws IOException;
         boolean consumed(String id);
         void consume(String id) throws IOException;
+        default void requireLiveReceive() throws IOException { read(); }
+        default long receiveHeartbeat() throws IOException {
+            try { return new JSONObject(read()).getLong("heartbeat_elapsed_ms"); }
+            catch (JSONException error) { throw new IOException(error); }
+        }
     }
     interface Clock { long now(); }
     private final Storage storage;
@@ -37,6 +42,7 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
     private volatile boolean foreground = true, revoked, rf;
     private boolean consumed;
     private String approvalId;
+    private long receiveExpires = -1;
     private final StringBuilder audit = new StringBuilder();
 
     Tbs5530OperationalApproval(Context context, Tbs5530Frontend.Plan plan, String owner) throws IOException {
@@ -87,7 +93,9 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
                 + "|OUT=40/8A/0/0/0a00|timeoutMs=2000|BulkIN=82|bytes=" + limits.maxBytes
                 + "|reads=" + limits.maxReads + "|durationMs=" + limits.durationMillis
                 + "|readTimeoutMs=" + limits.readTimeoutMillis + "|chunkBytes=" + limits.readChunkBytes
-                + (nativeUrbReception ? "|readApi=USBDEVFS_URB_8X" + limits.readChunkBytes + "|queueDepth=8|drainMaxMs=1000|bulkStreamId=0|errorPayload=METADATA_ONLY"
+                + (limits.readApi == Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_STREAM
+                ? "|readApi=NATIVE_USBFS_STREAM|queueDepth=" + limits.queueDepth + "|drainMaxMs=1000|watchdogMs=100|stalePrefix=2048"
+                : nativeUrbReception ? "|readApi=USBDEVFS_URB_8X" + limits.readChunkBytes + "|queueDepth=8|drainMaxMs=1000|bulkStreamId=0|errorPayload=METADATA_ONLY"
                 : queuedReception ? "|readApi=USB_REQUEST_QUEUE_8X4096_API26|queueDepth=8|drainMaxMs=1000" : "|readApi=USBDEVFS_BULK_ERRNO")
                 + (endpointPreparation ? "|prepare=USBDEVFS_CLEAR_HALT:82|prepareMaxMs=5000"
                 + "|prepareSource=tbsdtv/linux_media@2ce787de9f6e81b4294692a45de15596ae2e1322:usb-urb.c:usb_urb_init:220" : "")
@@ -128,6 +136,13 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
     boolean eligible() { try { requireCurrent(); return !consumed; } catch (IOException error) { return false; } }
     public void requireCurrent() throws IOException {
         if (!foreground || revoked) throw new IOException("Control foreground/consent revoked");
+        if (consumed && tsLimits != null && tsLimits.readApi == Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_STREAM) {
+            storage.requireLiveReceive();
+            long now = clock.now(), beat = storage.receiveHeartbeat();
+            if (now < created || now >= receiveExpires || beat < heartbeatNotBefore || beat > now || now - beat >= 2000
+                    || !storage.consumed(approvalId)) throw new IOException("Control approval expired or host heartbeat stale");
+            return;
+        }
         try {
             JSONObject permit = new JSONObject(storage.read()); long now = clock.now();
             if (now < created || now - created >= 300000 || permit.getInt("protocol") != 2
@@ -173,7 +188,11 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
     private void consumeScope() throws IOException {
         if (consumed) throw new IOException("Control program already consumed");
         requireCurrent();
-        try { approvalId = new JSONObject(storage.read()).getString("approval_id"); }
+        try {
+            JSONObject permit = new JSONObject(storage.read());
+            approvalId = permit.getString("approval_id");
+            receiveExpires = permit.getLong("expires_elapsed_ms");
+        }
         catch (JSONException error) { throw new IOException(error); }
         storage.consume(approvalId); consumed = true;
         storage.write("phase31-audit-" + approvalId + ".jsonl", "{\"event\":\"CONSUMED\",\"plan_sha256\":\"" + planHash + "\"}\n");

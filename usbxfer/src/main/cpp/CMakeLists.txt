@@ -22,7 +22,9 @@ IF(TBS5530_USBFS_DIAGNOSTIC)
     ADD_LIBRARY(Tbs5530UsbfsDiagnostic SHARED
         ../../debug/cpp/native_usbfs_core.c
         ../../debug/cpp/native_usbfs_jni.c
-        ../../debug/cpp/native_fx2_control.c)
+        ../../debug/cpp/native_fx2_control.c
+        ../../debug/cpp/native_usbfs_stream.c
+        ../../debug/cpp/native_usbfs_stream_jni.c)
     TARGET_COMPILE_FEATURES(Tbs5530UsbfsDiagnostic PRIVATE c_std_11)
     TARGET_COMPILE_OPTIONS(Tbs5530UsbfsDiagnostic PRIVATE -Wall -Wextra -Werror)
 ENDIF()

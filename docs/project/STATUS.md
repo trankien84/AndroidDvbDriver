@@ -1,5 +1,59 @@
 # Port TBS5530 sang Android — trạng thái hiện tại
 
+## 2026-11-12, chốt B3 sau năm lượt hữu hạn — Có TS sync liên tục, chưa TS sạch; phần cứng đã đóng
+
+**Mục tiêu nhận TS sạch/ổn định chưa đạt.** Hai lượt chuẩn bị đầu không tới I/O tuner; sau quyền tăng ngân sách và card mới được OK B3, ba lượt nhận thật đều bootstrap/reload 132/132, first data status/errno 0, không detach và drain sạch. Người dùng đã rút tuner/ngắt cả nguồn sau lượt cuối. Không còn lượt được chạy trong tổng năm, không tự tiếp tục vô hạn.
+
+| Cấu hình nhận | Byte / Mbps | Data URB status 0 | Sync break sau prefix | CC / TEI | PAT / PMT | Kết quả |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| 16×16384 | 1835008 / 7,336 | 112 | 0 | 166 / 0 | 3 / 0 | FAIL chất lượng/rate |
+| 32×16384 | 1720320 / 6,879 | 105 | 0 | 140 / 0 | 1 / 14 | FAIL CC/rate; PID-service khớp Windows |
+| 16×65536 | 917504 / 3,667 | 14 | 0 | 50 / 66 | 0 / 0 | FAIL; mã hóa/header lỗi cũng xuất hiện |
+
+Vòng native đã bỏ khoảng Java xen syscall: reap→resubmit tối đa 0,136 ms, nhưng có gap 170–406 ms (16 KiB) hoặc 582/905 ms (64 KiB), chưa biết nguồn dừng hay host/worker bị trì hoãn. Counter rủi ro 6/5/2 không đo queue phần cứng. Không có B3_PASS_SINGLE_RUN, ROOT_CAUSE_CONFIRMED hoặc TS_SMOKE_PASS. Đã sửa report offline để không gọi cancellation −2 khi drain là lỗi data; không sửa hồi tố report thật hoặc cài candidate mới Samsung.
+
+Gates cuối: analyzer 42, native host 74 cases, JVM app 99/driver 485 PASS + 5 SKIP/usbxfer 49; debug/release/AndroidTest/app lint, JNI bốn ABI, ELF 16 KiB và release isolation PASS. Candidate report cuối kiểm emulator focused 12/12 PASS, không cài Samsung. Giữ FAIL driver lint cũ, bốn lifecycle emulator và fake heartbeat timeout. Evidence báo cáo cuối ở bundle main `phase31-b3-main-20261112-204012-2baacf7b` ngoài Git; [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md), [ADR-054/055](DECISIONS.md) ghi chi tiết.
+
+**Bước tiếp theo trong Phase 3.1:** thiết kế telemetry RAM cho poll/EAGAIN/scheduling và timestamp phù hợp để phân biệt gap, kiểm offline rồi mới cân nhắc card hardware hữu hạn mới. Không tiếp tục tăng buffer hoặc chuyển production từ ba lượt FAIL. Phase 4 chỉ là kế hoạch đã ghi bên dưới; không stage/commit/push.
+
+## 2026-11-12, lượt tổng 3 B3 — Đã nhận 1,835 MB liên tục sync, vẫn lỗi CC/thiếu PMT
+
+Permission-first đã tránh mất foreground ban đầu: người dùng xử lý hộp thoại mở app trước grant, Activity permission-only xác minh quyền thật. Card mới được OK B3 với tổng tối đa năm lượt (hai refusal trước I/O đã consume, còn ba), không chạy vô hạn hoặc xóa manifest cũ. APK/native/firmware/frontend không đổi; chỉ bước chuẩn bị người dùng khác.
+
+Lượt tổng 3 bootstrap/reload đều 132/132, không detach; native nhận 1835008 byte trong 2,001 giây, first status/errno 0, dừng deadline, starvation risk 6, throughput khoảng 7,34 Mbps. Max/median reap→resubmit 135769/24692 ns; submitted/completed 128 gồm drain. Outstanding 0/quarantined=false và DRAIN_CONFIRMED, người dùng đã rút/ngắt nguồn ≥5 giây. Không `-75` đầu hoặc firmware uncertainty mới quan sát.
+
+Analyzer sau prefix 2048: một đoạn/0 chỗ đứt, 9749 packets, CC 166 lỗi, TEI/mã hóa 0, PAT hợp lệ 3 nhưng PMT 0. TSDuck nhận TS/PAT, chưa đủ service structure. Không TS_SMOKE_PASS hoặc ROOT_CAUSE_CONFIRMED. Đang đối chiếu audit native để chọn queue/buffer trong allowlist; còn tối đa hai lượt trong tổng năm, mỗi lượt cold riêng. Giữ tuner rút tới thông báo tiếp theo; không stage/commit/push.
+
+## 2026-11-12, sau OK B3 — Lượt chuẩn bị 1 dừng trước grant, chưa tuner I/O
+
+Người dùng duyệt card e397f1fd… và xác nhận tuner rút/ngắt cả nguồn ≥5 giây, màn hình mở. Đã install-r đúng APK `1a15959d…` một lần, installed SHA/witnesses trước sau đúng. Helper consume ordinal 1 rồi launch Activity, nhưng guard foreground chỉ nhận trường `mResumedActivity` cũ nên dừng `B3_FOREGROUND_UNVERIFIED`. Samsung API36 thực dùng `ResumedActivity` global và `topResumedActivity` theo display. Không có yêu cầu cắm; người dùng xác nhận tuner vẫn rút/nguồn tắt.
+
+Chưa stage firmware hoặc publish grant; thư mục session đọc lại chỉ có ledger, không grant/firmware/report/bootstrap-consumed. Không bootstrap/reload/URB/raw B3, do đó không kết quả TS hoặc nguyên nhân gốc. Receipt cũ đã đóng phiên theo guard bảo thủ, được giữ nguyên; không reset/xóa để chạy lại. Tổng ngân sách ba lượt đã dùng một lượt chuẩn bị, còn tối đa hai; sửa helper offline/hash card là bước tiếp, không tự dùng duyệt hash cũ cho code mới.
+
+`TS_SMOKE_PASS=false`, root cause chưa xác nhận. Không stage/commit/push hoặc thay firmware/frontend/native đã freeze. Xem [WORKLOG.md](WORKLOG.md) và evidence main. Các kết quả phần mềm bên dưới vẫn đúng phạm vi, không biến lần bị chặn trước grant thành phép thử native.
+
+## 2026-11-12, B3 offline tới 21:56 +07 — Candidate đã build và kiểm; chờ card/OK B3
+
+**Vòng nhận liên tục debug đã triển khai và qua các gate phần mềm chính; Samsung B3 chưa chạy.** Mặc định 16×16384, 4 MiB hoặc 2 giây, watchdog 100 ms/heartbeat thật 2 giây, audit/parser/raw sau drain; pipeline firmware/frontend B2 giữ nguyên và đường cũ vẫn có. [ADR-054/055](DECISIONS.md) ghi ranh giới an toàn, quyền theo phiên và giới hạn bộ đếm starvation phần mềm.
+
+Kiểm cuối: analyzer 42/42; native stream host 74 cases; app JVM 96 PASS, driver 484 PASS/5 SKIP, usbxfer 49 PASS; debug/release/AndroidTest/app lint PASS; JNI bốn ABI/release isolation/ELF 16 KiB hai ABI 64-bit PASS; emulator focused 12/12 PASS. Driver lint vẫn FAIL cũ ở UsbPermissionObtainer.java:105, lifecycle emulator 1 PASS/4 FAIL và fake heartbeat Git Bash timeout giữ nguyên. Không tuyên bố mọi test đều PASS; xem [TEST-MATRIX.md](TEST-MATRIX.md).
+
+Mô phỏng nguồn 27,5 Mbps/FIFO 2048 tái hiện legacy 35 ms có 15 seams gần 2048; vòng mới với jitter 30 ms thu 4 MiB không rơi, jitter vượt reserve báo rủi ro. Đó là kiểm mô hình, không TS Samsung. Windows cold2 còn CC/TEI lỗi và bitrate chuẩn UNKNOWN nên không gọi đối chứng sạch. Hai B2 lịch sử vẫn INVALID_TS; root cause chưa xác nhận, `TS_SMOKE_PASS=false`.
+
+Đã đọc Samsung SM-X926B/API36/boot47/Awake để điền card, không install/launch/tuner I/O. Emulator sở hữu đã đóng và không cổng listener. Card ngoài Git đã khóa SHA `e397f1fd804d336a41b7983bd0d1bb56ba994be92edeb83b943f1aad73ab17cc`, source manifest 87 tệp và artifact manifest đã đối soát; schema ba lượt/cấu hình hợp lệ. Bước tiếp: trình card và đợi đúng `OK B3`, rồi mỗi lượt người dùng ngắt cả nguồn chữ Y ≥5 giây; tối đa ba lượt, `-75` hoặc detach sau reload đóng phiên. Không stage/commit/push, không Phase 4, VM hoặc sửa references.
+
+## 2026-11-12, nhiệm vụ B3 từ 20:31 +07 — Analyzer đã kiểm, vòng nhận liên tục đang triển khai
+
+Baseline đã kiểm đúng branch `chore/modernize-android-build`, HEAD `9bee570aa5e59879e11b7c5b8b1086b80c5fb05b`, tree sạch lúc bắt đầu. [ADR-054 và ADR-055](DECISIONS.md) mở phạm vi B3 theo yêu cầu mới; giữ an toàn firmware/vendor/nguồn và đường legacy. Cửa sổ permission 30 giây đã kiểm JVM 9/9 PASS; native legacy host baseline PASS. Chưa đủ gates cho candidate B3.
+
+Analyzer mới 42/42 PASS xác nhận hai raw B2 có 17 đoạn/16 chỗ đứt gần 2048, CC trong đoạn 0/104 và 0/109. Windows cold2 đúng SHA sau prefix không mất sync nhưng có 1705 lỗi CC/3054 TEI/14 dịch vụ, không phải đối chứng sạch. PCR chuẩn UNKNOWN; 27,487 Mbps chỉ là ước lượng chẩn đoán có điều kiện. Không nhận các giả định đầu thành bằng chứng mới; xem [RESEARCH.md](RESEARCH.md).
+
+Đang triển khai `NATIVE_USBFS_STREAM`, watchdog và helper ngân sách phiên; chưa freeze APK/card, chưa cài hoặc thử Samsung trong nhiệm vụ này. Phần cứng B3 NOT RUN, `TS_SMOKE_PASS=false`, root cause chưa xác nhận. Chỉ trình card và đợi `OK B3` sau kiểm phần mềm; tối đa ba lượt với power-cycle do người dùng thực hiện. Không stage/commit/push, không VM hoặc sửa references.
+
+### Bước tiếp theo đề xuất — Phase 4
+
+Chỉ là kế hoạch sau B3 đạt yêu cầu: tích hợp TBS5530 vào framework production `DvbUsbDevice` với bootstrap ảnh gốc và reload sau SET_CONFIGURATION, vòng nhận liên tục, PLP auto/manual, rồi thử độc lập OnePlus 7. Không triển khai Phase 4 trong nhiệm vụ này.
+
 ## 2026-11-12, sau run audit 19:40–19:41 +07 — Vẫn INVALID_TS; đã thu chứng cứ, dừng sửa theo yêu cầu
 
 **Đã chạy đúng một preparation/B2 mới được duyệt, nhận 65.536 byte nhưng TS vẫn lỗi.** Bootstrap/reload đều 132/132, 16 URB đều status 0/actual 4096/errno 0, audit quan sát 35 records/3903 byte có marker và hash seal đúng, SYNCED_CLOSED. App vẫn mất đồng bộ 16 lần, PAT/PMT 0; không TS_SMOKE_PASS hoặc ROOT_CAUSE_CONFIRMED. Bỏ ghi audit từng boundary chưa đủ làm mẫu TS sạch, chưa biết nguyên nhân gốc.

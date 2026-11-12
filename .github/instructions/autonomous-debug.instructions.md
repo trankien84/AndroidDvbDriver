@@ -5,6 +5,14 @@ applyTo: "app/src/debug/**,drivers/src/debug/**/tbs5530/**,tools/*Autonomous*,do
 ---
 # Explicit session authorization, not a guard bypass
 
+## B3 receive-only policy exception (ADR-054)
+
+The user-approved B3 workflow supersedes the historical procedural restrictions below only for the debug `NATIVE_USBFS_STREAM` path. A frozen card and `OK B3` authorize at most three Samsung SM-X926B attempts, each bound to a user-confirmed cold power-cycle of at least five seconds. Keep the original firmware image, bootstrap and post-SET_CONFIGURATION reload plans, MANUAL PLP0, drive 54/54 and terrestrial 8A 0A00 unchanged. Stop the session on -75 or detach after reload; uncertain firmware never permits an automatic retry.
+
+Before receive, fully validate grant, live heartbeat, foreground, USB permission, exclusive owner and frontend lock. During native receive use an in-memory permit plus a watchdog interval no greater than 200 ms; retain the two-second heartbeat timeout and read its real source. Stop, discard and drain on invalidation. No audit serialization, parser or file writes in the native hot loop. Permit 8–32 URBs, 4096–65536 bytes per URB in multiples of 512, at most 16 MiB and ten seconds. Reuse URB addresses only after successful reap. Retain the old receive APIs unchanged.
+
+Historical ledger/history/reload-store mismatch alone is a report warning for B3, not a prerequisite recovery workflow. Preserve old bytes and audit the new bounded session; never manufacture physical recovery or permit an uncertain attachment. Allow 30 seconds for human permission dialogs. Keep grant TTL 300 seconds; do not count human waiting as the legacy 285-second upload preflight reserve. These exceptions do not authorize EEPROM, LNB/DC, satellite, arbitrary vendor writes, firmware patches, ownership changes, VM/snapshots or toolchain changes. Legacy paths retain their existing policy.
+
 - A user may explicitly authorize one supervised development session covering verified routine operations. Record its scope and limits; do not treat this file, a USB descriptor, an intent or a previous session's grant as authorization. Preserve the legacy manual workflow.
 - `AUTO_VERIFIED` is limited to the approved model, VID:PID `734c:5530`, current boot/attachment generation/owner, exact reviewed firmware and frontend plans, and K36 DVB-T2 `594000000 Hz` / `8000000 Hz` / AUTO on observed chip `0x197`. `EXPERIMENTAL_DIAGNOSTIC` adds only specifically allowlisted receive-transport experiments; it never authorizes arbitrary register writes.
 - Lock firmware to SHA-256 `b97cf208bb586f706b26aa5450de6bb97375a3e3eabe833cddb0ae3a4f69d0dc`, 8192 bytes and the source-confirmed 132-transfer dual-reset RAM plan. Read fresh raw descriptors and Android metadata. Upload at most once per valid FX2_DEFAULT attachment; skip upload for operational profiles. Never bundle firmware into APKs or infer its redistribution license.

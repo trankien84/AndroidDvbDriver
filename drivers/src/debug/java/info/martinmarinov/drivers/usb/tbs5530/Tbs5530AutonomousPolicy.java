@@ -21,6 +21,7 @@ public final class Tbs5530AutonomousPolicy {
     private final Clock clock;
     private final Ledger ledger;
     private final long created;
+    private final boolean nativeStream;
     private long lastNow, heartbeat, expires, generation = -1;
     private String attachment, owner;
     private Profile profile;
@@ -30,6 +31,10 @@ public final class Tbs5530AutonomousPolicy {
     private final Set<String> attempts = new HashSet<>(), uploads = new HashSet<>();
 
     public Tbs5530AutonomousPolicy(Clock clock, Ledger ledger) throws IOException {
+        this(clock, ledger, false);
+    }
+    public Tbs5530AutonomousPolicy(Clock clock, Ledger ledger, boolean nativeStream) throws IOException {
+        this.nativeStream = nativeStream;
         this.clock = clock; this.ledger = ledger;
         created = lastNow = clock.now();
         if (created < 0 || created > Long.MAX_VALUE - MAX_SESSION_MS) throw new IOException("Invalid session clock");
@@ -138,7 +143,7 @@ public final class Tbs5530AutonomousPolicy {
     public synchronized void requireUploadStartBudget() throws IOException {
         requireSession();
         if (state != State.FX2_DEFAULT || !permission || owner != null || uploads.contains(attachment)
-                || expires - time() < 285000) throw new IOException("Upload forbidden or insufficient start budget");
+                || expires - time() < (nativeStream ? 30000 : 285000)) throw new IOException("Upload forbidden or insufficient start budget");
     }
     public synchronized void beginUpload(String attempt) throws IOException {
         requireUploadStartBudget();

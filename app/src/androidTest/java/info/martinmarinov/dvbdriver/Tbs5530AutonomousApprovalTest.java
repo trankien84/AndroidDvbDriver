@@ -18,7 +18,7 @@ import static org.junit.Assert.*;
 /** Isolated/in-memory permissions only. Never supplies a host session grant or a USB device. */
 @RunWith(AndroidJUnit4.class)
 public class Tbs5530AutonomousApprovalTest {
-    static final class Storage implements Tbs5530OperationalApproval.Storage {
+    static class Storage implements Tbs5530OperationalApproval.Storage {
         final Map<String, String> files = new HashMap<>(); final Set<String> used = new HashSet<>();
         JSONObject permit;
         public String read() { return permit.toString(); }
@@ -31,6 +31,25 @@ public class Tbs5530AutonomousApprovalTest {
                     .put("physical_current", true).put("approved_maximum_ms", permit.getLong("maximum_ms"))
                     .put("expires_elapsed_ms", 301000).put("heartbeat_elapsed_ms", 1000);
         }
+    }
+    @Test public void b3CachedPermitStillChecksRealHeartbeatAndLiveOwnerAfterConsume() throws Exception {
+        final long[] now = {1000}, beat = {1000}; final boolean[] live = {true};
+        final int[] reads = {0};
+        Storage store = new Storage() {
+            @Override public String read() { reads[0]++; return super.read(); }
+            @Override public void requireLiveReceive() throws IOException { if (!live[0]) throw new IOException("Permission revoked"); }
+            @Override public long receiveHeartbeat() { return beat[0]; }
+        };
+        Tbs5530TsSmoke.Limits limits = new Tbs5530TsSmoke.Limits(4194304, 65536, 2000, 500, 16384, false,
+                Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_STREAM, false, false, 16);
+        Tbs5530OperationalApproval approval = new Tbs5530OperationalApproval(store, () -> now[0], null, limits, 1);
+        store.authorize(); store.permit.put("explicit_native_urb_reception", true); approval.rfIn(true);
+        approval.consume(limits, 1); int before = reads[0];
+        approval.requireCurrent(1); assertEquals(before, reads[0]);
+        now[0] = 3000; assertThrows(IOException.class, approval::requireCurrent);
+        beat[0] = now[0]; approval.requireCurrent(1);
+        live[0] = false; assertThrows(IOException.class, approval::requireCurrent);
+        assertEquals(before, reads[0]);
     }
     @Test public void sonyReceiveScopeHasDistinctTranscriptAndCannotReuseOrdinaryNativePermit() throws Exception {
         Storage store=new Storage();

@@ -1,5 +1,101 @@
 # TBS5530 test matrix
 
+## 2026-11-12, B3 cuối — Năm lượt đã đóng; ba capture đều không PASS
+
+| Kiểm cuối | Kết quả | Phân biệt bắt buộc |
+| --- | --- | --- |
+| Lượt tổng 1/2 | REFUSED trước tuner I/O | Foreground parser host / hộp thoại mở app; không coi native failure |
+| Lượt tổng 3, 16×16384 | FAIL chất lượng/rate | 112 data status 0, 1835008 byte/7,336 Mbps; sync 0/CC 166/TEI 0/PAT 3/PMT 0 |
+| Lượt tổng 4, 32×16384 | FAIL CC/rate | 105 data status 0, 1720320 byte/6,879 Mbps; sync 0/CC 140/TEI 0/PAT 1/PMT 14; PID/PCR/ES khớp Windows |
+| Lượt tổng 5, 16×65536 | FAIL, không cải thiện | 14 data status 0, 917504 byte/3,667 Mbps; sync 0/CC 50/TEI 66/scrambled 6/PAT 0/PMT 0 |
+| TSDuck ba capture | Nhận TS; không chứng nhận sạch | Invalid sync 0, services 14/14/0; lượt 3 service suy từ PAT khi PMT 0, không đủ structure |
+| Data / drain completion | 231 data thành công / 64 cancellation | Status −2 của drain không phải first data error; không payload drain giao parser |
+| Bootstrap/reload ba lượt nhận | PASS có phạm vi 132/132 mỗi loại | Không detach sau reload, không −75 ở lỗi đầu; không root cause confirmed |
+| Cleanup | PASS cả ba | Outstanding0/quarantined=false, người dùng rút/ngắt nguồn sau drain |
+| Report classification sau live | PASS regression offline | Risk→INVALID_TS, first data status/errno thay last discard; không cài candidate mới Samsung |
+| JVM cuối sau classification | App 99 / driver 485 PASS + 5 SKIP / usbxfer 49 | Driver tổng 490, không đổi SKIP thành PASS |
+| Build/lint/release/ABI sau sửa | PASS có phạm vi | Debug/release/AndroidTest/app lint, JNI bốn ABI/ELF 16 KiB/release isolation; standalone driver lint vẫn FAIL cũ |
+| Candidate classification / emulator | PASS 12/12 focused | Cài riêng emulator, đã đóng process; không dùng lượt trước thay rerun |
+| Hardware với APK sửa classification | NOT RUN | APK mới chỉ host/emulator, không hồi tố kết quả ba run |
+| Root cause / TS smoke | UNCONFIRMED / false | Không lượt SINGLE_RUN PASS, không hai lượt PASS độc lập |
+| Budget cuối | Đã dùng5/5 | User duyệt tăng hữu hạn; không tự chạy thêm từ yêu cầu tiếp tục chung |
+
+Giữ các FAIL lint/lifecycle/fake heartbeat và log trước sửa. Native audit chưa đo kernel completion/scheduling; counter 6/5/2 là horizon risks, không hardware starvation count xác nhận. Report final và raw/analyzer/TSDuck/native/EP0/handoff/manifests ngoài Git ở bundle main.
+
+## 2026-11-12, B3 lượt tổng 2 và 3 — Một refusal foreground, một capture còn mất gói
+
+| Kiểm | Kết quả thật | Giới hạn |
+| --- | --- | --- |
+| Lượt tổng 2 sau sửa host foreground | FAIL trước I/O tuner | Hộp thoại mở app làm FOREGROUND_LOST tại WAIT_DEVICE; firmware/reload/native null, đã drain |
+| Permission-first trước lượt tổng 3 | PASS quyền thật | OS_PERMISSION_VERIFIED/AUTO_PERMISSION_HANDLED_BY_OS, không đoán từ việc có/không dialog |
+| Bootstrap/reload lượt tổng 3 | PASS 132/132 mỗi loại | Reload COMPLETE, không detach, final wait khoảng 1621 ms |
+| Native receive 16×16384 | Có dữ liệu, chưa chất lượng | 1835008 byte/2,001 giây, first status 0/errno 0, deadline, starvation risk 6 |
+| Throughput | FAIL so tham chiếu có điều kiện | ~7,34 Mbps, ngoài ±10% của khoảng27,5 Mbps |
+| Analyzer sau prefix | FAIL CC/PMT | 9749 packets, một đoạn/0 breaks, CC 166/TEI 0/scrambled 0, PAT 3/PMT 0 |
+| TSDuck | Nhận TS/PAT, chưa PASS service | Exit0 không có nghĩa TS sạch; giữ continuity report |
+| Drain/cleanup | PASS | 128 submitted/completed gồm drain, outstanding 0/quarantined=false; user rút/ngắt nguồn sau thông báo |
+| `-75`/detach sau reload | Không quan sát ở lỗi đầu | Last snapshot -2 do discard khác first completion error |
+| TS_SMOKE / root cause | NOT SATISFIED / UNCONFIRMED | Không chứng nhận từ sync liền hoặc transport có bytes |
+| Ngân sách user tăng và duyệt | Tổng tối đa5, đã dùng3 | Card cd79b751…, còn2; hai refusal cũ giữ nguyên, không reset |
+
+Evidence raw/audit/report/handoff/EP0 có SHA host-tablet trong export manifest, bundle main ngoài Git. Mọi bước chọn cấu hình tiếp theo chỉ receive-side trong card, sau phân tích và cold thực mới; không tự tăng ngân sách quá năm.
+
+## 2026-11-12, sau OK B3 — Lượt chuẩn bị 1 không tới tuner
+
+| Kiểm thực | Kết quả | Giới hạn |
+| --- | --- | --- |
+| Card và cold confirmation | PASS quyền một phiên | OK B3, tối đa ba lượt; user xác nhận nguồn tắt/tuner rút ≥5 giây |
+| Install-r candidate | PASS một lần | APK 1a15959d… installed đúng SHA, sáu witnesses trước/sau không đổi |
+| Launch/challenge | PASS có phạm vi | Native stream 16×16384, frontend B2, chưa grant |
+| Foreground host guard | FAIL B3_FOREGROUND_UNVERIFIED | Parser chỉ nhận mResumedActivity, Samsung thực có global ResumedActivity đúng target |
+| Bootstrap/reload/receive | NOT STARTED | Chưa stage firmware hoặc grant; session dir chỉ ledger; user chưa cắm tuner |
+| Budget receipt | Một ordinal đã consume | Receipt cũ closed/drained=false/pre_io_refusal=false được giữ nguyên, không reset/rearm |
+| User hậu kiểm vật lý | Xác nhận tuner vẫn rút/nguồn tắt | Không auto-tap/default hoặc I/O tiếp |
+| TS_SMOKE / root cause | NOT SATISFIED / UNCONFIRMED | Không có raw/URB B3 để đánh giá |
+
+Chỉ sửa guard/process offline tiếp theo; không lấy failure foreground làm native failure hoặc tiếp tục qua uncertain hardware. Tổng phiên còn tối đa hai lượt, mọi thay đổi phải có provenance/hash/evidence giữ nguyên ngân sách.
+
+## 2026-11-12, B3 offline chốt phần mềm tới 21:56 +07 — Chưa thử Samsung
+
+| Kiểm mới | Kết quả thật | Giới hạn / evidence |
+| --- | --- | --- |
+| Analyzer | PASS 42/42 | Python stdlib, chạy lại trên cây cuối |
+| Native stream host | PASS 74 cases | Real C core + fake TS/FIFO/deadline/status/drain, không hardware |
+| Mô phỏng legacy / mới | PASS kiểm mô hình | Legacy 15 seams gần 2048; mới jitter 30 ms/drops 0/4 MiB; latency 150 ms/drops 1095918/risk 4 |
+| App / driver / usbxfer JVM | 96 PASS / 484 PASS + 5 SKIP / 49 PASS | Driver tổng 489, không gọi SKIP là PASS; stream smoke 33 tests |
+| Review close đồng thời | FAIL trước sửa, PASS sau sửa | Hai closer từng có after-free; fix recheck closed, direct JUnit 17/17 và Gradle full PASS |
+| Build debug/release/AndroidTest | PASS | Sau LF 361 tasks/27 executed, 2m05s; giữ toolchain pins |
+| App lint debug/release | PASS | Không đồng nghĩa standalone driver lint PASS |
+| Driver lint debug/release | FAIL cũ tái hiện | UnspecifiedRegisterReceiverFlag tại UsbPermissionObtainer.java:105; không suppress |
+| ELF/JNI bốn ABI / release isolation | PASS | Stream + legacy symbols; hai ABI 64-bit LOAD 0x4000; release không debug lib/markers |
+| Emulator focused B3/JNI | PASS 12/12 | Synthetic grant/queue/report/heartbeat/negative fd, không USB |
+| Emulator focused đầu | 26 PASS/3 FAIL trên 29 | Một legacy heartbeat fixture hết hạn, hai JNI reflection fixture cũ; giữ log |
+| Emulator lifecycle | 1 PASS/4 FAIL trên 5 | Model ngoài allowlist, không nới guard hoặc xóa failure |
+| Host B3 helper / B2 / coordinator | PASS 111/111, 19/19, 41/41 | Fake transport/export 4 MiB byte-exact; không ADB thật |
+| Host heartbeat Git Bash fixture | FAIL timeout 5000 ms | Chưa xác nhận regression logic; không retry/nới timeout hoặc đổi runtime |
+| Owned emulator cleanup | PASS | Process exit 0, ports 5580/5581 không listener |
+| Samsung card inventory | PASS chỉ đọc | SM-X926B/API36/boot47/Awake, không app install/launch hoặc tuner |
+| B3 lượt 1/2/3 | NOT RUN | Chờ card/hash và OK B3; không root cause/TS smoke |
+
+Candidate code có kết quả phần mềm ở trên nhưng còn giới hạn lint/lifecycle/heartbeat fixture đã ghi. Raw diff-check tools còn CR do hai pin PowerShell giữ CRLF; normalized per-command check PASS, không đổi cấu hình Git. Bundle main `phase31-b3-main-20261112-204012-2baacf7b` giữ logs/XML/hashes, bundle analyzer riêng giữ đối chứng. Không biến historical failures thành PASS.
+
+## 2026-11-12, B3 offline đang triển khai — Kết quả mới, chưa phần cứng
+
+| Kiểm | Kết quả thật | Giới hạn |
+| --- | --- | --- |
+| Baseline Git | PASS | Đúng branch/HEAD `9bee570…`, tree sạch lúc bắt đầu |
+| Cửa sổ permission 30 giây | PASS 9/9 JVM | Biên thời gian/polling/owner/uncertain; không USB thật |
+| Native legacy core | PASS host | Fault injection cả 8×4096 và 8×8192, GCC 16.2.0; không vòng mới |
+| Native FX2 shared plan | PASS host 132/132 | 8196 byte, không syscall USB |
+| Analyzer stdlib | PASS 42/42 | Synthetic sync/cut/loss/CC/PSI/pcap/bounds/prefix |
+| Raw B2 thứ nhất / thứ hai | FAIL tiêu chí TS sạch, phân tích PASS | 17 đoạn/16 chỗ đứt mỗi mẫu, CC trong đoạn 0/104 và 0/109; PAT/PMT 0 |
+| Windows cold2 | Không phải đối chứng sạch | Sau prefix sync liền, CC 1705/TEI 3054, 14 chương trình; PCR chuẩn UNKNOWN |
+| Native stream mới / watchdog / mô phỏng | NOT RUN ở mốc này | Đang triển khai, không lấy legacy PASS thay thế |
+| Full gates / emulator candidate B3 | NOT RUN ở mốc này | Giữ lint/lifecycle FAIL cũ, chưa rerun |
+| Samsung B3 | NOT RUN | Chưa card/hash/OK B3, không install hoặc tuner I/O |
+
+Evidence analyzer ở bundle `phase31-b3-offline-20261112-204528-cc4555f6`; evidence main ở `phase31-b3-main-20261112-204012-2baacf7b`, ngoài Git dưới D:\TSDuck. Không thay lịch sử PASS/FAIL dưới đây.
+
 ## 2026-11-12, audit quality live 19:40–19:41 +07 — INVALID_TS, đã đóng run
 
 | Kiểm thực | Kết quả | Evidence / giới hạn |

@@ -113,6 +113,7 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
                 intent.getBooleanExtra("control_mirror", false), intent.getBooleanExtra("explicit_set_interface_alt0", false),
                 token, intent.getBooleanExtra(Tbs5530AutonomousLaunch.CONTROL_ONLY, false),
                 intent.getBooleanExtra("sony_ts_output_readback",false), intent.getStringExtra("frontend_experiment"));
+        if (session.nativeStream) session.configureStream(intent.getIntExtra("b3_queue_depth", 16), intent.getIntExtra("b3_urb_bytes", 16384));
         setIntent(new Intent(intent));
         if (foreground) { session.policy.foreground(true); ui.post(tick); }
     }
@@ -465,7 +466,7 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
                                 Tbs5530FirmwareValidation.ENTRY, Tbs5530FirmwareValidation.Format.RAW_LINEAR);
                     }
                     try {
-                        handoff.reloadBeforeFrontend(firmware, session.reloadLedger, session.reloadEpochKey(), session::require,
+                        handoff.reloadBeforeFrontend(firmware, session.reloadLedger, session.reloadEpochKey(), session::requireReload,
                                 session.bootstrapProof, new Tbs5530Fx2Reload.Clock() {
                                     public long nanos() { return SystemClock.elapsedRealtimeNanos(); }
                                     public void pause(int millis) throws IOException {
@@ -513,11 +514,13 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
                     observeSony(Tbs5530SonyTsOutputReadback.Stage.AFTER_LOCK);
                     handoff.sonyReadbackHook(()->observeSony(Tbs5530SonyTsOutputReadback.Stage.BEFORE_FIRST_URB));
                 }
-                Tbs5530TsSmoke.Limits limits = new Tbs5530TsSmoke.Limits(65536, 16, 5000, 500,
+                Tbs5530TsSmoke.Limits limits = session.nativeStream
+                        ? new Tbs5530TsSmoke.Limits(4 * 1024 * 1024, 65536, 2000, 500, session.streamUrbBytes, false, session.readApi, false, false, session.streamQueueDepth)
+                        : new Tbs5530TsSmoke.Limits(65536, 16, 5000, 500,
                         Tbs5530AutonomousPlans.chunkBytes(session.readApi), false, session.readApi, session.explicitSetInterfaceAlt0, session.sonyTsOutputReadback);
                 approval = session.approval(null, limits); session.policy.transition(Tbs5530AutonomousPolicy.State.TS_CAPTURE);
                 Tbs5530TsSmoke.Result ts;
-                try (Tbs5530AutonomousCapture raw = new Tbs5530AutonomousCapture(session.directory, limits.maxBytes)) {
+                try (Tbs5530AutonomousCapture raw = new Tbs5530AutonomousCapture(session.directory, limits.maxBytes, session.nativeStream)) {
                     session.capture = raw;
                     ts = handoff.smoke(current(), SystemClock::elapsedRealtimeNanos, raw).run(limits);
                     preserveNativeReceiveSnapshot();
@@ -561,6 +564,8 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
         if (session != null && handoff != null) session.nativeReceiveSnapshot = handoff.nativeReceiveSnapshot();
     }
     private boolean completedNativeReceiveError() throws IOException {
+        if (session.tsResult != null && session.tsResult.nativeStream != null)
+            return Tbs5530AutonomousSession.completedStreamError(session.tsResult.nativeStream) && handoff.cleanupFailure() == null;
         Tbs5530OperationalHandoff.NativeReceiveSnapshot snapshot = session.nativeReceiveSnapshot;
         if (snapshot == null || !snapshot.completionKnown() || snapshot.urbStatus >= 0
                 || snapshot.quarantined || snapshot.outstanding != 0 || handoff.cleanupFailure() != null) return false;

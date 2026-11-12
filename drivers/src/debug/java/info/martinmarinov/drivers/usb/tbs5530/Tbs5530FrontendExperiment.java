@@ -17,7 +17,8 @@ public enum Tbs5530FrontendExperiment {
 
     public void requireOptions(String readApi, boolean mirror, boolean alt0, boolean controlOnly,
                                boolean sonyReadback) throws IOException {
-        if (this != BASELINE_AUTO && (!"NATIVE_USBFS_URB_8X4096".equals(readApi) || !mirror
+        boolean stream = this == B2_RELOAD_AFTER_SET_CONFIG && "NATIVE_USBFS_STREAM".equals(readApi);
+        if (this != BASELINE_AUTO && ((!"NATIVE_USBFS_URB_8X4096".equals(readApi) && !stream) || !mirror
                 || alt0 || controlOnly || sonyReadback))
             throw new IOException("MANUAL_PLP0_K36 requires native4096/mirror and no other experiment");
     }

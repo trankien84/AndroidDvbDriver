@@ -57,7 +57,7 @@ try{& $path @base -ApproveOneNewB2 -ProofOfGuardPassed -PhysicalRecoveryConfirme
 $waitCall=@($ast.FindAll({param($n)$n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -ceq 'Wait-PermissionFirst'},$true))
 $runtimeCall=@($ast.FindAll({param($n)$n -is [Management.Automation.Language.CommandAst] -and $n.Extent.Text.StartsWith('& $runtime -Serial')},$true))
 if($waitCall.Count -ne 1 -or $runtimeCall.Count -ne 1 -or $runtimeCall[0].Extent.StartOffset -le $waitCall[0].Extent.EndOffset){throw 'B2 dispatch occurs before verified permission.'};$checks++
-foreach($required in @('-DurationSeconds 300','WaitForExit(1500)','60000','b2-dispatch.once','Flush($true)','-ExpectedAttachmentHistorySha256','1bbb22fb805bca5ba7cfdee24e1ce468fdcfa1687280d451836e16ebef667497')){if(-not $ast.Extent.Text.Contains($required)){throw ('Missing unchanged guard '+$required)}};$checks++
+foreach($required in @('-DurationSeconds 300','WaitForExit(1500)','60000','b2-dispatch.once','Flush($true)','-ExpectedAttachmentHistorySha256','ea30d2911034d1f3ea6cf3929f078e2dff1a1df84c7b2450ec0b4feadcce76bd')){if(-not $ast.Extent.Text.Contains($required)){throw ('Missing unchanged guard '+$required)}};$checks++
 $preparation=$ast.Extent.Text.Substring(0,$runtimeCall[0].Extent.StartOffset)
 if($preparation -match 'controlTransfer|bulkTransfer|USBDEVFS|grant\.json|Tbs5530AutonomousDiagnosticActivity|pm clear|\buninstall\b|force-stop'){throw 'Permission preparation starts hardware/session state.'};$checks++
 foreach($pin in @('ExpectedAttachmentHistorySha256','ExpectedReloadStoreSha256','ExpectedReloadAnchorSha256')){

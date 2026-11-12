@@ -21,7 +21,7 @@ param(
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
 $runtime=Join-Path $PSScriptRoot 'Invoke-TBS5530-AutonomousSession.ps1'
-$runtimeHash='1bbb22fb805bca5ba7cfdee24e1ce468fdcfa1687280d451836e16ebef667497'
+$runtimeHash='ea30d2911034d1f3ea6cf3929f078e2dff1a1df84c7b2450ec0b4feadcce76bd'
 $package='info.martinmarinov.dvbdriver'
 $script:preparationCommand=0
 function Test-PermissionFirstReady([object]$Value,[string]$Token,[long]$Now){

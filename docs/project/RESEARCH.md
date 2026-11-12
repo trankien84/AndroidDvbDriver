@@ -1,5 +1,33 @@
 # Research log (append-only)
 
+## 2026-11-12, B3 thực đầu — Vòng native nhanh nhưng còn khoảng trống 170–406 ms
+
+**RUNTIME-OBSERVED:** Hai lượt chuẩn bị đầu không tới firmware: host foreground parser cũ không nhận Samsung global ResumedActivity, sau sửa thì hộp thoại chọn mở app gây FOREGROUND_LOST tại WAIT_DEVICE. Đã đối soát không grant/firmware ở lượt đầu và typed drain/firmware null ở lượt thứ hai. Người dùng cho tăng ngân sách; card permission-first duyệt tổng hữu hạn năm lượt, giữ hai consumed manifests cũ. Xử lý hộp thoại mở app trước grant rồi Activity permission-only xác minh OS_PERMISSION_VERIFIED đã cho bootstrap/reload B2 hoàn tất.
+
+Lượt tổng 3 với 16×16384: 112 data URB status 0/full 16384, raw 1835008 byte/SHA `7d94924221c1a629cda59c294fe70ab679e03a79764f66d08c99a4524a0ba067`, duration 2001100385 ns, throughput 7,336 Mbps. Sáu khoảng reap→reap trước sequence 16/32/48/65/81/97 dài 170,388/170,359/406,367/170,295/170,377/406,401 ms, tổng 1494,187 ms. Ngoài sáu gap, nhịp khoảng 4,762 ms/16 KiB tương đương 27,526 Mbps. Max/median reap→resubmit chỉ 135769/24692 ns; không còn vòng Java 35 ms xen mỗi read.
+
+**UNKNOWN:** Audit chưa có kernel-completion timestamp hoặc từng EAGAIN/poll, không biết nguồn ngừng cấp hay host/worker bị trì hoãn trong gap. `starvation_counter=6` là sáu horizon risks vượt reserve giả định 76,260 ms, không chứng minh sáu lần phần cứng hết queue. JNI dùng POLLOUT/POLLERR/POLLHUP đúng hướng usbfs, core poll slice 2 ms; watchdog sleep 100 ms ở thread riêng, không thấy timeout cấu hình 170/406 ms giải thích trực tiếp. Không quy RF/kernel/power/firmware bằng suy đoán.
+
+Sau prefix 2048, analyzer/app cùng một đoạn sync/0 break/9749 packets/CC 166/TEI 0/scrambled 0, PAT 3 nhưng PMT 0. TSDuck nhận TS/PAT nhưng không đủ service structure, exit 0 không chất lượng PASS. 16 drain completion status −2/tổng 11776 byte không giao parser, drain 1,383 ms; snapshot cuối không phải lỗi data đầu. Phát hiện classification hiện lấy last negative status sau discard nên gán USB_RECEIVE_FAILURE nhầm khi reason thực DEADLINE/risk; giữ report gốc và ghi lỗi code để sửa offline sau live, không đổi APK giữa card.
+
+Lượt tổng 4 chỉ tăng depth thành 32×16384: bootstrap/reload 132/132, không detach; raw 1720320 byte/SHA `aa33da24f340db4474deffbf4c3bb4536934fde9d7273802a12d93e8d3236acd`, duration 2000588308 ns, throughput 6,879 Mbps, risk 5/min software outstanding 31, max/median resubmit 123077/17231 ns. Analyzer/app: một đoạn/0 break, 9139 packets, CC 140, TEI/scrambled 0, PAT 1 và 14 PMT hợp lệ. PMT/PID-program có thể đối chiếu Windows nhưng CC/rate vẫn FAIL; tăng depth chưa đủ.
+
+Hai lượt đều drain/outstanding 0/quarantined=false, người dùng rút/ngắt nguồn sau thông báo. Không `-75` đầu hoặc detach sau reload quan sát; chưa có hai PASS nên vẫn root cause unconfirmed/TS_SMOKE_PASS=false. Evidence main có overall-attempt3-analysis/overall-attempt4-analysis, raw/audit/EP0/handoff/export hashes ngoài Git. Không thay raw hoặc gọi mô phỏng thành kết quả phần cứng.
+
+## 2026-11-12, nhiệm vụ B3 — Kiểm lại đoạn 2048 và đối chứng Windows bằng analyzer độc lập
+
+**OFFLINE-TESTED:** `tools/ts/analyze_ts_capture.py` dùng Python stdlib, 42/42 tests PASS, nhận raw hoặc USBPcap linktype 249. Sáu lượt analyzer exit 0; đó là công cụ chạy thành công, không phải capture đạt chất lượng. Raw B2 SHA `d3f61c274ab74f15515227bf3cd30d52821664cd162d26b45862b20b666f0132` và `1dcfef5e1c548216e1d91882d84d010ade07863313bb2f0c625b3e26114e9379` đều giữ nguyên: 17 đoạn sync/16 chỗ đứt gần 2048, CC trong đoạn 0 lỗi trên 104/109 phép so sánh. Sau bỏ prefix 2048 vẫn còn 15 chỗ đứt; không PAT/PMT. Các số 100/108 trong giả định đầu không khớp cách đếm header/discontinuity đã kiểm; không ép output.
+
+Windows cold2 tìm bằng SHA đầy đủ `70fced47614ff8ec17c9e78f79fca16408c23e6bcadcfb6ad25a4c69cd7f9ded`, không bằng tên tệp giả định. Trích 3808 successful Bulk IN82 completions, 31195136 byte, bỏ payload tám completion lỗi cuối. Sau prefix: đoạn liên tục từ offset 2049 đến 31195009 (exclusive), 165920 packets và 127 byte cuối chưa đủ packet; 0 sync break nhưng 1705 lỗi CC, 3054 TEI. Có 14 chương trình/PMT và PID video 5701–5708/5711–5716, audio 5801–5808/5811–5816; SDT/tên chưa quan sát. TSDuck thấy 47 PID sau lọc, analyzer thống kê mọi header có 260 PID bao gồm header hỏng; không đồng nhất hai bộ đếm.
+
+PCR chuẩn chưa cho bitrate tin cậy. Giá trị chẩn đoán 27,487 Mbps chỉ xuất hiện khi bỏ qua một số điều kiện reserved/discontinuity, không dùng làm bitrate sạch đã đo. `tsbitrate` exit 0 nhưng báo insufficient PCR; `tsanalyze` thấy TEI/CC và bitrate danh nghĩa không hợp lý. B3 phải giữ tiêu chí sạch, không hạ theo đối chứng Windows lỗi; throughput ±10% chỉ so với tham chiếu có điều kiện và cần đối chiếu nhịp USB.
+
+### Đính chính
+
+ADR-052 và phân tích 12/11 đã chứng minh hoãn audit không đủ làm sạch TS, nhưng chưa đo riêng chi phí permission trên Samsung. Kiểm source mới thấy vòng Java có nhiều kiểm grant/history/heartbeat trước và sau mỗi read/submit, còn native cũ trở về Java từng chunk; cadence 33–44 ms không phù hợp tốc độ nguồn khoảng 27,5 Mbps. Vì vậy kiểm quyền theo syscall và vòng nhận đồng bộ là nút thắt thiết kế được ưu tiên sửa, không tiếp tục coi audit là nguyên nhân chính. Mô hình FIFO 2048/starvation phù hợp hình thái raw, vẫn là giả thuyết nhân quả cần mô phỏng và B3 thật xác nhận; không từ hai raw suy phần cứng/frontend hoàn toàn sạch.
+
+**Evidence:** Bundle `phase31-b3-offline-20261112-204528-cc4555f6` dưới `D:\TSDuck\reports` và logs, report `verified/REPORT.md`, JSON/MD sáu đối chứng và manifest đầy đủ. Nguồn nguyên, không raw/firmware trong Git. Thiết kế [ADR-054 và ADR-055](DECISIONS.md); hardware B3 NOT RUN ở mốc này.
+
 ## 2026-11-12, run audit 19:40–19:41 +07 và phân tích tới 19:54 +07 — Audit đầy đủ, TS chưa sạch
 
 **RUNTIME-OBSERVED:** User duyệt exact card SHA `e93476e4641ea14136945421c6456562dea57c5fd117e797d7ee493f43afaa6f`, APK 1efb3aaf…/coordinator 86e45788…/source manifest 0961a418…/artifact manifest 5e68b0ab…. Preflight Awake/SM-X926B/API 36/user 0/boot 47/current USB empty; install-r một lần, history 1162 byte/14 và sáu witnesses trước/sau exact. Sau cold ≥5 giây/đèn tắt/cáp nguồn RF IN như B1 được user xác nhận, một preparation và tối đa một B2 chạy 19:40:55.955145–19:41:23.263222 +07. Coordinator exit 1, host_error NONE, retry 0; không lần preparation hoặc dispatch thứ hai.

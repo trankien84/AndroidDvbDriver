@@ -55,6 +55,18 @@ public class Tbs5530AutonomousCaptureTest {
             assertTrue(capture.durable()); assertEquals(65536, new File(dir, "received.ts").length());
         } finally { clean(dir); }
     }
+    @Test public void b3WritesOnePostDrainBufferWithoutChangingLegacyLimit() throws Exception {
+        File dir = directory();
+        try {
+            assertThrows(IOException.class, () -> new Tbs5530AutonomousCapture(dir, 4194304));
+            assertThrows(IOException.class, () -> new Tbs5530AutonomousCapture(dir, 16777217, true));
+            byte[] data = new byte[4194304]; data[2048] = 0x47;
+            try (Tbs5530AutonomousCapture capture = new Tbs5530AutonomousCapture(dir, data.length, true)) {
+                capture.accept(data, data.length); assertEquals(data.length, capture.bytes());
+            }
+            assertEquals(data.length, new File(dir, "received.ts").length());
+        } finally { clean(dir); }
+    }
     @Test public void rejectsInvalidInputAndUnreviewedLimitBeforeOutput() throws Exception {
         File dir = directory();
         try {

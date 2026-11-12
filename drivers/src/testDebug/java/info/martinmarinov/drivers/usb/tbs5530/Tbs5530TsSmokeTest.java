@@ -71,6 +71,88 @@ public class Tbs5530TsSmokeTest {
         }
         Tbs5530TsSmoke.Limits limits() { return new Tbs5530TsSmoke.Limits(564, 2, 1000, 500); }
     }
+    @Test public void b3BoundsAllowReceiveOnlyQueueChangesAndRetainLegacyBounds() {
+        Tbs5530TsSmoke.Limits b3 = new Tbs5530TsSmoke.Limits(4194304, 65536, 2000, 500, 16384, false,
+                Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_STREAM, false, false, 16);
+        assertEquals(16, b3.queueDepth); assertEquals(16384, b3.readChunkBytes);
+        for (int depth : new int[]{7, 33}) assertThrows(IllegalArgumentException.class, () ->
+                new Tbs5530TsSmoke.Limits(4194304, 65536, 2000, 500, 16384, false,
+                        Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_STREAM, false, false, depth));
+        assertThrows(IllegalArgumentException.class, () -> new Tbs5530TsSmoke.Limits(4194304, 65536, 2000, 500, 16385,
+                false, Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_STREAM, false, false, 16));
+        assertThrows(IllegalArgumentException.class, () -> new Tbs5530TsSmoke.Limits(16777217, 65536, 2000, 500, 16384,
+                false, Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_STREAM, false, false, 16));
+        assertThrows(IllegalArgumentException.class, () -> new Tbs5530TsSmoke.Limits(4194304, 65536, 2000, 500, 16384,
+                false, Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096));
+    }
+    @Test public void b3RunsOnceWithoutLegacyReadsAndDeliversOnlyAfterNativeDrain() throws Exception {
+        Fixture f = new Fixture(true, Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_STREAM); f.nativeApproved = true;
+        byte[] clean = fullBoundedSample(), raw = new byte[2048 + clean.length];
+        java.util.Arrays.fill(raw, 0, 2048, (byte)0xa5); System.arraycopy(clean, 0, raw, 2048, clean.length);
+        final boolean[] drained = {false}; final int[] observed = {0};
+        f.observer = (bytes, length) -> { assertTrue(drained[0]); assertArrayEquals(raw, bytes); observed[0] += length; };
+        f.smoke.streamReceiver(limits -> { drained[0] = true; return streamResult(raw, 0, "BYTE_LIMIT"); });
+        Tbs5530TsSmoke.Limits limits = new Tbs5530TsSmoke.Limits(4194304, 65536, 2000, 500, 16384, false,
+                Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_STREAM, false, false, 16);
+        Tbs5530TsSmoke.Result result = f.smoke.run(limits);
+        assertEquals(Tbs5530TsSmoke.Status.STRUCTURE_CONFIRMED, result.status);
+        assertEquals(raw.length, observed[0]); assertEquals(0, f.reads); assertEquals(1, f.selects);
+        assertNotNull(result.nativeStream); assertEquals(0, result.nativeStream.starvationCount);
+        assertEquals(1, f.owner.releases); assertEquals(1, f.owner.closes);
+        assertThrows(IOException.class, () -> f.smoke.run(limits));
+    }
+    @Test public void b3NeverCertifiesErrorOrWatchdogEvenWhenSavedBytesHaveValidPsi() throws Exception {
+        for (String stop : new String[]{"WATCHDOG", "COMPLETION_STATUS"}) {
+            Fixture f = new Fixture(true, Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_STREAM); f.nativeApproved = true;
+            byte[] clean = fullBoundedSample(), raw = new byte[2048 + clean.length];
+            System.arraycopy(clean, 0, raw, 2048, clean.length);
+            f.smoke.streamReceiver(limits -> streamResult(raw, "COMPLETION_STATUS".equals(stop) ? -75 : 0, stop));
+            Tbs5530TsSmoke.Result result = f.smoke.run(new Tbs5530TsSmoke.Limits(4194304, 65536, 2000, 500, 16384, false,
+                    Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_STREAM, false, false, 16));
+            assertEquals(Tbs5530TsSmoke.Status.NO_DATA_OR_USB_FAILURE, result.status);
+            assertFalse(result.structureConfirmed()); assertEquals(0, f.reads); assertEquals(1, f.owner.closes);
+        }
+    }
+    @Test public void b3QueueRiskIsQualityFailureNotCompletedUsbError() throws Exception {
+        Fixture f = new Fixture(true, Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_STREAM); f.nativeApproved = true;
+        byte[] clean = fullBoundedSample(), raw = new byte[2048 + clean.length];
+        System.arraycopy(clean, 0, raw, 2048, clean.length);
+        f.smoke.streamReceiver(limits -> streamResult(raw, 0, "DEADLINE", 6));
+        Tbs5530TsSmoke.Result result = f.smoke.run(new Tbs5530TsSmoke.Limits(4194304, 65536, 2000, 500, 16384, false,
+                Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_STREAM, false, false, 16));
+        assertEquals(Tbs5530TsSmoke.Status.INVALID_TS, result.status);
+        assertEquals(0, result.nativeStream.firstStatus); assertEquals(0, result.nativeStream.firstErrno);
+        assertEquals(6, result.nativeStream.starvationCount); assertFalse(result.structureConfirmed());
+        assertEquals(1, f.owner.closes);
+    }
+    private static info.martinmarinov.usbxfer.NativeUsbfsStream.Result streamResult(byte[] raw, int status, String reason) throws IOException {
+        return streamResult(raw, status, reason, 0);
+    }
+    private static info.martinmarinov.usbxfer.NativeUsbfsStream.Result streamResult(byte[] raw, int status, String reason, int risks) throws IOException {
+        try {
+            java.lang.reflect.Constructor<info.martinmarinov.usbxfer.NativeUsbfsStream.Result> constructor =
+                    info.martinmarinov.usbxfer.NativeUsbfsStream.Result.class.getDeclaredConstructor(byte[].class, long[].class, String.class);
+            constructor.setAccessible(true);
+            return constructor.newInstance(raw, new long[]{32, 16, 1000000000L, risks, 5000, 5000, 15, status, 0, 0, 0, 3, 0, 0}, reason);
+        } catch (ReflectiveOperationException error) { throw new IOException(error); }
+    }
+    @Test public void b3StructureRequiresCleanContinuityAndValidPatPmtAfterPrefix() {
+        byte[] clean = fullBoundedSample();
+        Tbs5530TsParser parser = new Tbs5530TsParser(); parser.accept(clean, 0, clean.length);
+        assertTrue(Tbs5530TsSmoke.b3StructureConfirmed(parser.snapshot()));
+        byte[] prefixed = new byte[2048 + clean.length];
+        java.util.Arrays.fill(prefixed, 0, 2048, (byte)0xa5); System.arraycopy(clean, 0, prefixed, 2048, clean.length);
+        Tbs5530TsParser skipped = new Tbs5530TsParser(); skipped.accept(prefixed, 2048, prefixed.length - 2048);
+        assertTrue(Tbs5530TsSmoke.b3StructureConfirmed(skipped.snapshot()));
+        byte[] faulty = clean.clone(); faulty[188 * 6 + 3] ^= 2;
+        Tbs5530TsParser cc = new Tbs5530TsParser(); cc.accept(faulty, 0, faulty.length);
+        assertFalse(Tbs5530TsSmoke.b3StructureConfirmed(cc.snapshot()));
+        faulty = clean.clone(); faulty[188 * 6] = 0;
+        Tbs5530TsParser sync = new Tbs5530TsParser(); sync.accept(faulty, 0, faulty.length);
+        assertFalse(Tbs5530TsSmoke.b3StructureConfirmed(sync.snapshot()));
+        Tbs5530TsParser noPsi = new Tbs5530TsParser(); noPsi.accept(clean, 188 * 3, clean.length - 188 * 3);
+        assertFalse(Tbs5530TsSmoke.b3StructureConfirmed(noPsi.snapshot()));
+    }
     @Test public void sonyReadbackIsOffByDefaultAndRestrictedToUnmodifiedNative4096Baseline() throws Exception {
         Tbs5530TsSmoke.Limits off = new Tbs5530TsSmoke.Limits(65536,16,5000,500,4096,false,Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_URB_8X4096);
         assertFalse(off.sonyTsOutputReadback);
