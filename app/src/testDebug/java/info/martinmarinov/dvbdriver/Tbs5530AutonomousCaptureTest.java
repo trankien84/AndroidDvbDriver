@@ -67,6 +67,22 @@ public class Tbs5530AutonomousCaptureTest {
             assertEquals(data.length, new File(dir, "received.ts").length());
         } finally { clean(dir); }
     }
+    @Test public void b4PostDrainCopyUsesBoundedChunksAndRequiresExplicitScope() throws Exception {
+        File dir = directory();
+        int maximum = 256 * 1024 * 1024;
+        try {
+            assertThrows(IOException.class, () -> new Tbs5530AutonomousCapture(dir, maximum, true));
+            assertThrows(IOException.class, () -> new Tbs5530AutonomousCapture(dir, maximum, false, true));
+            byte[] chunk = new byte[65536];
+            try (Tbs5530AutonomousCapture capture = new Tbs5530AutonomousCapture(dir, maximum, true, true)) {
+                for (int i = 0; i < 257; i++) capture.accept(chunk, chunk.length);
+                assertEquals(257L * chunk.length, capture.bytes());
+                assertFalse(capture.durable());
+            }
+            assertEquals(257L * chunk.length, new File(dir, "received.ts").length());
+        } finally { clean(dir); }
+    }
+
     @Test public void rejectsInvalidInputAndUnreviewedLimitBeforeOutput() throws Exception {
         File dir = directory();
         try {

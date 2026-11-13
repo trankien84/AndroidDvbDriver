@@ -1,5 +1,27 @@
 # Kiểm kê môi trường
 
+## 2026-11-13, B4 cặp 1 — Samsung đã cài đúng APK và thu ngắn; tuner đã rút
+
+Sau `OK B4`, cài `install -r` đúng APK SHA `9a11db84775743843b3248592e15153e1c1efed90cd58d3938383fa2571ddfb4` một lần; hash APK installed đúng và năm witnesses/history trước-sau nguyên. Preflight đầu nhầm entry USB app filter trong dumpsys là thiết bị đang cắm nên dừng trước install; sau đọc cấu trúc host_manager xác minh inventory hiện tại rỗng, không sửa app/guard phần cứng để qua chốt. Samsung vẫn SM-X926B/API36/boot47, màn hình Awake lúc chạy; không tự đổi khóa/timeout.
+
+Windows cặp 1 dùng TSDuck 3.45-4798/driver BDA hiện có, USBPcap 1.5.4.0 trên root đã khóa hash. UAC được người dùng chấp thuận; recorder ARMED trước khi người dùng cắm đúng cổng cold2. TSDuck thu 40 giây từ packet đầu/natural exit 0, USBPcap được dừng có chủ đích sau đóng BDA; không ETW, driver/mode, VM/WSL hoặc ownership software thay đổi. Kết thúc các PID của capture không còn chạy.
+
+Anten thụ động ngoài trời trên nóc nhà giữ nguyên giữa Windows và Android, RF IN/không DC được người dùng xác nhận; hướng chưa có mô tả. Người dùng xác nhận ngắt cả nguồn ≥5 giây rồi chuyển tuner sang Samsung/cáp chữ Y/pin dự phòng. Android thu 2,28 giây trước monitor mất TS lock hơn 2 giây; không chứng nhận điều kiện RF tương đương chỉ từ cách nối dây. Sau drain, người dùng đã rút/ngắt nguồn.
+
+Sau live chỉ đọc tệp app đã lưu; lần màn hình ngủ dừng export và chờ người dùng mở. 35 tệp được thu có SHA/size trước-sau đúng, không nạp lại firmware hoặc chạy receive. Helper budget receipt đã đóng và giữ nguyên SHA `72666fe5e63f70a72781f14dbaf2e6c5e7a7bcca965a6634cc5748aa311e0356`; bản sửa helper offline chưa dùng hardware, card/source manifest cũ không còn là phê duyệt cho source mới. Không reset/rearm hoặc gỡ/clear app.
+
+## 2026-11-13, chuẩn bị B4 — Toolchain giữ nguyên; điều kiện anten chưa ghi nhận
+
+Đầu phiên xác minh HEAD `8d05adb24de221399deaf2392b7fef1218cfab3d`, nhánh `chore/modernize-android-build`, tree sạch. Đọc build hiện hành: AGP 9.5.0/Wrapper 9.8.2, compileSdk 37.2, minSdk 21 và Java 8. JDK thực 25.0.5.0.3 qua JAVA_HOME Machine; source.properties xác nhận NDK 30.0.16248370, CMake 4.1.2, Build-Tools 37.0.0, platform-tools 37.0.1 và emulator 37.2.13. Không cài hoặc đổi package, PATH hay môi trường bền.
+
+B4 chưa cài APK Samsung, mở BDA hoặc capture USB. Đã đọc Samsung để điền card: SM-X926B/API 36/boot 47/Awake; lần parser đầu gặp hai trường Wakefulness khác cấp nên dừng trước đọc identity, sau đối chiếu field global mới đọc lại, không thay khóa hoặc màn hình. Raw ADB alias/power chỉ ngoài Git.
+
+**Điều kiện người dùng cung cấp trước cặp 1:** anten thụ động, không cần nguồn điện, đặt ngoài trời trên nóc nhà; hướng chưa mô tả. Dự kiến đo ngày 13/11/2026 và dùng lại đúng cổng USB Windows đã tạo cold2. Đây là mô tả của người dùng, chưa là phép đo RF hoặc kết quả B4. Giữ nguyên vị trí anten giữa Windows và Android, không ghi địa chỉ/tọa độ. Không DC từ tuner; Android dự kiến dùng cáp chữ Y và pin sạc dự phòng, cần xác nhận kết nối thực trước live và đề nghị đặt tuner cách tablet/pin vài chục cm.
+
+Các reference đo lại, không sync hoặc sửa: official `2ce787de9f6e81b4294692a45de15596ae2e1322`, community C `c5fa27eecbe80633cbb365cc44656daea1c0e2e3`, Go `6aaa1899991c875ba0482fa9098adc6c83b01fd8`, CoreELEC `072f8e99e0ac66d88d7278784e922e08e8253210`. Windows cold2 tìm đúng hash `70fced47614ff8ec17c9e78f79fca16408c23e6bcadcfb6ad25a4c69cd7f9ded`; không suy tên file là căn cứ nhận diện.
+
+GitNexus MCP trỏ đúng path/nhánh nhưng index cũ hơn HEAD ba commit. CLI 1.6.12 có `--index-only`; đã thử làm mới đúng chế độ này, chỉ in banner rồi không tiến triển trong cửa sổ chờ và đã dừng đúng process tree của phiên. Không force/repair/rebuild hoặc chứng nhận graph/FTS hiện hành; dùng source, diff và tests làm căn cứ. Không thao tác VM/WSL hoặc quyền sở hữu USB.
+
 ## 2026-11-12, sau B3 — Samsung đã thử ba cấu hình, tuner đã rút; candidate report mới chưa cài
 
 Samsung SM-X926B/API36/boot47 dùng APK `1a15959d99bef5052b555cdfa3db3771489c1f80a3048bcf391736195fba45e7` trong ba lượt receive thật. Đã drain cả ba, người dùng xác nhận rút tuner/ngắt nguồn sau lượt cuối. Giữ history cũ 1328 byte và reload store/anchor lịch sử; B3 journal theo session không reset chúng. Không VM/WSL/driver/ownership/toolchain thay đổi, không EEPROM hoặc LNB/DC.

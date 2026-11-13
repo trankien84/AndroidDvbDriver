@@ -71,14 +71,30 @@ public class NativeUsbfsStreamTest {
         NativeUsbfsStream receiver = stream(port, () -> assertEquals("",audit.toString()), audit);
         NativeUsbfsStream.Result r = receiver.receive();
         assertEquals(188,r.data.length); assertEquals(0x47,r.data[0]);
+        assertEquals(188,r.byteCount); assertEquals(188,r.writtenBytes); assertEquals(0,r.dropBytes);
+        assertNull(r.dataFile); assertNull(r.writerFailure);
+        try (java.io.InputStream input = r.openData()) { assertEquals(0x47,input.read()); }
         assertEquals(16,r.submitted); assertEquals(16,r.completed); assertEquals(15,r.minOutstanding);
         assertEquals(5000,r.maxResubmitNanos); assertEquals(4000,r.medianResubmitNanos);
         assertEquals(940.0,r.bytesPerSecond(),0.01); assertEquals("BYTE_LIMIT",r.stopReason);
         assertEquals(0,r.firstStatus); assertEquals(0,r.firstErrno);
         assertTrue(audit.toString().contains("\"sequence\":1"));
-        assertTrue(audit.toString().contains("not_hardware_proof"));
+        assertTrue(audit.toString().contains("software_zero_only_not_hardware_proof"));
+        assertTrue(audit.toString().contains("\"queue_horizon_risk_count\":null"));
+        assertTrue(audit.toString().contains("\"queue_horizon_assumed_bytes_per_second\":null"));
         assertEquals(14,receiver.snapshot().length); receiver.close(); receiver.close();
         assertEquals(1,port.frees); assertFalse(receiver.isQuarantined());
+    }
+    @Test public void starvationAuditDoesNotInferAQueueHorizonFromAssumedBitrate() throws Exception {
+        Port port = new Port(); port.result[3] = port.result[12] = 2;
+        StringWriter audit = new StringWriter();
+        NativeUsbfsStream receiver = stream(port, () -> { },audit);
+        try {
+            assertEquals(2,receiver.receive().starvationCount);
+            assertTrue(audit.toString().contains("\"zero_software_outstanding_count\":2"));
+            assertTrue(audit.toString().contains("\"queue_horizon_assumed_bytes_per_second\":null"));
+            assertFalse(audit.toString().contains("3437500"));
+        } finally { receiver.close(); }
     }
     @Test public void completionErrorPreservesDataAndDoesNotThrow() throws Exception {
         Port port = new Port(); port.result[7] = -75; port.result[11] = 4;
@@ -227,6 +243,20 @@ public class NativeUsbfsStreamTest {
         receiver.receive(); assertThrows(IOException.class,receiver::receive);
         long[] state = receiver.snapshot(); state[0] = -1; assertEquals(16,receiver.snapshot()[0]);
         receiver.close(); assertThrows(IOException.class,receiver::receive);
+    }
+    @Test public void legacyResultReflectionConstructorKeepsRamCaptureDefaults() throws Exception {
+        java.lang.reflect.Constructor<NativeUsbfsStream.Result> constructor = NativeUsbfsStream.Result.class
+                .getDeclaredConstructor(byte[].class, long[].class, String.class);
+        constructor.setAccessible(true);
+        byte[] data = {0x47, 0x20};
+        NativeUsbfsStream.Result result = constructor.newInstance(data, new Port().result, "BYTE_LIMIT");
+        assertSame(data,result.data); assertNull(result.dataFile); assertNull(result.file);
+        assertEquals(2,result.byteCount); assertEquals(2,result.writtenBytes); assertEquals(2,result.writerWrittenBytes);
+        assertEquals(0,result.dropBytes); assertEquals(0,result.writerDropBytes); assertNull(result.writerFailure);
+        assertEquals(16,result.submitted); assertEquals("BYTE_LIMIT",result.stopReason);
+        try (java.io.InputStream input = result.openData()) {
+            assertEquals(0x47,input.read()); assertEquals(0x20,input.read()); assertEquals(-1,input.read());
+        }
     }
     @Test public void invalidArgumentsFailBeforeLoadingNativeLibrary() {
         int[][] invalid = {{-1,16,16384,4096,2000},{1,7,16384,4096,2000},{1,33,16384,4096,2000},

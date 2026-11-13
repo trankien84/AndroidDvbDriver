@@ -57,6 +57,31 @@ final class Tbs5530ReloadAndroidManager implements Tbs5530AndroidUsbFacade.Manag
         if (!(owned.receive instanceof Tbs5530NativeStreamBackend)) throw new IOException("Foreign stream backend");
         return ((Tbs5530NativeStreamBackend)owned.receive).receive();
     }
+    Tbs5530ControlIo monitorControl(Thread monitorThread) throws IOException {
+        if (owned == null || !owned.claimed || owned.closed || monitorThread == null)
+            throw new IOException("Claimed B4 monitor owner required");
+        final Raw raw = owned;
+        return (type, request, value, index, bytes, offset, length, timeout) -> {
+            if (Thread.currentThread() != monitorThread || raw.closed || !raw.claimed
+                    || android.os.Looper.myLooper() == android.os.Looper.getMainLooper()
+                    || value != 0 || index != 0 || timeout < 1 || timeout > 2000
+                    || bytes == null || offset < 0 || length < 1 || offset > bytes.length - length
+                    || !((type == 0x40 && request == 0x80 && length >= 4)
+                    || (type == 0x40 && request == 0x90 && length == 3)
+                    || (type == 0xc0 && request == 0x91 && length <= 50)))
+                throw new IOException("B4 monitor control scope changed");
+            if (request == 0x80 && (length != 4 || (bytes[offset] & 255) != 3 || (bytes[offset + 1] & 255) != 0xc8
+                    || !((bytes[offset + 2] == 0 && ((bytes[offset + 3] & 255) == 0x20
+                    || (bytes[offset + 3] & 255) == 0x22 || (bytes[offset + 3] & 255) == 0x24))
+                    || (bytes[offset + 2] == 1 && (bytes[offset + 3] == 0 || bytes[offset + 3] == 1)))))
+                throw new IOException("Unreviewed B4 monitor write refused");
+            if (request == 0x90 && (bytes[offset + 1] & 255) != 0xc8)
+                throw new IOException("Unreviewed B4 monitor address refused");
+            int count = raw.connection.controlTransfer(type, request, value, index, bytes, offset, length, timeout);
+            if (count != length) throw new IOException("Monitor short control transfer: " + count + "/" + length);
+            return count;
+        };
+    }
     private final class Raw implements Tbs5530AndroidUsbFacade.RawConnection {
         final UsbDevice device;
         final UsbDeviceConnection connection;

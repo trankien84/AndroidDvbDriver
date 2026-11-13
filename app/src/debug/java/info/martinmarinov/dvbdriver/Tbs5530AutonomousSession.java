@@ -36,6 +36,23 @@ final class Tbs5530AutonomousSession {
         if (nativeStream && SystemClock.elapsedRealtime() >= reloadIoDeadline) throw new IOException("B3 reload I/O deadline; no retry");
     }
     int streamQueueDepth = 16, streamUrbBytes = 16384;
+    boolean b4Capture, tunerRssi;
+    int streamDurationMillis = 2000, streamMaxBytes = 4 * 1024 * 1024;
+    void configureB4(int durationMillis, int maxBytes, boolean tunerRssi) throws IOException {
+        if (tunerRssi) throw new IOException("TUNER_RSSI_UNSUPPORTED_REQUIRES_REVIEWED_EXACT_SEQUENCE");
+        if (!nativeStream || accepted || (streamQueueDepth != 16 && streamQueueDepth != 32)
+                || streamUrbBytes != 16384 || durationMillis < 1000 || durationMillis > 60000
+                || maxBytes != 256 * 1024 * 1024)
+            throw new IOException("Invalid B4 capture scope");
+        b4Capture = true; this.tunerRssi = tunerRssi;
+        streamDurationMillis = durationMillis; streamMaxBytes = maxBytes;
+        try {
+            challenge.put("b4_enabled", true).put("b4_duration_ms", durationMillis)
+                    .put("b4_max_bytes", maxBytes).put("b4_tuner_rssi", tunerRssi)
+                    .put("b3_duration_ms", durationMillis).put("b3_max_bytes", maxBytes);
+            Tbs5530DurableFile.write(new File(root, PREFIX + "-challenge.json"), challenge.toString().getBytes(StandardCharsets.UTF_8));
+        } catch (org.json.JSONException error) { throw new IOException(error); }
+    }
     void configureStream(int depth, int bytes) throws IOException {
         if (!nativeStream || accepted || depth < 8 || depth > 32 || bytes < 4096 || bytes > 65536 || bytes % 512 != 0)
             throw new IOException("Invalid B3 receive configuration");
@@ -71,6 +88,8 @@ final class Tbs5530AutonomousSession {
     volatile boolean preNativeRefusal;
     volatile boolean cleanupConfirmed;
     volatile Tbs5530TsSmoke.Result tsResult;
+    volatile int signalSampleCount;
+    volatile String signalMonitorFailure;
     volatile Tbs5530OperationalHandoff.NativeReceiveSnapshot nativeReceiveSnapshot;
     volatile Tbs5530OneShotBootstrap.Snapshot bootstrapSnapshot;
     volatile Tbs5530OperationalProfile operationalObservation;
@@ -247,6 +266,10 @@ final class Tbs5530AutonomousSession {
             if (nativeStream) {
                 for (String key : new String[]{"b3_queue_depth", "b3_urb_bytes", "b3_max_bytes", "b3_duration_ms"})
                     if (!challenge.get(key).toString().equals(grant.get(key).toString())) throw new IOException("B3 receive scope mismatch: " + key);
+                if (b4Capture) {
+                    for (String key : new String[]{"b4_enabled", "b4_duration_ms", "b4_max_bytes", "b4_tuner_rssi"})
+                        if (!challenge.get(key).equals(grant.get(key))) throw new IOException("B4 receive scope mismatch: " + key);
+                } else if (grant.optBoolean("b4_enabled", false)) throw new IOException("Unexpected B4 grant");
             }
             if (historyFence != null) {
                 if (!historyFence.sha256().equals(grant.opt("attachment_history_sha256")))
@@ -590,6 +613,11 @@ final class Tbs5530AutonomousSession {
         return new JSONObject().put("option",Tbs5530SonyTsOutputReadback.OPTION).put("enabled",sonyTsOutputReadback)
                 .put("maximum_snapshots",2).put("snapshots",snapshots).put("during_pending","NOT_AVAILABLE_NO_CONCURRENT_I2C");
     }
+    static boolean knownB4LockStop(boolean b4, boolean lockLost, String reason, int firstStatus, int firstErrno,
+                                   int outstanding, boolean quarantined) {
+        return b4 && lockLost && "WATCHDOG".equals(reason) && firstStatus == 0 && firstErrno == 0
+                && outstanding == 0 && !quarantined;
+    }
     static boolean completedStreamError(Tbs5530TsSmoke.StreamMetrics stream) {
         return stream != null && completedStreamError(stream.firstStatus, stream.firstErrno, stream.outstanding, stream.quarantined);
     }
@@ -620,7 +648,14 @@ final class Tbs5530AutonomousSession {
                     .put("raw_capture", capture == null ? "NOT_STARTED" : capture.durable() ? "SYNCED_CLOSED" : "NOT_CERTIFIED")
                     .put("receive_audit", receiveAudit == null ? "NOT_STARTED" : receiveAudit.state())
                     .put("receive_audit_bytes", receiveAudit == null ? 0 : receiveAudit.bytes())
-                    .put("history_guard_warning", historyWarning);
+                    .put("history_guard_warning", historyWarning)
+                    .put("b4_enabled", b4Capture)
+                    .put("b4_duration_ms", b4Capture ? streamDurationMillis : JSONObject.NULL)
+                    .put("b4_max_bytes", b4Capture ? streamMaxBytes : JSONObject.NULL)
+                    .put("b4_tuner_rssi", b4Capture && tunerRssi)
+                    .put("b4_parity", b4Capture ? "PENDING_PAIRED_OFFLINE_ANALYSIS" : "NOT_APPLICABLE")
+                    .put("signal_monitor_samples", signalSampleCount)
+                    .put("signal_monitor_failure", signalMonitorFailure == null ? JSONObject.NULL : signalMonitorFailure);
             if (tsResult != null && tsResult.nativeStream != null) {
                 Tbs5530TsSmoke.StreamMetrics stream = tsResult.nativeStream;
                 json.put("native_stream", new JSONObject().put("bytes", stream.bytes)
@@ -631,7 +666,10 @@ final class Tbs5530AutonomousSession {
                         .put("first_status", stream.firstStatus).put("first_errno", stream.firstErrno)
                         .put("outstanding", stream.outstanding).put("quarantined", stream.quarantined)
                         .put("stop_reason", stream.stopReason).put("stale_prefix_bytes", 2048)
-                        .put("starvation_scope", "SOFTWARE_QUEUE_OBSERVATION_NOT_HARDWARE_COMPLETION_PROOF"));
+                        .put("writer_written_bytes", stream.writerWrittenBytes).put("writer_drop_bytes", stream.writerDropBytes)
+                        .put("writer_failure", stream.writerFailure == null ? JSONObject.NULL : stream.writerFailure)
+                        .put("starvation_scope", "SOFTWARE_ZERO_OUTSTANDING_ONLY_GAPS_CLASSIFIED_OFFLINE")
+                        .put("gap_classification", "PENDING_COMPLETION_TIMESTAMP_ANALYSIS"));
             }
             File permissionEvidence = new File(directory, "permission.json");
             JSONObject permission = permissionEvidence.isFile() ? new JSONObject(read(permissionEvidence, 8192)) : null;
@@ -688,7 +726,7 @@ final class Tbs5530AutonomousSession {
             json.put("structure_confirmed", ts != null && ts.structureConfirmed());
             json.put("quality_observation", ts == null ? "NOT_ASSESSED" : ts.qualityObservation());
             json.put("quality_min_bytes", 32768);
-            json.put("ts_smoke_pass", ts != null && ts.structureConfirmed() && ts.bytes >= 32768
+            json.put("ts_smoke_pass", !b4Capture && ts != null && ts.structureConfirmed() && ts.bytes >= 32768
                     && "NO_ERRORS_IN_BOUNDED_SAMPLE".equals(ts.qualityObservation())
                     && cleanupConfirmed && policy.state() == Tbs5530AutonomousPolicy.State.REPORT
                     && capture != null && capture.durable() && capture.bytes() == ts.bytes

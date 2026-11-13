@@ -50,6 +50,17 @@ public class NativeUsbfsBoundaryTest {
         assertEquals(0L, ((Long)create.invoke(null, 0, 7, 16384, 4194304, 2000)).longValue());
         assertEquals(0L, ((Long)create.invoke(null, 0, 16, 16385, 4194304, 2000)).longValue());
     }
+    @Test public void b4FileJniRejectsFdAndBoundsWithoutOpeningAnyFileOrUsb() throws Exception {
+        Class<?> stream = Class.forName("info.martinmarinov.usbxfer.NativeUsbfsStream");
+        Class.forName("info.martinmarinov.usbxfer.NativeUsbfsStream$Bindings", true, stream.getClassLoader());
+        Method create = stream.getDeclaredMethod("createFile", int.class, int.class, int.class, int.class, int.class);
+        create.setAccessible(true);
+        assertEquals(0L, ((Long)create.invoke(null, -1, 16, 16384, 268435456, 60000)).longValue());
+        assertEquals(0L, ((Long)create.invoke(null, 0, 24, 16384, 268435456, 30000)).longValue());
+        assertEquals(0L, ((Long)create.invoke(null, 0, 16, 65536, 268435456, 30000)).longValue());
+        assertEquals(0L, ((Long)create.invoke(null, 0, 16, 16384, 268435456, 60001)).longValue());
+    }
+
     @Test public void publicConstructorRejectsNegativeFdWithoutConsentOrAudit() throws Exception {
         AtomicInteger consentCalls = new AtomicInteger();
         StringWriter audit = new StringWriter();

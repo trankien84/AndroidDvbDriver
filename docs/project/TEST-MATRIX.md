@@ -1,5 +1,51 @@
 # TBS5530 test matrix
 
+## 2026-11-13, B4 cặp 1 — Dừng có bằng chứng, chưa parity
+
+| Phép kiểm thật | Kết quả | Giới hạn / evidence |
+| --- | --- | --- |
+| Phê duyệt card và điều kiện | PASS quyền hữu hạn | `OK B4` đúng card SHA `742010f6…`; anten thụ động trên nóc nhà, không DC, cùng cổng Windows cold2; user xác nhận cold/nguồn/RF IN trước Android. |
+| Install Samsung | PASS một install-r | Installed APK SHA `9a11db84…` đúng; năm witnesses/history trước-sau không đổi. Không launch/firmware từ install. |
+| Windows TSDuck/BDA 40 giây | CAPTURED_PENDING_ANALYSIS, tool exit 0 | TS 61698968 byte/SHA `5196fbe2f501b7d1764ede807372940f4097aba490c171faf72701b52573b0a8`; exit 0 không chất lượng PASS. |
+| Windows USBPcap | PASS thu evidence có phạm vi | 63706295 byte/SHA `f47edbf0ca1c39e09edd4fe04177457424e72cf9957d8e197ebbcd364db474c6`, đúng pinned root; USBPcap exit −1 do helper dừng sau BDA, không lỗi tuner. |
+| Windows sau 5 giây | Nhiều lỗi, chưa đối chứng sạch | FULL 46,79% gồm MISSING/54,07% observed; CC+TEI 10665,42/phút; SNR 12,9/14,35/16,1 dB từ 24 mẫu hợp lệ, lock 106 LOCKED/101 LOST. |
+| Android bootstrap/reload | PASS 132/132 mỗi loại | Không detach sau reload, nguyên firmware/golden/drive/PLP; không `-75`. |
+| Native/writer Android | PASS vận chuyển debug trong mẫu | 2146304 byte/2278497924 ns, data status/errno 0, writer drop 0/failure null/raw mapping valid, min software outstanding 15/zero 0. |
+| Monitor Android | Dừng đúng điều kiện đã duyệt | 10 samples/errors 0, một LOCKED `26`/SNR 28,6 dB rồi chín LOST `06`; confirmed loss 2002360231 ns, WATCHDOG. Không suy RF fault hoặc monitor false positive khi chưa đối chiếu. |
+| Chất lượng Android toàn mẫu | Có PAT/PMT, chưa sạch | App 11405 packets, CC 214/TEI 0/sync 0, PAT 2/PMT 23; không có cửa sổ sau 5 giây. Analyzer độc lập đang đối soát. |
+| Cleanup thực | PASS | RUNTIME_DRAIN_CONFIRMED, outstanding 0/quarantine false; user đã rút tuner/ngắt nguồn. |
+| Export trong helper live | FAIL host sau drain | Quoting `exec-out run-as sh -c` trả thông báo shell 116 byte thay report; helper phát hiện size/hash mismatch, receipt đóng phiên, không retry. |
+| Export chỉ đọc sau đó | PASS 35 tệp | Dùng `exec-out run-as cat <path>` không shell lồng, SHA/size trước-sau đúng. Không sửa receipt/source đã chạy hoặc tuner I/O. |
+| Sửa export offline | PASS 131/131 B4, 126/126 B3 | Exact argv repro exit 127 trước/0 sau; parent rerun B4 131/131 PASS. Helper SHA `4105a44d…` chưa dùng hardware, không sửa card cũ. |
+| Rà mask/timer/freeze monitor | Đã đối chiếu, nguyên nhân UNKNOWN | Mask/timer đúng quy tắc snapshot; Windows có `26` trong freeze/`06` ngoài freeze. Mirror Android không chứa monitor EP0 nên không chứng nhận transcript độc lập hoặc sửa monitor theo suy đoán. |
+| Budget hiện tại | CLOSED | Đã dùng một Windows/một Android trong trần 3/4; không mở lại receipt hoặc đổi UUID để chạy thêm. |
+| PCR chuẩn/SDT/parity | INSUFFICIENT_EVIDENCE | Windows vẫn PCR sai reserved bits/thiếu SDT; Android <5 giây, thiếu SNR cùng cửa sổ. Không parity/TS smoke PASS hoặc tự RF_LIMITED/GAP. |
+
+Giữ các lỗi invocation/export scratch trước khi thu đủ evidence: OutputDirectory sai bị từ chối trước tạo budget/ADB; scratch PowerShell dùng biến Host readonly, array `-match` giữ Matches cũ và nối mảng path thiếu ngoặc đã được sửa, không ghi đè raw hoặc sửa tuner. Chỉ những tệp có size/SHA tablet-host khớp mới tính evidence. Các bản sửa helper sau live phải có test/hash mới và trạng thái NOT USED ON HARDWARE.
+
+## 2026-11-13, B4 offline — Thu dài/writer/monitor đã kiểm; đối chứng phần cứng chưa chạy
+
+| Kiểm | Kết quả quan sát | Phạm vi / giới hạn |
+| --- | --- | --- |
+| Baseline | PASS | Nhánh yêu cầu, HEAD `8d05adb24de221399deaf2392b7fef1218cfab3d`, tree sạch lúc bắt đầu; không stage/commit/push. |
+| Analyzer frame/PCR/PSI và comparison | PASS 81/81 Python cuối | Gồm analyzer 65, monitor parser 8, comparison 8; v2 focused 23/23 trước đó. Đã sửa origin cả hai host về completion dữ liệu đầu; regression delay 500 ms FAIL trước/PASS sau. Parser/PCR/CC không đổi, output v2 giữ riêng. |
+| Monitor inventory/golden/công thức | PASS 18 Java + 8 Python | 886 reads/36 nhóm; bank 22 được xác minh. Hàm BER/PER thuần có nguồn; không mở read mới hoặc điền live UNKNOWN bằng 0. |
+| Native host và writer | PASS 87 cases | Fake 60 giây ở 16/32 × 16384: 205815808 byte mỗi cấu hình, drop 0. Khi không phục vụ writer: drop 4194427 byte chính xác, reap→resubmit giả lập tối đa 5000 ns; không phải đo Android. |
+| Writer/legacy JVM trực tiếp | PASS 29/29 | Ring wrap, slow/failing writer, fsync/error/quarantine, bounds và constructor legacy. Full usbxfer Gradle bên dưới xác nhận lại tích hợp. |
+| Helper B4/B3 | PASS 126/126 mỗi suite | Chỉ fake; ngân sách 4 Android/3 Windows, ngày/hash/permission-first/drain/replay/export. Không ADB hoặc firmware thật. |
+| Helper Windows theo cold2 | PASS parser + 6 guard từ chối | Card sai hash/ngày/approval/ngân sách/interface/antenna đều dừng trước thư mục live; không capture. USBPcap service Running, phiên hiện không elevated; cần UAC sau phê duyệt live. |
+| JVM đầy đủ bản tích hợp | App 101, driver 507 PASS + 5 SKIP, usbxfer 61, dvbservice 13 | Tổng driver 512; XML đã lưu ngoài Git. Các sửa guard classification sau đó được kiểm focused riêng, không đổi SKIP thành PASS. |
+| Build debug/release/AndroidTest và app lint | PASS có phạm vi | Full gate 392 tasks/7m26s; các targeted build/lint sau tích hợp cũng PASS. Giữ cảnh báo Java 8/Gradle cũ, không nâng toolchain. |
+| JNI/ELF/release isolation | PASS tĩnh | 12 ELF từ APK, đủ bốn ABI; ELF64 LOAD alignment ít nhất 16 KiB. Release không library/class stream/monitor debug. Không phải runtime 16 KiB hoặc hardware. |
+| Emulator focused trước freeze cuối | PASS 11/11 sau hai lần sửa fixture | Hai lỗi mới: thiếu mirror trong fixture, rồi gọi finish trên mirror chưa tạo. Giữ log FAIL; không nới guard. Có kiểm JNI B4 invalid fd/bounds, root scope, cached heartbeat và signal JSON không công bố SNR khi unfreeze lỗi. |
+| Emulator trên APK sau guard mất lock cuối | PASS 11/11 | Kiểm lại trên đúng APK khóa cuối; đã emu kill đúng serial, process exit 0, cổng 5580/5581 không listener. Focused classification 4/4 PASS; mất lock xuất hiện sau deadline không được gán là nguyên nhân dừng. |
+| B4 Windows/Android cùng ngày | NOT RUN | Đã ghi điều kiện anten do người dùng cung cấp, chưa card/OK B4 hoặc lượt nhận mới. |
+| PCR/BER/PER/SDT và parity của dữ liệu cũ | INSUFFICIENT_EVIDENCE | PCR USB raw sai reserved bits, BER/PER không có denominator trong tập đọc, không SDT; B3 ngắn hơn 5 giây. Không parity hoặc TS smoke PASS. |
+
+**FAIL lịch sử được giữ:** standalone driver lint tại UsbPermissionObtainer.java:105, bốn lifecycle emulator và fake heartbeat Git Bash timeout chưa được sửa hoặc chạy lại trong scope B4. Không gọi chúng là PASS. VS Code test discovery không thấy focused test item và runTask không có invocation context; đã dùng Gradle Wrapper. Lượt gọi nhầm task `:drivers:testReleaseUnitTest` dừng ở task selection, không có test chạy; task debug đúng đã PASS 18 session tests.
+
+Evidence ở bundle `phase31-b4-20261112-235953-98a481b8` dưới `D:\TSDuck`, gồm logs gate, XML JVM, native/monitor/analyzer/helper và ABI reports. Raw, APK, firmware, grant và định danh không vào Git. `TRANSPORT_FIXED_DEBUG` riêng cho lỗi `-75` là kết luận từ năm lượt cũ đã kiểm, không phải một phép thử B4 mới.
+
 ## 2026-11-12, B3 cuối — Năm lượt đã đóng; ba capture đều không PASS
 
 | Kiểm cuối | Kết quả | Phân biệt bắt buộc |

@@ -1,5 +1,63 @@
 # Architecture decision record (ADR)
 
+## ADR-057 — Giữ B4 cặp 1 là chưa đủ parity; sửa export offline mà không mở lại ngân sách đã đóng
+
+**Date:** 2026-11-13, sau cặp đo Windows1/Android1 được `OK B4`.
+
+**Status:** Accepted; Android đã dừng/drain và người dùng rút/ngắt nguồn. Helper export đã sửa và kiểm offline, **NOT USED ON HARDWARE**. Chưa parity/TS smoke hoặc quyền Phase 4.
+
+### Context / Evidence
+
+Windows1 thu 40 giây bằng TSDuck/BDA, nhưng sau 5 giây vẫn có FULL 46,79% tính cả MISSING, CC+TEI 10665,42/phút, SNR hợp lệ trung vị 14,35 dB và lock thay đổi. PCR chuẩn/SDT vẫn thiếu. Android1 bootstrap/reload 132/132, nhận 2146304 byte/2,278 giây, writer drop 0, không `-75`/detach, drain sạch; monitor đọc thành công nhưng TS lock `26→06` liên tục hơn 2 giây nên watchdog dừng đúng điều kiện card. Mẫu Android ngắn hơn cửa sổ đánh giá, không có SNR sau 5 giây để kết luận cùng sóng.
+
+Sau drain, helper gặp lỗi quote literal của `exec-out run-as sh -c`; output đầu là thông báo shell thay report, hash/size guard phát hiện và đóng budget. Đây là lỗi xuất chứng cứ ở host, không firmware hoặc mất byte writer. Người dùng cho xử lý lỗi trong phiên sau khi rút tuner. Bản sửa chỉ bỏ lớp quote sai của exec-out và tăng độ thật của fake; reproduction exact argv FAIL trước/PASS sau, B4 131/131 và B3 regression 126/126 PASS. Helper mới SHA `4105a44dde5370de8e7f2ba15475b02d50d4d0780f982b0de5a99c805d9ba5f8`; helper đã chạy là `21d34889…`, được giữ nguyên ngoài Git.
+
+### Decision
+
+- Ghi `INSUFFICIENT_EVIDENCE`, không ép một trong PARITY_PASS/GAP/RF_LIMITED khi thiếu cửa sổ Android sau 5 giây, PCR chuẩn và SDT. Cờ TS lock mất không tự chứng minh mất RF, lỗi anten hoặc monitor có bug.
+- Giữ receipt `HOST_ABORTED_NO_RETRY`, drained=true/session_closed=true, hash ngân sách `72666fe5e63f70a72781f14dbaf2e6c5e7a7bcca965a6634cc5748aa311e0356`. Không xóa, sửa, rearm hoặc dùng UUID mới để lách chốt. Đã dùng một Windows/một Android trong trần toàn nhiệm vụ ba/bốn; chốt kỹ thuật đã đóng không tự cấp các lượt còn lại.
+- Chỉ thu tệp app đã lưu bằng đường đọc không shell lồng, sau typed drain và người dùng mở màn hình. 35 tệp có hash/size trước-sau khớp được dùng làm evidence; các output lỗi trước đó giữ riêng, không nhận làm raw.
+- Không sửa APK/native/frontend/monitor hoặc firmware giữa cặp đo để ép đủ 30 giây. Bản sửa helper host được phân biệt với source đã chạy; manifest/card cũ giữ nguyên. Muốn phần cứng tiếp phải trình card/hash mới, giải thích chốt budget và kế thừa tổng số lượt đã dùng, không tự reset phiên cũ.
+
+### Alternatives / Trade-offs
+
+Không bỏ guard hash export, không dùng ADB exit 0 thay nội dung hợp lệ, không bỏ điều kiện mất TS lock hơn 2 giây chỉ để đạt thời lượng. Dữ liệu ngắn vẫn hữu ích để kiểm transport và monitor, nhưng không đủ chứng nhận chất lượng ngang Windows. Không yêu cầu người dùng thay anten ngoài trời hoặc mua công cụ từ suy luận một cặp thiếu dữ liệu.
+
+### Validation / Reopen trigger
+
+Hoàn tất đối chiếu offline frame/lock/freeze và báo cáo cặp 1, giữ mọi UNKNOWN. Chỉ xem xét phép đo bổ sung nếu có giả thuyết phân biệt được và card mới giữ tổng ngân sách; không mở Phase 4 từ sync liên tục, PAT/PMT hoặc writer drop 0 đơn lẻ.
+
+## ADR-056 — Tách lỗi USB đã sửa khỏi chất lượng sóng; thu dài và đo tín hiệu trong B4
+
+**Date:** 2026-11-12 → 2026-11-13, nhiệm vụ B4; baseline `8d05adb24de221399deaf2392b7fef1218cfab3d`.
+
+**Status:** Accepted cho triển khai và kiểm offline. `ROOT_CAUSE_CONFIRMED` chỉ cho lỗi USB `-75`, trạng thái `TRANSPORT_FIXED_DEBUG`; chất lượng TS và parity Windows/Android chưa được xác nhận. Phần cứng B4 NOT RUN, phải trình card có hash rồi đợi `OK B4`.
+
+### Context / Evidence
+
+Đã đọc lại hai report B2 gốc và ba report B3: năm lượt thuộc các lần ngắt nguồn riêng đều bootstrap/reload 132/132, nhận dữ liệu, không detach sau reload, outstanding cuối 0 và không quarantine. Hai B2 có 16 completion thành công mỗi lượt; ba B3 có first data status/errno 0. Status `-2` sau discard là hủy khi drain, không phải lỗi nhận đầu tiên. Bằng chứng này khác với các lượt Android trước reload có `-75` và 0 byte.
+
+Phân tích firmware đã pin ở mục H-AUTOINLEN trong [RESEARCH.md](RESEARCH.md) xác nhận đường SET_CONFIGURATION ghi `EP2AUTOINLEN=1024`, còn init ảnh gốc ghi 512. Reload ảnh gốc sau SET_CONFIGURATION loại được `-75` qua năm lượt; vì vậy chấp nhận nguyên nhân gốc và bản sửa vận chuyển debug cho lỗi này. Chưa có readback trực tiếp thanh ghi trên Android hoặc phép đo điện trên bus; không dùng kết luận này để bảo đảm chất lượng sóng, TS sạch hoặc production đã sửa.
+
+### Decision
+
+- Đính chính ADR-055 và tiêu chí B3: khoảng 27,5 Mbps là tốc độ dữ liệu đi ra trong đợt, không phải bitrate của toàn kênh truyền hình. Bỏ tiêu chí throughput ±10% của 27,5 Mbps và giả định `3437500 B/s` trong horizon. Giữ bộ đếm outstanding nhỏ nhất và số lần outstanding phần mềm về 0; phân loại khoảng trống bằng timestamp, với mức tin cậy rõ ràng.
+- Windows cold2 không phải mẫu sạch: raw có TEI/CC, nên chỉ là đối chứng cùng thiết bị. Thu 2 giây không đủ đánh giá giai đoạn ổn định sau lock. Kết quả lỗi gói B3 vẫn được giữ, nhưng không dùng các tiêu chí tốc độ sai để kết luận vòng native thất bại. Nguyên nhân lỗi TS còn lại cần B4, không khẳng định do anten trước phép đo cùng điều kiện.
+- Chỉ B4 debug được thu mặc định 30 giây, tối đa 60 giây và 256 MiB. Đây là trần an toàn dung lượng, không phải dự báo bitrate. Giữ 16 × 16384 mặc định hoặc 32 × 16384; không mở các cấu hình frontend, drive hoặc firmware mới. Giữ giới hạn B3/legacy khi không bật B4 tường minh.
+- Writer riêng nhận dữ liệu qua hàng đợi RAM có giới hạn; vòng nhận không chờ đĩa. Đếm `writer_drop_bytes`, lỗi writer và byte thực ghi; mọi mất byte hoặc ghi chưa bền đều không được chứng nhận. Audit completion nằm trong RAM, xuất sau drain. Không cấp phát một vùng RAM bằng toàn bộ trần 256 MiB.
+- Monitor chạy khoảng 250 ms trên cùng connection được sở hữu, chỉ ghi chọn bank và freeze/unfreeze đã đối chiếu Windows. Mọi EP0 dùng chung mutex; Bulk có lease giữ connection riêng nhưng không giữ mutex EP0 suốt 60 giây. Monitor lỗi được ghi lại và không làm chết stream; chỉ dừng vì mất lock đã xác nhận liên tục hơn 2 giây. Timestamp monitor và native cùng `CLOCK_MONOTONIC`.
+- RSSI tuner mặc định tắt. Chỉ bật cờ `--tuner-rssi` khi chuỗi ghi/đọc đã được phân tích và khóa trong card; không coi mọi thao tác đo RSSI là chỉ đọc. Không thêm ghi thử vào tuner hoặc demod.
+- Phiên phần cứng mới tối đa ba capture Windows và bốn lượt Android, kể cả lượt dừng trước I/O; mỗi lượt Android cần người dùng ngắt cả nguồn ít nhất 5 giây. Giữ anten tại chỗ giữa hai phép đo, Windows trước rồi Android, cùng ngày thực hiện. Không kế thừa quyền từ B3 đã đóng. `-75` hoặc detach sau reload đóng phiên.
+- Giữ toàn bộ ranh giới ADR-054: ảnh gốc chỉ vào RAM, MANUAL PLP0, drive `54/54`, `8A 0A00`, permission/owner/foreground/heartbeat thật, không EEPROM, LNB/DC, vendor chưa phân tích, VM, ownership hoặc driver changes. Không stage/commit/push và không đưa raw/định danh vào Git.
+
+### Alternatives / Trade-offs
+
+Không tăng buffer để che lỗi gói, không phát lại lệnh LED Windows hoặc thay init/frontend. Chấp nhận kết quả UNKNOWN khi capture thiếu frame đầy đủ, PCR không liền mạch hoặc monitor không đủ mẫu. Phân loại nguồn im lặng và host chậm chỉ từ timestamp userspace là suy luận có điều kiện, không thay bằng chứng kernel completion hoặc bằng chứng điện.
+
+### Validation / Reopen trigger
+
+Bắt buộc fake nguồn có nhịp, golden monitor, writer chậm 60 giây giả lập, control/Bulk song song, các gate phần mềm và kiểm release isolation. Chỉ đánh giá parity sau 5 giây đầu theo cùng analyzer: FULL, CC/TEI mỗi phút, SNR, bitrate PCR và PAT/PMT/SDT/service. Thiếu một trường bắt buộc thì chưa đủ chứng nhận. Phase 4 chỉ được ghi kế hoạch sau parity, không triển khai trong B4.
+
 ## ADR-055 — Nhận liên tục trong native, tách kiểm quyền và ghi chứng cứ khỏi vòng nóng
 
 **Date:** 2026-11-12, triển khai B3 sau kiểm analyzer.

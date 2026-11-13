@@ -39,8 +39,9 @@ final class Tbs5530NativeStreamBackend implements Tbs5530AndroidUsbFacade.Receiv
         output = new FileOutputStream(file);
         audit = new OutputStreamWriter(output, StandardCharsets.UTF_8);
         try {
+            File raw = limits.b4Capture ? new File(directory, "phase31-native-stream-" + runId + ".ts") : null;
             receiver = new NativeUsbfsStream(connection.getFileDescriptor(), limits.queueDepth, limits.readChunkBytes,
-                    limits.maxBytes, limits.durationMillis, runId, consent::requireCurrent, audit);
+                    limits.maxBytes, limits.durationMillis, runId, consent::requireCurrent, audit, raw);
         } catch (IOException | RuntimeException | Error error) {
             try { audit.close(); } catch (IOException close) { error.addSuppressed(close); }
             throw error;
@@ -66,9 +67,12 @@ final class Tbs5530NativeStreamBackend implements Tbs5530AndroidUsbFacade.Receiv
         try { receiver.close(); }
         finally {
             closed = true;
-            try { audit.flush(); output.getFD().sync(); }
-            finally { audit.close(); }
-            if (!receiver.isQuarantined()) synchronized (RETAINED) { RETAINED.remove(this); }
+            try {
+                try { audit.flush(); output.getFD().sync(); }
+                finally { audit.close(); }
+            } finally {
+                if (!receiver.isQuarantined()) synchronized (RETAINED) { RETAINED.remove(this); }
+            }
         }
     }
 }

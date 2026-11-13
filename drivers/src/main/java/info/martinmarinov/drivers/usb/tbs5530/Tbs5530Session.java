@@ -70,6 +70,32 @@ public final class Tbs5530Session implements AutoCloseable {
         if (problem != null) throw problem;
     }
 
+    /** Pins the owned connection for receive without holding the EP0 transaction mutex. */
+    void receiveTransaction(long token, Transaction operation) throws TransferException {
+        Cleanup cleanup = null;
+        TransferException problem = null;
+        synchronized (this) {
+            requireUsable(token);
+            activeTransactions++;
+        }
+        try {
+            operation.run();
+        } catch (TransferException error) {
+            problem = error;
+        } finally {
+            synchronized (this) {
+                activeTransactions--;
+                if (cleaning && activeTransactions == 0) cleanup = takeCleanup();
+            }
+            IOException cleanupProblem = finishCleanup(cleanup);
+            if (cleanupProblem != null) {
+                if (problem != null) problem.addSuppressed(cleanupProblem);
+                else problem = new TransferException(SESSION_UNAVAILABLE, "Deferred receive cleanup failed", cleanupProblem);
+            }
+        }
+        if (problem != null) throw problem;
+    }
+
     public synchronized long requestPermission() {
         if (cleaning || resources != null || !(state == State.DETECTED
                 || state == State.CLOSED || state == State.DISCONNECTED)) {

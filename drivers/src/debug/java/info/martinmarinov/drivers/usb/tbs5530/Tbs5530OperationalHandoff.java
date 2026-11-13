@@ -17,6 +17,20 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
     private Tbs5530TsSmoke.ReadApi readApi = Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO;
     private Tbs5530ControlMirror controlMirror;
     private NativeConfiguration nativeConfiguration;
+    private java.io.File signalDirectory;
+    private volatile Tbs5530SignalSampler signalSampler;
+    public void signalMonitorAudit(java.io.File directory) throws IOException {
+        if (device != null || signalDirectory != null || directory == null || !directory.isDirectory())
+            throw new IOException("Signal audit must bind before acquisition");
+        signalDirectory = directory;
+    }
+    public int signalSampleCount() { return signalSampler == null ? 0 : signalSampler.samples().size(); }
+    public String signalMonitorFailure() { return signalSampler == null ? null : signalSampler.failure(); }
+    public boolean signalLockLost() { return signalSampler != null && signalSampler.lockLost(); }
+    private void requireMonitorLock() throws IOException {
+        Tbs5530SignalSampler sampler = signalSampler;
+        if (sampler != null && sampler.lockLost()) throw new IOException("B4_LOCK_LOST_OVER_2_SECONDS");
+    }
     private volatile Tbs5530Fx2Reload reload;
     private boolean reloadComplete;
     private final java.util.List<Tbs5530Fx2Reload.Boundary> reloadBoundaries = new java.util.ArrayList<>();
@@ -302,6 +316,7 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
                                 && (!session.isFrontendInitialized() || !session.isFrontendLocked() || !session.isStreaming()))
                             throw new IOException("B3 frontend lock or stream state lost");
                         permission.requireCurrent(token);
+                        if (limits.b4Capture) requireMonitorLock();
                         if (limits.explicitSetInterfaceAlt0 && (!nativeConfiguration.k36AutoTuneConfirmed
                                 || !permission.explicitSetInterfaceAlt0Approved()))
                             throw new IOException("Explicit interface selection grant or K36 AUTO revoked");
@@ -328,10 +343,39 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
             if (!session.isFrontendLocked() || !session.isStreaming() || nativeConfiguration.reloadManager == null)
                 throw new IOException("Locked owned B3 stream required");
             final info.martinmarinov.usbxfer.NativeUsbfsStream.Result[] result = new info.martinmarinov.usbxfer.NativeUsbfsStream.Result[1];
-            session.transaction(generation, () -> {
-                try { result[0] = nativeConfiguration.reloadManager.receiveStream(); }
-                catch (IOException error) { throw new Tbs5530ControlIo.TransferException(Tbs5530ControlIo.FailureKind.IO_FAILURE, "Native stream failed", error); }
-            });
+            Tbs5530Session.Transaction receive = () -> {
+                try {
+                    if (limits.b4Capture) {
+                        if (signalDirectory == null) throw new IOException("B4 signal audit destination required");
+                        if (limits.tunerRssi) throw new IOException("TUNER_RSSI_UNSUPPORTED_REQUIRES_REVIEWED_EXACT_SEQUENCE");
+                        signalSampler = new Tbs5530SignalSampler((thread, stopping) -> {
+                            Tbs5530ControlIo rawMonitor = nativeConfiguration.reloadManager.monitorControl(thread);
+                            Tbs5530ControlIo currentMonitor = (type, request, value, index, bytes, offset, length, timeout) -> {
+                                if (stopping.get() && !(request == 0x80 && length == 4
+                                        && ((bytes[offset + 2] == 1 && bytes[offset + 3] == 0)
+                                        || (bytes[offset + 2] == 0 && (bytes[offset + 3] & 255) == 0x20))))
+                                    throw new IOException("Monitor stopping");
+                                consent.requireCurrent(); session.requireUsable(generation);
+                                return rawMonitor.controlTransfer(type, request, value, index, bytes, offset, length, timeout);
+                            };
+                            Tbs5530SignalMonitor monitor = new Tbs5530SignalMonitor(currentMonitor, System::nanoTime);
+                            return () -> {
+                                final Tbs5530SignalMonitor.Sample[] sample = new Tbs5530SignalMonitor.Sample[1];
+                                session.transaction(generation, () -> sample[0] = monitor.sample());
+                                return sample[0];
+                            };
+                        });
+                        try {
+                            signalSampler.start();
+                            result[0] = nativeConfiguration.reloadManager.receiveStream();
+                        } finally { signalSampler.close(); }
+                        Tbs5530SignalAudit.write(signalDirectory, nativeConfiguration.runId,
+                                signalSampler.samples(), signalSampler.failure());
+                    } else result[0] = nativeConfiguration.reloadManager.receiveStream();
+                } catch (IOException error) { throw new Tbs5530ControlIo.TransferException(Tbs5530ControlIo.FailureKind.IO_FAILURE, "Native stream failed", error); }
+            };
+            if (limits.b4Capture) session.receiveTransaction(generation, receive);
+            else session.transaction(generation, receive);
             return result[0];
         });
         return smoke;

@@ -71,6 +71,17 @@ public class Tbs5530TsSmokeTest {
         }
         Tbs5530TsSmoke.Limits limits() { return new Tbs5530TsSmoke.Limits(564, 2, 1000, 500); }
     }
+    @Test public void b4LongCaptureIsExplicitAndRetainsB3Limits() {
+        Tbs5530TsSmoke.Limits longCapture = Tbs5530TsSmoke.Limits.b4(60000, 32, false);
+        assertTrue(longCapture.b4Capture); assertFalse(longCapture.tunerRssi);
+        assertEquals(60000, longCapture.durationMillis); assertEquals(16384, longCapture.readChunkBytes);
+        assertEquals(256 * 1024 * 1024, longCapture.maxBytes);
+        assertThrows(IllegalArgumentException.class, () -> Tbs5530TsSmoke.Limits.b4(60001, 16, false));
+        assertThrows(IllegalArgumentException.class, () -> Tbs5530TsSmoke.Limits.b4(30000, 24, false));
+        assertThrows(IllegalArgumentException.class, () -> new Tbs5530TsSmoke.Limits(4194304, 65536, 30000, 500, 16384,
+                false, Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_STREAM, false, false, 16));
+    }
+
     @Test public void b3BoundsAllowReceiveOnlyQueueChangesAndRetainLegacyBounds() {
         Tbs5530TsSmoke.Limits b3 = new Tbs5530TsSmoke.Limits(4194304, 65536, 2000, 500, 16384, false,
                 Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_STREAM, false, false, 16);
@@ -113,7 +124,7 @@ public class Tbs5530TsSmokeTest {
             assertFalse(result.structureConfirmed()); assertEquals(0, f.reads); assertEquals(1, f.owner.closes);
         }
     }
-    @Test public void b3QueueRiskIsQualityFailureNotCompletedUsbError() throws Exception {
+    @Test public void softwareZeroOutstandingIsQualityFailureNotCompletedUsbError() throws Exception {
         Fixture f = new Fixture(true, Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_STREAM); f.nativeApproved = true;
         byte[] clean = fullBoundedSample(), raw = new byte[2048 + clean.length];
         System.arraycopy(clean, 0, raw, 2048, clean.length);
@@ -136,6 +147,31 @@ public class Tbs5530TsSmokeTest {
             return constructor.newInstance(raw, new long[]{32, 16, 1000000000L, risks, 5000, 5000, 15, status, 0, 0, 0, 3, 0, 0}, reason);
         } catch (ReflectiveOperationException error) { throw new IOException(error); }
     }
+    @Test public void b4ParsesFileAfterDrainAndNeverCertifiesWriterDrops() throws Exception {
+        Fixture f = new Fixture(true, Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_STREAM); f.nativeApproved = true;
+        byte[] clean = fullBoundedSample(), raw = new byte[2048 + clean.length];
+        System.arraycopy(clean, 0, raw, 2048, clean.length);
+        java.io.File file = java.io.File.createTempFile("b4-drained-", ".bin");
+        try {
+            try (java.io.FileOutputStream output = new java.io.FileOutputStream(file)) { output.write(raw); }
+            final int[] copied = {0};
+            f.observer = (bytes, length) -> { assertTrue(length <= 65536); copied[0] += length; };
+            java.lang.reflect.Constructor<info.martinmarinov.usbxfer.NativeUsbfsStream.Result> constructor =
+                    info.martinmarinov.usbxfer.NativeUsbfsStream.Result.class.getDeclaredConstructor(byte[].class,
+                            java.io.File.class, int.class, long.class, long.class, String.class, long[].class, String.class);
+            constructor.setAccessible(true);
+            info.martinmarinov.usbxfer.NativeUsbfsStream.Result stream = constructor.newInstance(new byte[0], file,
+                    raw.length + 16384, (long)raw.length, 16384L, null,
+                    new long[]{32, 32, 30000000000L, 0, 1000, 1000, 15, 0, 0, 0, 0, 2, 0, 0}, "DEADLINE");
+            f.smoke.streamReceiver(limits -> stream);
+            Tbs5530TsSmoke.Result result = f.smoke.run(Tbs5530TsSmoke.Limits.b4(30000, 16, false));
+            assertEquals(raw.length, copied[0]); assertEquals(raw.length, result.bytes);
+            assertEquals(raw.length + 16384, result.nativeStream.bytes);
+            assertEquals(16384, result.nativeStream.writerDropBytes);
+            assertEquals(Tbs5530TsSmoke.Status.INVALID_TS, result.status); assertFalse(result.structureConfirmed());
+        } finally { assertTrue(file.delete()); }
+    }
+
     @Test public void b3StructureRequiresCleanContinuityAndValidPatPmtAfterPrefix() {
         byte[] clean = fullBoundedSample();
         Tbs5530TsParser parser = new Tbs5530TsParser(); parser.accept(clean, 0, clean.length);

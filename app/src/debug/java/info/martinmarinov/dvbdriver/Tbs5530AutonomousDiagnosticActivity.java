@@ -114,6 +114,9 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
                 token, intent.getBooleanExtra(Tbs5530AutonomousLaunch.CONTROL_ONLY, false),
                 intent.getBooleanExtra("sony_ts_output_readback",false), intent.getStringExtra("frontend_experiment"));
         if (session.nativeStream) session.configureStream(intent.getIntExtra("b3_queue_depth", 16), intent.getIntExtra("b3_urb_bytes", 16384));
+        if (intent.getBooleanExtra("b4_enabled", false)) session.configureB4(
+                intent.getIntExtra("b4_duration_ms", 30000), intent.getIntExtra("b4_max_bytes", 256 * 1024 * 1024),
+                intent.getBooleanExtra("b4_tuner_rssi", false));
         setIntent(new Intent(intent));
         if (foreground) { session.policy.foreground(true); ui.post(tick); }
     }
@@ -446,6 +449,7 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
         handoff = new Tbs5530OperationalHandoff(getApplicationContext(), runtime, this::requirePhysical, session.readApi, session.id, session.reloadEnabled());
         if (session.controlMirror != null) handoff.controlMirror(session.controlMirror);
         if (session.reloadEnabled()) handoff.reloadNativeAudit(session.directory);
+        if (session.b4Capture) handoff.signalMonitorAudit(getFilesDir());
         handoff.start(device); result = "ACQUIRING_FRESH_OPERATIONAL_OWNER"; ui.postDelayed(this::awaitOwner, 25);
     }
     private void awaitOwner() {
@@ -514,13 +518,15 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
                     observeSony(Tbs5530SonyTsOutputReadback.Stage.AFTER_LOCK);
                     handoff.sonyReadbackHook(()->observeSony(Tbs5530SonyTsOutputReadback.Stage.BEFORE_FIRST_URB));
                 }
-                Tbs5530TsSmoke.Limits limits = session.nativeStream
+                Tbs5530TsSmoke.Limits limits = session.b4Capture
+                        ? Tbs5530TsSmoke.Limits.b4(session.streamDurationMillis, session.streamQueueDepth, session.tunerRssi)
+                        : session.nativeStream
                         ? new Tbs5530TsSmoke.Limits(4 * 1024 * 1024, 65536, 2000, 500, session.streamUrbBytes, false, session.readApi, false, false, session.streamQueueDepth)
                         : new Tbs5530TsSmoke.Limits(65536, 16, 5000, 500,
                         Tbs5530AutonomousPlans.chunkBytes(session.readApi), false, session.readApi, session.explicitSetInterfaceAlt0, session.sonyTsOutputReadback);
                 approval = session.approval(null, limits); session.policy.transition(Tbs5530AutonomousPolicy.State.TS_CAPTURE);
                 Tbs5530TsSmoke.Result ts;
-                try (Tbs5530AutonomousCapture raw = new Tbs5530AutonomousCapture(session.directory, limits.maxBytes, session.nativeStream)) {
+                try (Tbs5530AutonomousCapture raw = new Tbs5530AutonomousCapture(session.directory, limits.maxBytes, session.nativeStream, session.b4Capture)) {
                     session.capture = raw;
                     ts = handoff.smoke(current(), SystemClock::elapsedRealtimeNanos, raw).run(limits);
                     preserveNativeReceiveSnapshot();
@@ -528,9 +534,26 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
                     bytes = ts.bytes; packets = ts.packets.packets; errno = ts.lastReadErrno;
                 } finally {
                     preserveNativeReceiveSnapshot();
+                    if (session.b4Capture) {
+                        session.signalSampleCount = handoff.signalSampleCount();
+                        session.signalMonitorFailure = handoff.signalMonitorFailure();
+                        if (session.tsResult != null && session.tsResult.nativeStream != null) {
+                            Tbs5530TsSmoke.StreamMetrics stream = session.tsResult.nativeStream;
+                            if (Tbs5530AutonomousSession.knownB4LockStop(true, handoff.signalLockLost(), stream.stopReason,
+                                    stream.firstStatus, stream.firstErrno, stream.outstanding, stream.quarantined))
+                                session.stopReason = "B4_LOCK_LOST_OVER_2_SECONDS";
+                        }
+                    }
                     if (session.capture != null) bytes = session.capture.bytes();
                 }
                 if (ts.status == Tbs5530TsSmoke.Status.NO_DATA_OR_USB_FAILURE) {
+                    if (ts.nativeStream != null && Tbs5530AutonomousSession.knownB4LockStop(session.b4Capture,
+                            handoff.signalLockLost(), ts.nativeStream.stopReason, ts.nativeStream.firstStatus, ts.nativeStream.firstErrno,
+                            ts.nativeStream.outstanding, ts.nativeStream.quarantined)) {
+                        session.stopReason = "B4_LOCK_LOST_OVER_2_SECONDS";
+                        session.policy.transition(Tbs5530AutonomousPolicy.State.REPORT);
+                        stop("B4_LOCK_LOST"); return;
+                    }
                     boolean completedError = Tbs5530AutonomousPlans.nativeUrb(session.readApi)
                             ? completedNativeReceiveError()
                             : Tbs5530AutonomousPolicy.completedReceiveError(session.readApi == Tbs5530TsSmoke.ReadApi.SYNC_NATIVE_ERRNO,

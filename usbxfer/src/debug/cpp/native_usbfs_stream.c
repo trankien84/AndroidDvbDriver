@@ -44,25 +44,43 @@ static void record(struct tbs_stream *s, int kind, int slot, struct tbs_stream_c
     memcpy(s->events[s->event_count++].v, v, sizeof(v));
     if (before < 0 || after < before) error_with(s, TBS_STREAM_CLOCK, 0);
 }
-int tbs_stream_init(struct tbs_stream *s, struct tbs_stream_ops ops,
-                    int depth, int chunk, int max_bytes, int duration_ms) {
+static int init(struct tbs_stream *s, struct tbs_stream_ops ops,
+                int depth, int chunk, int max_bytes, int duration_ms, int file_backed) {
     if (!s || depth < 8 || depth > 32 || chunk < 4096 || chunk > 65536 || chunk % 512
-            || max_bytes < 1 || max_bytes > TBS_STREAM_MAX_BYTES || duration_ms < 1 || duration_ms > 10000
+            || (file_backed && ((depth != 16 && depth != 32) || chunk != 16384))
+            || max_bytes < 1 || max_bytes > (file_backed ? TBS_STREAM_FILE_MAX_BYTES : TBS_STREAM_MAX_BYTES)
+            || duration_ms < 1 || duration_ms > (file_backed ? 60000 : 10000)
             || !ops.allocate || !ops.release || !ops.prepare || !ops.submit || !ops.reap
             || !ops.discard || !ops.metadata || !ops.nanos || !ops.wait) return -EINVAL;
     memset(s, 0, sizeof(*s));
     atomic_init(&s->stop, TBS_STREAM_RUNNING);
+    atomic_init(&s->ring_head, 0); atomic_init(&s->ring_tail, 0);
+    atomic_init(&s->producer_done, 0); atomic_init(&s->writer_active, 0);
     for (int i = 0; i < 14; ++i) atomic_init(&s->published[i], 0);
+    if (file_backed && (!atomic_is_lock_free(&s->ring_head) || !atomic_is_lock_free(&s->ring_tail)
+            || !atomic_is_lock_free(&s->producer_done))) return -ENOTSUP;
     s->ops = ops; s->depth = depth; s->chunk = chunk;
     s->max_bytes = max_bytes; s->duration_ms = duration_ms;
-    s->event_capacity = 2 * (max_bytes / 512 + depth) + 4 * depth + 64;
+    s->file_backed = file_backed;
+    /* Bounded independently of byte cap: fast short completions stop safely, never grow RAM. */
+    s->event_capacity = 2 * (file_backed ? TBS_STREAM_FILE_COMPLETIONS : max_bytes / 512)
+        + 6 * depth + 64;
     s->next_sequence = s->expected = 1;
     s->first_status = 0; s->last_status = TBS_STREAM_UNKNOWN;
     s->last_slot = -1; s->min_outstanding = depth;
-    s->data = malloc((size_t)max_bytes);
+    if (file_backed) {
+        s->ring_capacity = TBS_STREAM_RING_BYTES / chunk;
+        s->ring = malloc(TBS_STREAM_RING_BYTES);
+        s->ring_lengths = calloc((size_t)s->ring_capacity, sizeof(*s->ring_lengths));
+        s->mappings = calloc(TBS_STREAM_FILE_COMPLETIONS, sizeof(*s->mappings));
+        if (!s->ring || !s->ring_lengths || !s->mappings) goto fail;
+    } else {
+        s->data = malloc((size_t)max_bytes);
+        if (!s->data) goto fail;
+    }
     s->events = calloc((size_t)s->event_capacity, sizeof(*s->events));
     s->resubmit = calloc((size_t)s->event_capacity, sizeof(*s->resubmit));
-    if (!s->data || !s->events || !s->resubmit) goto fail;
+    if (!s->events || !s->resubmit) goto fail;
     for (int i = 0; i < depth; ++i) {
         struct tbs_stream_slot *p = &s->slots[i];
         p->buffer = malloc((size_t)chunk); p->request = ops.allocate(ops.opaque);
@@ -77,6 +95,65 @@ int tbs_stream_init(struct tbs_stream *s, struct tbs_stream_ops ops,
 fail:
     tbs_stream_destroy(s);
     return -ENOMEM;
+}
+int tbs_stream_init(struct tbs_stream *s, struct tbs_stream_ops ops,
+                    int depth, int chunk, int max_bytes, int duration_ms) {
+    return init(s, ops, depth, chunk, max_bytes, duration_ms, 0);
+}
+int tbs_stream_init_file(struct tbs_stream *s, struct tbs_stream_ops ops,
+                         int depth, int chunk, int max_bytes, int duration_ms) {
+    return init(s, ops, depth, chunk, max_bytes, duration_ms, 1);
+}
+int tbs_stream_writer_attach(struct tbs_stream *s) {
+    int expected = 0;
+    if (!s || !s->file_backed || s->released || s->started
+            || !atomic_compare_exchange_strong(&s->writer_active, &expected, 1)) return -EINVAL;
+    return 0;
+}
+int tbs_stream_writer_peek(struct tbs_stream *s, const unsigned char **bytes) {
+    unsigned tail = atomic_load_explicit(&s->ring_tail, memory_order_relaxed);
+    unsigned head = atomic_load_explicit(&s->ring_head, memory_order_acquire);
+    if (head == tail) {
+        if (!atomic_load_explicit(&s->producer_done, memory_order_acquire)) return 0;
+        /* Acquire completion before re-reading head: never miss the final published slot. */
+        head = atomic_load_explicit(&s->ring_head, memory_order_acquire);
+        if (head == tail) return -1;
+    }
+    int at = (int)(tail % (unsigned)s->ring_capacity);
+    *bytes = s->ring + (size_t)at * s->chunk;
+    return s->ring_lengths[at];
+}
+void tbs_stream_writer_consume(struct tbs_stream *s) {
+    unsigned tail = atomic_load_explicit(&s->ring_tail, memory_order_relaxed);
+    atomic_store_explicit(&s->ring_tail, tail + 1, memory_order_release);
+}
+void tbs_stream_writer_finish(struct tbs_stream *s) {
+    atomic_store_explicit(&s->producer_done, 1, memory_order_release);
+}
+void tbs_stream_writer_detach(struct tbs_stream *s) {
+    atomic_store_explicit(&s->writer_active, 0, memory_order_release);
+}
+static void capture(struct tbs_stream *s, int slot, int count, int64_t reaped_at) {
+    if (!s->file_backed) {
+        memcpy(s->data + s->delivered, s->slots[slot].buffer, (size_t)count);
+    } else {
+        unsigned head = atomic_load_explicit(&s->ring_head, memory_order_relaxed);
+        unsigned tail = atomic_load_explicit(&s->ring_tail, memory_order_acquire);
+        int dropped = head - tail >= (unsigned)s->ring_capacity;
+        int64_t *map = s->mappings[s->mapping_count++];
+        map[0] = (int64_t)s->slots[slot].sequence; map[1] = s->delivered;
+        map[2] = dropped ? -1 : s->writer_queued_bytes; map[3] = count;
+        map[4] = dropped; map[5] = reaped_at;
+        if (dropped) s->writer_drop_bytes += count;
+        else {
+            int at = (int)(head % (unsigned)s->ring_capacity);
+            memcpy(s->ring + (size_t)at * s->chunk, s->slots[slot].buffer, (size_t)count);
+            s->ring_lengths[at] = count;
+            s->writer_queued_bytes += count;
+            atomic_store_explicit(&s->ring_head, head + 1, memory_order_release);
+        }
+    }
+    s->delivered += count;
 }
 static int valid(struct tbs_stream *s, struct tbs_stream_slot *p, struct tbs_stream_meta *m) {
     return m->requested == s->chunk && m->type == 3 && m->endpoint == 0x82
@@ -101,7 +178,8 @@ static int submit_slot(struct tbs_stream *s, int slot) {
     s->ops.metadata(p->request, &m);
     if (!valid(s, p, &m)) { stop_with(s, TBS_STREAM_IDENTITY); return 0; }
     /* Reserved audit space includes every possible cancellation and final reap. */
-    if (s->event_capacity - s->event_count <= 2 * s->depth + 2) {
+    if (s->event_capacity - s->event_count <= 2 * s->depth + 2
+            || (s->file_backed && s->mapping_count >= TBS_STREAM_FILE_COMPLETIONS)) {
         stop_with(s, TBS_STREAM_EVENT_CAP); return 0;
     }
     int64_t before = now(s);
@@ -199,10 +277,8 @@ int tbs_stream_run(struct tbs_stream *s) {
         }
         if (s->outstanding < s->min_outstanding) s->min_outstanding = s->outstanding;
         if (!s->outstanding) { ++s->zero_outstanding_count; ++s->starvation_count; }
-        /* Horizon is a risk indicator under an assumed rate, never proof of hardware starvation.
-         * Completed-but-unreaped requests are invisible to the submitted-minus-reaped counter. */
-        int64_t horizon = (int64_t)s->depth * s->chunk * 1000000000LL / TBS_STREAM_RATE;
-        if (reaped_at - s->last_progress > horizon) { ++s->horizon_count; ++s->starvation_count; }
+        /* Submitted-minus-reaped cannot reveal completed requests waiting inside the kernel.
+         * Only observed software zero counts; source/host gaps are analyzed offline. */
         s->last_progress = reaped_at;
         if (m.status != 0) {
             if (s->first_status == 0) s->first_status = m.status;
@@ -212,8 +288,7 @@ int tbs_stream_run(struct tbs_stream *s) {
         if (!active(s)) break;
         int count = m.actual;
         if (count > s->max_bytes - s->delivered) count = s->max_bytes - s->delivered;
-        memcpy(s->data + s->delivered, s->slots[slot].buffer, (size_t)count);
-        s->delivered += count;
+        capture(s, slot, count, reaped_at);
         if (s->delivered >= s->max_bytes) { stop_with(s, TBS_STREAM_BYTE_CAP); break; }
         if (!submit_slot(s, slot)) break;
         int64_t latency = now(s) - reaped_at;
@@ -225,6 +300,7 @@ int tbs_stream_run(struct tbs_stream *s) {
     int64_t end = now(s);
     s->elapsed = end >= s->begin ? end - s->begin : 0;
     drain(s);
+    tbs_stream_writer_finish(s);
     qsort(s->resubmit, (size_t)s->latency_count, sizeof(*s->resubmit), compare_latency);
     if (s->latency_count) {
         int mid = s->latency_count / 2;
@@ -237,13 +313,15 @@ int tbs_stream_run(struct tbs_stream *s) {
 }
 int tbs_stream_destroy(struct tbs_stream *s) {
     if (!s || s->released) return 0;
-    if (s->outstanding || s->uncertain) return -EBUSY;
+    if (s->outstanding || s->uncertain || atomic_load_explicit(&s->writer_active, memory_order_acquire)) return -EBUSY;
     for (int i = 0; i < s->depth; ++i) {
         if (s->slots[i].request) s->ops.release(s->ops.opaque, s->slots[i].request);
         free(s->slots[i].buffer);
         s->slots[i].request = NULL; s->slots[i].buffer = NULL;
     }
     free(s->data); free(s->events); free(s->resubmit);
+    free(s->ring); free(s->ring_lengths); free(s->mappings);
+    s->ring = NULL; s->ring_lengths = NULL; s->mappings = NULL;
     s->data = NULL; s->events = NULL; s->resubmit = NULL; s->released = 1;
     return 0;
 }

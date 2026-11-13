@@ -31,6 +31,37 @@ public class Tbs5530SessionTest {
         assertTrue(s.connected(token,owned));return token;
     }
 
+    @Test public void receiveAllowsEp0AndDefersCleanupUntilBothTransactionsFinish() throws Exception {
+        Tbs5530Session session = new Tbs5530Session();
+        Owned owned = new Owned();
+        long generation = connect(session, owned);
+        session.interfaceClaimed(generation); session.ready(generation);
+        java.util.concurrent.CountDownLatch receiving = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread bulk = new Thread(() -> {
+            try {
+                session.receiveTransaction(generation, () -> {
+                    receiving.countDown();
+                    try { if (!release.await(3, java.util.concurrent.TimeUnit.SECONDS)) throw new IOException("Timed out"); }
+                    catch (IOException | InterruptedException error) { throw new TransferException(
+                            Tbs5530ControlIo.FailureKind.IO_FAILURE, "Fake bulk failed", error); }
+                });
+            } catch (Throwable error) { failure.set(error); }
+        });
+        bulk.start();
+        try {
+            assertTrue(receiving.await(2, java.util.concurrent.TimeUnit.SECONDS));
+            session.transaction(generation, () -> { });
+            assertTrue(session.requestCancellation(generation, false));
+            assertTrue(owned.calls.isEmpty());
+        } finally { release.countDown(); bulk.join(3000); }
+        assertFalse("Concurrent receive cleanup deadlocked", bulk.isAlive());
+        assertNull(failure.get());
+        assertEquals(Arrays.asList("release", "close"), owned.calls);
+        assertThrows(TransferException.class, () -> session.receiveTransaction(generation, () -> fail("Stale owner")));
+    }
+
     @Test public void readinessMilestonesNeverAdvanceEachOtherImplicitly() throws Exception {
         Tbs5530Session s = new Tbs5530Session();
         assertEquals(Tbs5530Session.State.DETECTED, s.getState());

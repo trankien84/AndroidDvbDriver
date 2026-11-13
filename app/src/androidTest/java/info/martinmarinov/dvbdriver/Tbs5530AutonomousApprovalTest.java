@@ -32,6 +32,39 @@ public class Tbs5530AutonomousApprovalTest {
                     .put("expires_elapsed_ms", 301000).put("heartbeat_elapsed_ms", 1000);
         }
     }
+    @Test public void b4RootChallengeIsExplicitAndRefusesUnreviewedRssiBeforeAnyGrant() throws Exception {
+        android.content.Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        Tbs5530AutonomousSession session = new Tbs5530AutonomousSession(context, "NATIVE_USBFS_STREAM", "SM-X926B", 36, 47,
+                true, false, null, false, false, "B2_RELOAD_AFTER_SET_CONFIG");
+        session.configureStream(16, 16384);
+        assertThrows(IOException.class, () -> session.configureB4(30000, 268435456, true));
+        session.configureB4(30000, 268435456, false);
+        JSONObject challenge = new JSONObject(Tbs5530AutonomousSession.read(new java.io.File(context.getFilesDir(),
+                "autonomous-v1-challenge.json"), 16384));
+        assertTrue(challenge.getBoolean("b4_enabled"));
+        assertFalse(challenge.getBoolean("b4_tuner_rssi"));
+        assertEquals(30000, challenge.getInt("b3_duration_ms"));
+        assertEquals(268435456, challenge.getInt("b3_max_bytes"));
+        assertFalse(new java.io.File(session.directory, "grant.json").exists());
+        session.policy.stop();
+    }
+
+    @Test public void b4TranscriptBindsDurationWriterAndMonitorWithoutBorrowingB3Scope() throws Exception {
+        Storage store = new Storage();
+        Tbs5530TsSmoke.Limits b4 = Tbs5530TsSmoke.Limits.b4(30000, 16, false);
+        Tbs5530OperationalApproval approval = new Tbs5530OperationalApproval(store, () -> 1000, null, b4, 1);
+        store.authorize(); store.permit.put("explicit_native_urb_reception", true); approval.rfIn(true);
+        String transcript = store.permit.getString("transcript");
+        assertTrue(transcript.contains("durationMs=30000"));
+        assertTrue(transcript.contains("B4_FILE_CAPTURE|writer=BOUNDED_NONBLOCKING|monitorMs=250|tunerRssi=false"));
+        assertTrue(transcript.contains("clock=CLOCK_MONOTONIC"));
+        Tbs5530TsSmoke.Limits b3 = new Tbs5530TsSmoke.Limits(4194304, 65536, 2000, 500, 16384, false,
+                Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_STREAM, false, false, 16);
+        assertThrows(IOException.class, () -> approval.consume(b3, 1));
+        assertThrows(IOException.class, () -> approval.consume(Tbs5530TsSmoke.Limits.b4(30000, 16, true), 1));
+        approval.consume(b4, 1);
+    }
+
     @Test public void b3CachedPermitStillChecksRealHeartbeatAndLiveOwnerAfterConsume() throws Exception {
         final long[] now = {1000}, beat = {1000}; final boolean[] live = {true};
         final int[] reads = {0};

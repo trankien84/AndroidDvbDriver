@@ -1,5 +1,25 @@
 # Port TBS5530 sang Android — trạng thái hiện tại
 
+## 2026-11-13, B4 cặp 1 — Windows đã thu 40 giây; Android dừng đúng mất TS lock sau 2,28 giây
+
+**Chưa đủ bằng chứng parity; không mở Phase 4.** Người dùng duyệt `OK B4` đúng card `742010f6…`; Windows thu 61698968 byte qua TSDuck/BDA, USBPcap 63706295 byte, các process đã đóng. Giữ nguyên anten thụ động ngoài trời trên nóc nhà, dùng cùng cổng cold2. Người dùng ngắt cả nguồn ≥5 giây rồi chuyển sang Samsung/cáp chữ Y/pin dự phòng theo hướng dẫn.
+
+Android lượt 1 bootstrap/reload đều 132/132, không detach sau reload hoặc `-75`; nhận 2146304 byte trong 2278497924 ns, writer drop 0/failure null, min outstanding phần mềm 15/zero count 0. Monitor có 10 mẫu đọc thành công: đầu `26` LOCKED, chín mẫu sau `06` không TS lock; kéo dài 2002360231 ns nên watchdog dừng `B4_LOCK_LOST`, drain/outstanding 0/quarantine false. Có PAT/PMT, nhưng 214 lỗi CC và mẫu ngắn hơn 5 giây; chưa thể so chất lượng ổn định.
+
+Windows sau 5 giây: FULL 46,79% tính cả vị trí MISSING, CC+TEI khoảng 10665,42/phút, SNR hợp lệ min/trung vị/max 12,9/14,35/16,1 dB. Có 14 dịch vụ PAT/PMT, thiếu SDT và PCR chuẩn; không gọi đối chứng sạch hoặc tự quy lỗi anten. Android chưa có cửa sổ sau 5 giây hoặc SNR tương ứng, nên hiện `INSUFFICIENT_EVIDENCE`, không `B4_ANDROID_PARITY_PASS`/`B4_ANDROID_GAP`/`RF_LIMITED`.
+
+Helper lỗi xuất tệp sau drain vì quoting `exec-out sh -c`; receipt ngân sách đã đóng, không reset/rearm hoặc tự chạy thêm. Người dùng đã rút tuner/ngắt nguồn và cho sửa lỗi trong phiên; đang sửa helper **offline**, không thay APK đã chạy. Đã thu 35 tệp app lưu sẵn bằng đường đọc `cat`, SHA/size tablet-host khớp; evidence ở bundle B4, `budget-06ad7993-257b-4e2c-86ab-7aa68f1f112b/attempt-1/readonly-full-export-b8b36864`. Đã sửa export offline và parent kiểm 131/131 fake PASS, B3 regression 126/126 PASS; bản sửa chưa dùng hardware. Hậu kiểm monitor không thấy lỗi mask/timer hoặc bằng chứng đủ để gọi dừng giả; snapshot không chứng minh lock vật lý liên tục, và EP0 mirror chưa thu giao dịch monitor. Bước tiếp: bổ sung telemetry đối chiếu status trong/ngoài freeze trước khi đề xuất card/hash mới nếu cần phần cứng. Giới hạn toàn B4 vẫn tối đa ba Windows/bốn Android, đã dùng 1/1; chưa có quyền vượt chốt ngân sách đã đóng. Không stage/commit/push.
+
+## 2026-11-13, chuẩn bị B4 — Đã tách lỗi `-75` khỏi chất lượng TS; chưa chạy phần cứng mới
+
+Baseline đầu phiên đúng nhánh `chore/modernize-android-build`, HEAD `8d05adb24de221399deaf2392b7fef1218cfab3d`, working tree sạch. Đã kiểm lại năm report B2/B3 sau reload: có dữ liệu, không detach sau reload, drain sạch; [ADR-056](DECISIONS.md) chấp nhận `TRANSPORT_FIXED_DEBUG` và `ROOT_CAUSE_CONFIRMED` riêng cho lỗi USB `-75`. Điều này không chứng nhận TS sạch hoặc parity Windows/Android.
+
+Đã triển khai thu B4 mặc định 30 giây, tối đa 60 giây/256 MiB, writer không chặn/ring 4 MiB và monitor demod mỗi khoảng 250 ms; giữ bootstrap, reload, MANUAL PLP0, drive `54/54`, `8A 0A00`. Starvation chỉ còn outstanding phần mềm về 0, không dùng horizon tốc độ giả. BER/PER/FER live vẫn UNKNOWN; RSSI tuner bị từ chối vì chưa có chuỗi ghi đã duyệt. Gates: 81/81 Python, 87 native host, JVM app 101/driver 507 PASS + 5 SKIP/usbxfer 61/service 13, debug/release/AndroidTest/app lint và JNI/ELF/release isolation PASS có phạm vi; emulator đúng APK cuối 11/11 PASS và đã đóng. Giữ các FAIL lịch sử, không giả toàn bộ đều PASS.
+
+Phân tích mới xác nhận burst khoảng 242,35 ms/540672 byte, tốc độ burst 27,5 Mbps không phải bitrate multiplex. Windows cũng có CC/TEI và SNR sau 5 giây 12,4/13,3/16,9 dB; PCR chuẩn/SDT còn thiếu. Ba B3 quá ngắn và không monitor nên comparison là `INSUFFICIENT_EVIDENCE`, không tự quy RF hoặc chứng nhận parity. Chi tiết/đính chính trong [RESEARCH.md](RESEARCH.md).
+
+**Phần cứng B4 NOT RUN, chờ đúng `OK B4`.** Card SHA `742010f6e556acb1dcade2890457e18486b462cfb6a074ab3dcca8b37d5c9864`, APK debug `9a11db84775743843b3248592e15153e1c1efed90cd58d3938383fa2571ddfb4`, source manifest 408 tệp đã đối soát. Card và evidence ở bundle `phase31-b4-20261112-235953-98a481b8` ngoài Git. Anten người dùng mô tả thụ động, ngoài trời trên nóc nhà, dùng lại cổng cold2; ngày đo 13/11. Tối đa ba Windows/bốn Android, giữ anten trong từng cặp, mỗi lượt Android người dùng ngắt cả nguồn ít nhất 5 giây. Chưa cài APK mới Samsung hoặc capture/tune mới; Phase 4 chưa mở, không stage/commit/push.
+
 ## 2026-11-12, chốt B3 sau năm lượt hữu hạn — Có TS sync liên tục, chưa TS sạch; phần cứng đã đóng
 
 **Mục tiêu nhận TS sạch/ổn định chưa đạt.** Hai lượt chuẩn bị đầu không tới I/O tuner; sau quyền tăng ngân sách và card mới được OK B3, ba lượt nhận thật đều bootstrap/reload 132/132, first data status/errno 0, không detach và drain sạch. Người dùng đã rút tuner/ngắt cả nguồn sau lượt cuối. Không còn lượt được chạy trong tổng năm, không tự tiếp tục vô hạn.

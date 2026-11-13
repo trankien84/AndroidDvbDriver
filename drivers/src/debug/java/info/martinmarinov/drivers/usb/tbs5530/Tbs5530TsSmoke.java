@@ -31,7 +31,12 @@ public final class Tbs5530TsSmoke {
     public static final class Limits {
         public final int maxBytes, maxReads, durationMillis, readTimeoutMillis, readChunkBytes, queueDepth;
         public final boolean prepareEndpoint, explicitSetInterfaceAlt0, sonyTsOutputReadback;
+        public final boolean b4Capture, tunerRssi;
         public final ReadApi readApi;
+        public static Limits b4(int durationMillis, int queueDepth, boolean tunerRssi) {
+            return new Limits(256 * 1024 * 1024, 65536, durationMillis, 500, 16384,
+                    false, ReadApi.NATIVE_USBFS_STREAM, false, false, queueDepth, true, tunerRssi);
+        }
         public long maximumMillis() { return durationMillis + 2000L + (prepareEndpoint ? 5000L : 0)
                 + (explicitSetInterfaceAlt0 ? 2000L : 0) + (sonyTsOutputReadback ? Tbs5530SonyTsOutputReadback.MAXIMUM_MILLIS : 0)
                 + (readApi != ReadApi.SYNC_NATIVE_ERRNO ? 1000L : 0); }
@@ -60,12 +65,23 @@ public final class Tbs5530TsSmoke {
         }
         public Limits(int maxBytes, int maxReads, int durationMillis, int readTimeoutMillis, int readChunkBytes,
                       boolean prepareEndpoint, ReadApi readApi, boolean explicitSetInterfaceAlt0, boolean sonyReadback, int queueDepth) {
+            this(maxBytes, maxReads, durationMillis, readTimeoutMillis, readChunkBytes, prepareEndpoint,
+                    readApi, explicitSetInterfaceAlt0, sonyReadback, queueDepth, false, false);
+        }
+        private Limits(int maxBytes, int maxReads, int durationMillis, int readTimeoutMillis, int readChunkBytes,
+                       boolean prepareEndpoint, ReadApi readApi, boolean explicitSetInterfaceAlt0, boolean sonyReadback,
+                       int queueDepth, boolean b4Capture, boolean tunerRssi) {
+            this.b4Capture = b4Capture; this.tunerRssi = tunerRssi;
             this.readApi = Objects.requireNonNull(readApi);
             this.queueDepth = queueDepth;
+            if (b4Capture && (readApi != ReadApi.NATIVE_USBFS_STREAM || (queueDepth != 16 && queueDepth != 32)
+                    || readChunkBytes != 16384 || durationMillis < 1000 || durationMillis > 60000
+                    || maxBytes != 256 * 1024 * 1024))
+                throw new IllegalArgumentException("Invalid B4 file capture configuration");
             if (readApi == ReadApi.NATIVE_USBFS_STREAM) {
                 if (queueDepth < 8 || queueDepth > 32 || readChunkBytes < 4096 || readChunkBytes > 65536
-                        || readChunkBytes % 512 != 0 || maxBytes < queueDepth * readChunkBytes || maxBytes > 16 * 1024 * 1024
-                        || maxReads < 1 || maxReads > 65536 || durationMillis < 1 || durationMillis > 10000
+                        || readChunkBytes % 512 != 0 || maxBytes < queueDepth * readChunkBytes || maxBytes > (b4Capture ? 256 : 16) * 1024 * 1024
+                        || maxReads < 1 || maxReads > 65536 || durationMillis < 1 || durationMillis > (b4Capture ? 60000 : 10000)
                         || readTimeoutMillis < 1 || readTimeoutMillis > 2000 || prepareEndpoint || explicitSetInterfaceAlt0 || sonyReadback)
                     throw new IllegalArgumentException("Invalid bounded native stream configuration");
                 this.maxBytes = maxBytes; this.maxReads = maxReads; this.durationMillis = durationMillis;
@@ -103,9 +119,12 @@ public final class Tbs5530TsSmoke {
         public final int bytes, minOutstanding, firstStatus, firstErrno, outstanding;
         public final long submitted, completed, elapsedNanos, starvationCount, maxResubmitNanos, medianResubmitNanos;
         public final boolean quarantined;
+        public final long writerWrittenBytes, writerDropBytes;
+        public final String writerFailure;
         public final String stopReason;
         StreamMetrics(info.martinmarinov.usbxfer.NativeUsbfsStream.Result stream) {
-            bytes = stream.data.length; minOutstanding = stream.minOutstanding; firstStatus = stream.firstStatus;
+            writerWrittenBytes = stream.writtenBytes; writerDropBytes = stream.dropBytes; writerFailure = stream.writerFailure;
+            bytes = stream.byteCount; minOutstanding = stream.minOutstanding; firstStatus = stream.firstStatus;
             firstErrno = stream.firstErrno; outstanding = stream.outstanding; submitted = stream.submitted;
             completed = stream.completed; elapsedNanos = stream.elapsedNanos; starvationCount = stream.starvationCount;
             maxResubmitNanos = stream.maxResubmitNanos; medianResubmitNanos = stream.medianResubmitNanos;
@@ -237,20 +256,37 @@ public final class Tbs5530TsSmoke {
                 permission.requireCurrent(generation); requireLocked();
                 info.martinmarinov.usbxfer.NativeUsbfsStream.Result stream = streamReceiver.receive(limits);
                 if (stream.quarantined || stream.outstanding != 0) throw new IOException("Native stream drain not certified");
-                byte[] data = stream.data;
-                if (data.length > 0) {
-                    observer.accept(data, data.length);
-                    int skip = Math.min(2048, data.length);
-                    parser.accept(data, skip, data.length - skip);
+                int saved = 0, prefixRemaining = 2048;
+                if (stream.dataFile == null) {
+                    byte[] data = stream.data;
+                    if (data.length > 0) {
+                        observer.accept(data, data.length); saved = data.length;
+                        int skip = Math.min(prefixRemaining, data.length);
+                        parser.accept(data, skip, data.length - skip);
+                    }
+                } else {
+                    byte[] chunk = new byte[65536];
+                    try (java.io.InputStream input = stream.openData()) {
+                        for (int count; (count = input.read(chunk)) != -1; ) {
+                            if (count == 0) continue;
+                            if (count > limits.maxBytes - saved) throw new IOException("B4 raw exceeds approved cap");
+                            observer.accept(chunk, count); saved += count;
+                            int skip = Math.min(prefixRemaining, count); prefixRemaining -= skip;
+                            if (count > skip) parser.accept(chunk, skip, count - skip);
+                        }
+                    }
+                    if (saved != stream.writtenBytes) throw new IOException("B4 raw writer accounting mismatch");
                 }
                 Tbs5530TsParser.Snapshot parsed = parser.snapshot();
                 boolean clean = stream.firstStatus == 0 && stream.firstErrno == 0
                         && ("BYTE_LIMIT".equals(stream.stopReason) || "DEADLINE".equals(stream.stopReason));
-                Status result = !clean ? Status.NO_DATA_OR_USB_FAILURE : stream.starvationCount == 0 && b3StructureConfirmed(parsed) ? Status.STRUCTURE_CONFIRMED
-                        : data.length == 0 ? Status.NO_DATA_OR_USB_FAILURE : Status.INVALID_TS;
-                permission.audit("TS_SMOKE_FINISHED", (int)stream.completed, data.length);
-                return new Result(result, data.length, (int)stream.completed, stream.elapsedNanos, parsed,
-                        stream.firstStatus == 0 ? data.length : -1, limits.readChunkBytes, limits.durationMillis,
+                boolean writerClean = stream.dropBytes == 0 && stream.writerFailure == null && saved == stream.byteCount;
+                Status result = !clean ? Status.NO_DATA_OR_USB_FAILURE
+                        : writerClean && stream.starvationCount == 0 && b3StructureConfirmed(parsed) ? Status.STRUCTURE_CONFIRMED
+                        : saved == 0 ? Status.NO_DATA_OR_USB_FAILURE : Status.INVALID_TS;
+                permission.audit("TS_SMOKE_FINISHED", (int)stream.completed, saved);
+                return new Result(result, saved, (int)stream.completed, stream.elapsedNanos, parsed,
+                        stream.firstStatus == 0 ? saved : -1, limits.readChunkBytes, limits.durationMillis,
                         stream.elapsedNanos, false, stream.firstErrno, stream);
             }
             byte[] buffer = new byte[Math.min(limits.readChunkBytes, limits.maxBytes)];

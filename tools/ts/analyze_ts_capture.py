@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import argparse
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from collections import Counter
 import hashlib
 import json
+import math
 from pathlib import Path
 import statistics
 import struct
@@ -14,6 +15,7 @@ import sys
 PACKET = 188
 PCR_CLOCK = 27_000_000
 PCR_WRAP = (1 << 33) * 300
+DATA_ORIGIN_VERSION = 'FIRST_SUCCESSFUL_CAPTURED_COMPLETION/v2'
 
 
 def sha256(data):
@@ -493,10 +495,458 @@ class Tables:
                 'text_decoding': 'DVB selectors decoded where supported; default ISO-6937 rendered as ASCII/backslash escapes; descriptor_hex preserves bytes.'}
 
 
-def analyze(data, spans=(), barriers=(), minimum=5, skip_prefix=0):
+def native_completions(source, stream_size):
+    """Bind a complete native audit to raw bytes; never concatenate cancelled data."""
+    rows = [json.loads(line) for line in source.decode('utf-8-sig').splitlines() if line.strip()]
+    if not rows or any(not isinstance(r, dict) for r in rows):
+        raise ValueError('Native audit must contain JSON objects')
+    summaries = [r for r in rows if r.get('summary') is True]
+    if len(summaries) != 1 or rows[-1] is not summaries[0]:
+        raise ValueError('Native audit requires one final summary')
+    summary = summaries[0]
+    if summary.get('writer_failure'):
+        raise ValueError('Native writer failure: queued raw mapping is not trustworthy')
+    dropped_bytes = summary.get('writer_drop_bytes', 0)
+    if type(dropped_bytes) is not int or dropped_bytes < 0:
+        raise ValueError('Native writer drop count must be a nonnegative integer')
+    if (summary.get('writer_written_bytes', stream_size) != stream_size
+            or summary.get('delivered_bytes') != stream_size + dropped_bytes):
+        raise ValueError('Native delivered/written/drop bytes do not match raw input')
+    events = [r for r in rows if 'kind' in r]
+    mappings = [r for r in rows if r.get('mapping') is True]
+    if (('raw_mapping_valid' in summary or dropped_bytes) and not mappings and summary.get('delivered_bytes')):
+        raise ValueError('Native B4 writer requires explicit mappings for delivered input')
+    if summary.get('raw_mapping_valid') is False and not dropped_bytes:
+        raise ValueError('Native writer mapping invalid without an explained drop boundary')
+    mapping_contract = bool(mappings) or 'raw_mapping_valid' in summary
+    mapping_by_sequence = {}
+    for mapping in mappings:
+        sequence = mapping.get('sequence')
+        if type(sequence) is not int or sequence in mapping_by_sequence:
+            raise ValueError('Native writer mapping sequence missing or repeated')
+        mapping_by_sequence[sequence] = mapping
+    run_ids = [r.get('run_id') for r in rows if 'run_id' in r]
+    if (not run_ids or any(not isinstance(v, str) or not v for v in run_ids)
+            or len(set(run_ids)) != 1 or not events):
+        raise ValueError('Native audit requires exactly one run identity and event epoch')
+    spans, barriers, failures = [], [], []
+    offset, source_offset, mapped_drops, previous_event, previous_time = 0, 0, 0, 0, -1
+    mapped_sequences = []
+    drain_ns, origin_ns = None, None
+    sequences = set()
+    excluded_drain, failed_calls, uncaptured_completions = 0, 0, 0
+    native_call_errors = 0
+    uncaptured_tail = False
+    for r in events:
+        event, before, after = r.get('event'), r.get('before_ns'), r.get('after_ns')
+        if (any(type(v) is not int for v in (event, before, after))
+                or event != previous_event + 1 or before < previous_time or after < before
+                or r.get('clock') != 'CLOCK_MONOTONIC' or r.get('endpoint') != 0x82):
+            raise ValueError('Native audit has missing/unordered events, invalid clock or endpoint')
+        previous_event, previous_time = event, after
+        if r['kind'] == 1 and origin_ns is None:
+            origin_ns = before
+        if (r['kind'] == 1 and drain_ns is None
+                and (r.get('syscall_return') != 0 or r.get('syscall_errno') != 0)):
+            native_call_errors += 1
+        if r['kind'] == 3 and drain_ns is None:
+            drain_ns = before
+        if r['kind'] != 2:
+            continue
+        if drain_ns is not None:
+            excluded_drain += 1
+            continue
+        if r.get('syscall_return') != 0 or r.get('syscall_errno') != 0:
+            failed_calls += 1
+            native_call_errors += r.get('syscall_errno') not in (4, 11)
+            continue
+        actual, requested, capacity = (r.get(k) for k in ('actual_length', 'requested_length', 'allocated_capacity'))
+        if (any(type(v) is not int for v in (actual, requested, capacity))
+                or not 0 <= actual <= requested <= capacity or r.get('urb_status') is None):
+            raise ValueError('Native completion has invalid lengths or missing status')
+        if r['urb_status'] != 0:
+            failures.append({'event': event, 'status': r['urb_status'], 'stream_offset': offset})
+            barriers.append(offset)
+            continue
+        if not actual:
+            continue
+        sequence = r.get('sequence')
+        if type(sequence) is not int or sequence in sequences:
+            raise ValueError('Native completion sequence missing or repeated')
+        sequences.add(sequence)
+        captured = actual
+        if mapping_contract:
+            mapping = mapping_by_sequence.get(sequence)
+            if mapping is None:
+                uncaptured_completions += 1
+                uncaptured_tail = True
+                continue
+            captured = mapping.get('length')
+            is_drop = mapping.get('dropped')
+            if (uncaptured_tail or type(is_drop) is not bool
+                    or mapping.get('raw_offset') != (None if is_drop else offset)
+                    or mapping.get('source_offset') != source_offset
+                    or type(captured) is not int or not 0 < captured <= actual
+                    or mapping.get('reap_ns') != after):
+                raise ValueError('Native writer mapping disagrees with completion/raw offsets')
+            mapped_sequences.append(sequence)
+            source_offset += captured
+            if is_drop:
+                mapped_drops += captured
+                barriers.append(offset)
+                uncaptured_tail = captured < actual
+                continue
+        else:
+            source_offset += captured
+        spans.append({'index': len(spans), 'start': offset, 'end': offset + captured,
+                      'timestamp_ns': after, 'sequence': sequence, 'event': event,
+                      'completion_actual_length': actual,
+                      'timestamp_kind': 'userspace_after_reap_not_kernel_completion'})
+        offset += captured
+        uncaptured_tail = captured < actual
+    if (offset != stream_size or source_offset != summary['delivered_bytes']
+            or mapped_drops != dropped_bytes or origin_ns is None or (stream_size and not spans)):
+        raise ValueError('Native audit payload lengths do not bind to raw input')
+    if mappings and [m['sequence'] for m in mappings] != mapped_sequences:
+        raise ValueError('Native writer mapping is incomplete or contains non-data completions')
+    first_data_ns = spans[0]['timestamp_ns'] if spans else None
+    end_ns = drain_ns if drain_ns is not None else spans[-1]['timestamp_ns'] if spans else origin_ns
+    native_begin_ns = summary.get('native_begin_ns')
+    if type(native_begin_ns) is not int or not 0 <= native_begin_ns <= origin_ns:
+        native_begin_ns = None
+    return spans, sorted(set(barriers)), {
+        'format': 'native_usbfs_stream_jsonl', 'sha256': sha256(source), 'bytes': len(source),
+        'timestamp_kind': 'userspace_after_reap_not_kernel_completion', 'clock': 'CLOCK_MONOTONIC',
+        'time_origin_version': DATA_ORIGIN_VERSION,
+        'origin_ns': first_data_ns,
+        'origin_basis': 'first_successful_captured_data_completion' if spans else 'UNKNOWN_NO_CAPTURED_DATA',
+        'submit_begin_ns': origin_ns, 'submit_begin_basis': 'first_submit_before_ns',
+        'submit_to_end_ns': end_ns - origin_ns,
+        'native_begin_ns': native_begin_ns,
+        'native_begin_to_end_ns': end_ns - native_begin_ns if native_begin_ns is not None else None,
+        'native_begin_status': 'SUMMARY_RECORDED' if native_begin_ns is not None else 'UNKNOWN_NOT_LOGGED',
+        'first_data_delay_ns': first_data_ns - origin_ns if first_data_ns is not None else None,
+        'end_ns': end_ns,
+        'end_basis': 'first_discard_before_ns' if drain_ns is not None else 'last_data_reap_after_ns',
+        'data_completions': len(spans), 'excluded_drain_completions': excluded_drain,
+        'failed_reap_calls': failed_calls, 'failed_completions': failures,
+        'uncaptured_stop_tail_completions': uncaptured_completions,
+        'native_data_errors': len(failures) + native_call_errors,
+        'drain': {k: summary.get(k) for k in ('stop_reason', 'submitted', 'completed', 'outstanding',
+                                            'quarantined', 'drain_confirmed')},
+        'cadence_quality_status': 'UNKNOWN_WRITER_DROP_OR_MAPPING_INVALID' if dropped_bytes else None,
+        'writer_mapping': 'VERIFIED_WITH_DROPS_NOT_CONTIGUOUS_SOURCE' if dropped_bytes else 'VERIFIED' if mapping_contract else 'LEGACY_LENGTH_BINDING_ONLY',
+        'writer': {k: summary.get(k) for k in ('writer_written_bytes', 'writer_drop_bytes',
+                                             'writer_failure', 'raw_mapping_valid', 'raw_offset_scope')},
+        'identity_limit': 'Audit run identity and lengths verified; legacy raw content has no independent per-completion hash.'}
+
+
+FRAME_METRICS = ('bytes', 'packets', 'ts_bytes', 'cc_errors', 'cc_comparisons', 'duplicates',
+                 'tei_packets', 'null_packets', 'invalid_packets')
+
+
+def empty_frame_metrics():
+    return dict.fromkeys(FRAME_METRICS, 0)
+
+
+def supported_band(values, low, high, minimum=1, largest=False):
+    ordered = sorted(values)
+    best, bounds = None, (0, 0)
+    for seed in sorted(set(ordered)):
+        a, b = bisect_left(ordered, seed * low), bisect_right(ordered, seed * high)
+        count = b - a
+        if count < minimum:
+            continue
+        median = (ordered[a + (count - 1) // 2] + ordered[a + count // 2]) / 2
+        key = (median, count) if largest else (count, -median)
+        if best is None or key > best:
+            best, bounds = key, (a, b)
+    return ordered[bounds[0]:bounds[1]]
+
+
+class CompletionFrames:
+    """Completion-observed bursts, not demodulator or kernel frame timestamps."""
+    def __init__(self, spans, size, skip_prefix, baseline_bytes=None, cadence_ns=None, metadata=None):
+        self.spans = spans
+        self.frames = []
+        self.total = empty_frame_metrics()
+        self.after = empty_frame_metrics()
+        self.metadata = metadata or {}
+        self.available = bool(spans) and all('timestamp_ns' in s for s in spans)
+        if baseline_bytes is not None and (type(baseline_bytes) is not int or baseline_bytes <= 0):
+            raise ValueError('Frame baseline bytes must be a positive integer')
+        if cadence_ns is not None and (type(cadence_ns) is not int or cadence_ns <= 0):
+            raise ValueError('Frame cadence must be positive integer nanoseconds')
+        self.baseline, self.cadence = baseline_bytes, cadence_ns
+        if not self.available:
+            if (baseline_bytes is not None or cadence_ns is not None) and 'origin_ns' not in self.metadata:
+                raise ValueError('Frame baseline/cadence requires actual completion timestamps')
+            return
+        previous_end, previous_time = 0, -1
+        self.span_frames = []
+        for i, s in enumerate(spans):
+            t = s['timestamp_ns']
+            if (type(t) is not int or t < previous_time or s['start'] != previous_end
+                    or s['end'] <= s['start'] or s['end'] > size):
+                raise ValueError('Timed spans must cover the raw stream contiguously in timestamp order')
+            if not self.frames or t - previous_time > 15_000_000:
+                self.frames.append({'index': len(self.frames), 'start': s['start'], 'end': s['end'],
+                                    'first_completion_ns': t, 'last_completion_ns': t,
+                                    'first_span': i, 'last_span': i, 'metrics': empty_frame_metrics()})
+            f = self.frames[-1]
+            f.update(end=s['end'], last_completion_ns=t, last_span=i)
+            f['metrics']['bytes'] += max(0, s['end'] - max(s['start'], skip_prefix))
+            self.span_frames.append(f['index'])
+            previous_end, previous_time = s['end'], t
+        if previous_end != size:
+            raise ValueError('Timed spans do not cover all raw bytes')
+        self.starts = [s['start'] for s in spans]
+        self.origin = spans[0]['timestamp_ns']
+        self.end = self.metadata.get('end_ns', spans[-1]['timestamp_ns'])
+        if self.end < spans[-1]['timestamp_ns']:
+            raise ValueError('Completion timing end outside observed range')
+        self.threshold = self.origin + 5_000_000_000
+        self.after_available = self.end >= self.threshold
+        self.total['bytes'] = size - skip_prefix
+        self.after['bytes'] = sum(max(0, s['end'] - max(s['start'], skip_prefix))
+                                  for s in spans if s['timestamp_ns'] >= self.threshold)
+
+    def packet(self, offset, p, outcome, comparisons):
+        if not self.available:
+            return
+        # Assign a crossing packet once, when its final byte has been observed.
+        i = bisect_right(self.starts, offset + PACKET - 1) - 1
+        f = self.frames[self.span_frames[i]]
+        values = {'packets': 1, 'ts_bytes': PACKET, 'cc_errors': int(outcome == 'error'),
+                  'cc_comparisons': comparisons, 'duplicates': int(outcome == 'duplicate'),
+                  'tei_packets': int(p['tei']), 'null_packets': int(p['pid'] == 0x1FFF),
+                  'invalid_packets': int(p['invalid'] is not None)}
+        targets = [self.total, f['metrics']]
+        if self.spans[i]['timestamp_ns'] >= self.threshold:
+            targets.append(self.after)
+        for target in targets:
+            for key, value in values.items():
+                target[key] += value
+
+    def report(self):
+        if not self.available:
+            return {'schema': 'TS-COMPLETION-FRAMES/v1', 'status': 'UNKNOWN_NO_COMPLETION_TIMESTAMPS',
+                    'time_origin_version': DATA_ORIGIN_VERSION, 'origin_ns': None,
+                    'origin_basis': 'UNKNOWN_NO_CAPTURED_DATA_COMPLETION',
+                    'frames': [], 'total': None, 'after_5s': {'status': 'UNKNOWN_NO_COMPLETION_TIMESTAMPS'}}
+        frames = self.frames
+        gaps = [b['first_completion_ns'] - a['first_completion_ns'] for a, b in zip(frames, frames[1:])]
+        # A dense 10% band rejects isolated short gaps; cadence multiples are not folded blindly.
+        band = supported_band(gaps, 0.9, 1.1)
+        inferred_cadence = round(statistics.median(band)) if len(band) >= 3 else None
+        cadence = self.cadence or inferred_cadence
+        candidates = [f['end'] - f['start'] for f in frames[1:-1]
+                      if cadence is None or f['last_completion_ns'] - f['first_completion_ns'] < cadence]
+        # Only a candidate: a uniformly halved capture cannot establish an absolute FULL baseline.
+        large = supported_band(candidates, 0.9, 1 / 0.9, minimum=3, largest=True)
+        candidate = statistics.median(large) if large else None
+        missing = []
+        rates = []
+        inference_counts = Counter()
+        for i, f in enumerate(frames):
+            f['captured_bytes'] = f['end'] - f['start']
+            f['start_ms'] = (f['first_completion_ns'] - self.origin) / 1e6
+            f['end_ms'] = (f['last_completion_ns'] - self.origin) / 1e6
+            f['duration_ms'] = f['end_ms'] - f['start_ms']
+            f['capture_edge'] = i in (0, len(frames) - 1)
+            f['classification'] = ('UNKNOWN_BASELINE' if self.baseline is None else
+                                   'FULL' if f['captured_bytes'] >= 0.9 * self.baseline else 'PARTIAL')
+            f['coalesced_frame_possible'] = cadence is not None and f['duration_ms'] * 1e6 >= cadence
+            group = self.spans[f['first_span']:f['last_span'] + 1]
+            intervals = [b['timestamp_ns'] - a['timestamp_ns'] for a, b in zip(group, group[1:])]
+            instant = [(b['end'] - b['start']) * 8e9 / dt for b, dt in zip(group[1:], intervals) if dt > 0]
+            duration = group[-1]['timestamp_ns'] - group[0]['timestamp_ns']
+            f['burst_bitrate_bps'] = ((f['captured_bytes'] - (group[0]['end'] - group[0]['start'])) * 8e9 / duration
+                                      if duration > 0 else None)
+            if f['burst_bitrate_bps'] is not None:
+                rates.append(f['burst_bitrate_bps'])
+            f['gap_before_ms'] = ((group[0]['timestamp_ns'] - self.spans[f['first_span'] - 1]['timestamp_ns']) / 1e6
+                                  if i else None)
+            fast = 0
+            for dt in intervals[:8]:
+                if dt >= 200_000:
+                    break
+                fast += 1
+            median_rate = statistics.median(instant) if instant else None
+            steady_fraction = (sum(abs(v / median_rate - 1) <= 0.2 for v in instant) / len(intervals)
+                               if intervals and median_rate else 0)
+            inference = ('UNKNOWN_CAPTURE_START' if not i else 'HOST_DELAYED_CATCHUP_INFERRED' if fast >= 3 else
+                         'SOURCE_LIKE_INFERRED' if len(intervals) >= 3 and steady_fraction >= 0.8 else
+                         'UNKNOWN_IRREGULAR_OR_INSUFFICIENT')
+            f['gap_inference'] = {'label': inference, 'initial_intervals_below_0_2ms': fast,
+                                  'steady_rate_fraction_within_20_percent': steady_fraction}
+            inference_counts[inference] += 1
+            if i and cadence and gaps[i - 1] >= 1.5 * cadence:
+                count = max(1, round(gaps[i - 1] / cadence) - 1)
+                left = frames[i - 1]
+                if not left['coalesced_frame_possible']:
+                    missing.append({'classification': 'MISSING', 'evidence': 'INFERRED_CADENCE_SLOTS_NOT_PROVEN_LOSS',
+                                    'after_frame': i - 1, 'before_frame': i, 'count': count,
+                                    'start_to_start_ms': gaps[i - 1] / 1e6,
+                                    'expected_start_ms': [(left['first_completion_ns'] + n * cadence - self.origin) / 1e6
+                                                          for n in range(1, count + 1)]})
+        counts = dict(Counter(f['classification'] for f in frames))
+        counts['MISSING'] = sum(m['count'] for m in missing)
+        after_frames = [f for f in frames if f['first_completion_ns'] >= self.threshold]
+        after_missing = sum(t >= 5000 for m in missing for t in m['expected_start_ms'])
+        full_after = sum(f['classification'] == 'FULL' for f in after_frames)
+        first_full = next((f for f in frames if f['classification'] == 'FULL'), None)
+        after = {'status': 'OBSERVED' if self.after_available else 'UNKNOWN_CAPTURE_SHORTER_THAN_5S',
+                 'metrics': self.after if self.after_available else None,
+                 'frame_counts': dict(Counter(f['classification'] for f in after_frames)) if self.after_available else None,
+                 'missing_frames': after_missing if self.after_available else None,
+                 'straddling_frames_excluded_from_percentage': sum(f['first_completion_ns'] < self.threshold <= f['last_completion_ns'] for f in frames),
+                 'full_percent_observed_frames': (100 * full_after / len(after_frames)
+                                                   if self.after_available and self.baseline and after_frames else None),
+                 'full_percent_including_missing': (100 * full_after / (len(after_frames) + after_missing)
+                                                     if self.after_available and self.baseline and len(after_frames) + after_missing else None)}
+        interval_rates = [(b['end'] - b['start']) * 8e9 / (b['timestamp_ns'] - a['timestamp_ns'])
+                          for a, b in zip(self.spans, self.spans[1:]) if b['timestamp_ns'] > a['timestamp_ns']]
+        rate_band = supported_band(interval_rates, 0.8, 1.2)
+        cadence_rate = statistics.median(rate_band) if len(rate_band) >= 3 else None
+        median_chunk = statistics.median(s['end'] - s['start'] for s in self.spans)
+        chunk_incompatible = cadence_rate is not None and median_chunk * 8e9 / cadence_rate > 15_000_000
+        grouping_status = (self.metadata.get('cadence_quality_status')
+                           or ('UNKNOWN_CHUNK_TIMING_EXCEEDS_15MS' if chunk_incompatible else '15MS_GAP_COMPATIBLE'))
+        incompatible = grouping_status != '15MS_GAP_COMPATIBLE'
+        if incompatible:
+            after.update(frame_counts=None, missing_frames=None, full_percent_observed_frames=None,
+                         full_percent_including_missing=None, straddling_frames_excluded_from_percentage=None,
+                         grouping_status=grouping_status)
+        return {'schema': 'TS-COMPLETION-FRAMES/v1',
+                'status': grouping_status if incompatible else 'OBSERVED_COMPLETION_TIMING',
+                'timestamp_kind': self.metadata.get('timestamp_kind', 'usbpcap_host_capture_completion_not_bus_signaling'),
+                'time_origin_version': DATA_ORIGIN_VERSION,
+                'origin_ns': self.origin, 'origin_basis': 'first_successful_captured_data_completion',
+                'observed_duration_ms': (self.end - self.origin) / 1e6,
+                'algorithm': {'frame_boundary_gap_ms_strictly_greater_than': 15, 'full_fraction': 0.9,
+                              'missing_start_gap_cadences_at_least': 1.5, 'host_catchup_interval_ms_strictly_less_than': 0.2,
+                              'host_catchup_minimum_initial_intervals': 3,
+                              'packet_assignment': 'completion containing final packet byte; bytes clipped by analysis_range',
+                              'after_5s': 'origin is the first successful captured data completion on both hosts, independent of submit/native begin or skip-prefix; completion timestamps >= origin+5s; frame percentages use start>=5s, exclude straddlers',
+                              'baseline_rule': 'FULL requires explicit independent baseline bytes. Candidate = median of largest supported 10% size band (>=3 non-edge bursts shorter than cadence); candidate alone never qualifies FULL.',
+                              'cadence_rule': 'explicit cadence or median of densest +/-10% start-gap band with >=3 observations; multiples not automatically reduced'},
+                'baseline': {'status': 'EXPLICIT_REFERENCE' if self.baseline else 'UNKNOWN_UNANCHORED_SIZE_CANDIDATE_ONLY',
+                             'bytes': self.baseline, 'candidate_large_frame_median_bytes': candidate if not incompatible else None,
+                             'candidate_samples': len(large) if not incompatible else 0},
+                'cadence': {'ns': cadence if not incompatible or self.cadence else None,
+                            'ms': cadence / 1e6 if cadence and (not incompatible or self.cadence) else None,
+                            'status': 'EXPLICIT_REFERENCE' if self.cadence else grouping_status if incompatible else 'INFERRED_MODAL_START_GAP' if cadence else 'UNKNOWN_INSUFFICIENT_GAPS'},
+                'frame_counts': None if incompatible else counts,
+                'frames': [] if incompatible else frames, 'missing': [] if incompatible else missing,
+                'total': self.total, 'after_5s': after,
+                'grouping': {'status': grouping_status,
+                             'median_completion_bytes': median_chunk,
+                             'normalized_completion_interval_ms': median_chunk * 8e3 / cadence_rate if cadence_rate else None,
+                             'warning': ('Writer drop prevents contiguous-source cadence qualification.' if self.metadata.get('cadence_quality_status') else
+                                         'Do not interpret 64KiB/~19ms batching as one physical frame per completion.' if chunk_incompatible else None)},
+                'time_to_first_full_ms': (first_full['last_completion_ns'] - self.origin) / 1e6 if first_full and not incompatible else None,
+                'first_full_start_ms': first_full['start_ms'] if first_full and not incompatible else None,
+                'burst_rate': {'median_bps': statistics.median(rates) if rates and not incompatible else None,
+                               'completion_cadence_rate_bps': cadence_rate,
+                               'basis': 'sum completion bytes after first completion / (last-first timestamp); separate from PCR multiplex bitrate. Completion cadence rate uses the densest +/-20% adjacent byte-rate band (>=3 samples), not decoded frame timing.'},
+                'gap_inference_counts': {} if incompatible else dict(inference_counts),
+                'caveats': ['Frame means an observed completion burst, not a decoded DVB-T2 physical frame.',
+                            'FULL is relative to the supplied reference median, not proof of error-free or complete RF reception.',
+                            'Catchup favors host delay; steady in-burst cadence is only compatible with source pauses. Neither proves a cause without kernel/bus timestamps.',
+                            'MISSING counts inferred cadence slots inside the observation window; coalesced prior bursts are not counted as missing. No extrapolation before/after capture.',
+                            'Equal-rate reduced frames need an independent baseline; no absolute FULL qualification from a homogeneous half-frame capture.']}
+
+
+def monitor_report(source=None, timing_metadata=None):
+    """Summarize serialized measurements only; never derive BER/PER from raw registers."""
+    if source is None:
+        return {'schema': 'SIGNAL-MONITOR-SUMMARY/v1', 'status': 'UNKNOWN_NOT_PROVIDED'}
+    rows = [json.loads(line) for line in source.decode('utf-8-sig').splitlines() if line.strip()]
+    if any(not isinstance(r, dict) for r in rows):
+        raise ValueError('Monitor JSONL requires object rows')
+    measurements, ignored = [], 0
+    summaries = [r for r in rows if r.get('summary') is True]
+    monitor_failure = next((r.get('monitor_failure') for r in summaries if r.get('monitor_failure')), None)
+    for row in rows:
+        if row.get('summary') is True:
+            continue
+        start, end = row.get('start_ns', row.get('startNanos')), row.get('end_ns', row.get('endNanos'))
+        if (type(start) is not int or type(end) is not int or end < start
+                or row.get('clock') != 'CLOCK_MONOTONIC'):
+            ignored += 1
+            continue
+        metrics = row.get('metrics', row)
+        if not isinstance(metrics, dict):
+            raise ValueError('Monitor metrics must be an object')
+        measurements.append({'start_ns': start, 'end_ns': end, 'lock': metrics.get('lock', 'UNKNOWN'),
+                             'snr_db': metrics.get('snr_db', metrics.get('officialCnrDb')),
+                             'snr_db_curve': metrics.get('snr_db_curve', metrics.get('snrDbCurve')),
+                             'snr_raw': metrics.get('snr_raw', metrics.get('snrRaw')),
+                             'ber': metrics.get('ber'), 'per': metrics.get('per'), 'fer': metrics.get('fer'),
+                             'errors': len(row.get('errors') or []),
+                             'cleanup_succeeded': row.get('cleanup_succeeded'),
+                             'stop_for_lock_loss': row.get('stop_for_lock_loss'),
+                             'lock_loss_ns': row.get('lock_loss_ns')})
+    def summarize(selected):
+        result = {'samples': len(selected), 'lock': dict(Counter(str(r['lock']) for r in selected)),
+                  'errors': sum(r['errors'] for r in selected),
+                  'cleanup_failure_samples': sum(r['cleanup_succeeded'] is False for r in selected),
+                  'stop_for_lock_loss_samples': sum(r['stop_for_lock_loss'] is True for r in selected),
+                  'metrics': {}}
+        for key in ('snr_db', 'snr_db_curve', 'snr_raw', 'ber', 'per', 'fer'):
+            values = [r[key] for r in selected if type(r[key]) in (int, float) and math.isfinite(r[key])
+                      and (key not in ('snr_db', 'snr_db_curve') or r['lock'] == 'LOCKED')]
+            result['metrics'][key] = {'samples': len(values), 'min': min(values) if values else None,
+                                      'median': statistics.median(values) if values else None,
+                                      'max': max(values) if values else None,
+                                      'status': 'OBSERVED_SERIALIZED_VALUES' if values else 'UNKNOWN_NO_VALID_MEASUREMENT'}
+        return result
+    metadata = timing_metadata or {}
+    aligned = (metadata.get('clock') == 'CLOCK_MONOTONIC'
+               and type(metadata.get('origin_ns')) is int and type(metadata.get('end_ns')) is int)
+    selected = ([r for r in measurements if metadata['origin_ns'] <= r['start_ns'] <= r['end_ns'] <= metadata['end_ns']]
+                if aligned else [])
+    enough = aligned and metadata['end_ns'] - metadata['origin_ns'] >= 5_000_000_000
+    after = [r for r in selected if r['start_ns'] >= metadata['origin_ns'] + 5_000_000_000] if enough else []
+    return {'schema': 'SIGNAL-MONITOR-SUMMARY/v1', 'status': 'OBSERVED_SERIALIZED_VALUES' if measurements else 'UNKNOWN_NO_VALID_SAMPLES',
+            'sha256': sha256(source), 'bytes': len(source), 'rows': len(rows), 'ignored_rows': ignored,
+            'monitor_failure': monitor_failure, 'summaries': len(summaries),
+            'total': summarize(measurements),
+            'capture_window': summarize(selected) if aligned else None,
+            'after_5s': {'status': 'UNKNOWN_MONITOR_FAILURE' if monitor_failure else
+                        'OBSERVED' if enough and after else 'UNKNOWN_NO_ALIGNED_SAMPLES' if enough else
+                        'UNKNOWN_CAPTURE_SHORTER_THAN_5S' if aligned else 'UNKNOWN_CLOCK_ALIGNMENT',
+                         'statistics': summarize(after) if enough else None},
+            'alignment': 'DECLARED_CLOCK_MONOTONIC_SAME_HOST_EPOCH' if aligned else 'UNKNOWN_NO_ANDROID_CAPTURE_EPOCH',
+            'selection': 'whole sample must fit the captured-data window; after5s uses sample start>=first successful captured data completion+5s',
+            'time_origin_version': metadata.get('time_origin_version', 'UNKNOWN_ORIGIN_VERSION'),
+            'units': {'snr_db': 'dB official serialized CNR', 'snr_db_curve': 'dB diagnostic curve',
+                      'snr_raw': 'uint16 monitor value', 'ber': 'UNKNOWN_USE_PRODUCER_CONTRACT',
+                      'per': 'UNKNOWN_USE_PRODUCER_CONTRACT', 'fer': 'UNKNOWN_USE_PRODUCER_CONTRACT'},
+            'caveat': 'No raw-register interpretation. Missing/unproven BER/PER/FER stay null; no zero substitution. Cross-host parity and clock identity require external provenance.'}
+
+
+def pcr_pid_report(windows, pids):
+    rows = []
+    for pid, counts in sorted(pids.items()):
+        if not counts.get('pcr_samples') and not counts.get('pcr_errors'):
+            continue
+        selected = [w for w in windows if w['pid'] == pid]
+        rates = [w['bitrate_bps'] for w in selected if w['bitrate_bps'] is not None]
+        rows.append({'pid': pid, 'status': 'estimate' if rates else 'UNKNOWN_INSUFFICIENT_CONTIGUOUS_PCR',
+                     'eligible_windows': len(rates), 'windows': len(selected),
+                     'median_bitrate_bps': statistics.median(rates) if rates else None})
+    return rows
+
+
+def analyze(data, spans=(), barriers=(), minimum=5, skip_prefix=0, *,
+            frame_baseline_bytes=None, frame_cadence_ns=None, timing_metadata=None):
     if not 0 <= skip_prefix <= len(data):
         raise ValueError('--skip-prefix must be between zero and stream length')
     segments = sync_segments(data, minimum, barriers, skip_prefix)
+    frames = CompletionFrames(spans, len(data), skip_prefix, frame_baseline_bytes,
+                              frame_cadence_ns, timing_metadata)
     starts = [s['start'] for s in spans]
 
     def position(offset):
@@ -558,7 +1008,10 @@ def analyze(data, spans=(), barriers=(), minimum=5, skip_prefix=0):
             totals['scrambled'] += bool(p['scrambled'])
             totals['invalid'] += p['invalid'] is not None
             (prefix_pids if offset < 2048 else rest_pids)[pid] += 1
+            previous_comparisons = cc.counts['within_comparisons'] + cc.counts['between_comparisons']
             outcome = cc.feed(p, segment['index'], offset)
+            frames.packet(offset, p, outcome,
+                          cc.counts['within_comparisons'] + cc.counts['between_comparisons'] - previous_comparisons)
             tables.feed(p, outcome)
             key = (segment['index'], pid)
             if p['pcr'] is not None:
@@ -579,7 +1032,8 @@ def analyze(data, spans=(), barriers=(), minimum=5, skip_prefix=0):
                         run = None
                 if run is None:
                     run = {'segment': segment['index'], 'pid': pid, 'first_packet': packet_index,
-                           'last_packet': packet_index, 'first_pcr': p['pcr'], 'last_pcr': p['pcr'],
+                           'last_packet': packet_index, 'first_offset': offset, 'last_offset': offset,
+                           'first_pcr': p['pcr'], 'last_pcr': p['pcr'],
                            'samples': 1, 'elapsed_ticks': 0, 'signaled_discontinuities': 0,
                            'reserved_bit_errors': 0}
                     runs[key] = run
@@ -587,6 +1041,7 @@ def analyze(data, spans=(), barriers=(), minimum=5, skip_prefix=0):
                     run['elapsed_ticks'] += delta
                     run['samples'] += 1
                     run['last_packet'], run['last_pcr'] = packet_index, p['pcr']
+                    run['last_offset'] = offset
                 run['signaled_discontinuities'] += p['discontinuity']
                 run['reserved_bit_errors'] += p['pcr_error'] is not None
     for runs, windows in ((pcr_runs, pcr_windows), (diagnostic_runs, diagnostic_windows)):
@@ -613,16 +1068,19 @@ def analyze(data, spans=(), barriers=(), minimum=5, skip_prefix=0):
                      'leading_bytes': segments[0]['start'] - skip_prefix if segments else len(data) - skip_prefix,
                      'trailing_bytes': trailing, 'tail_incomplete_packet_bytes': incomplete_tail,
                      'tail_counts_as_sync_break': False},
+            'completion_frames': frames.report(),
             'cc': cc.report(), 'totals': dict(totals),
             'pids': [{'pid': k, 'hex': '0x%04x' % k, **dict(v)} for k, v in sorted(pids.items())],
             'psi': tables.report(pids),
-            'pcr': {'windows': pcr_windows, 'median_bitrate_bps': statistics.median(rates) if rates else None,
+            'pcr': {'windows': pcr_windows, 'by_pid': pcr_pid_report(pcr_windows, pids),
+                    'median_bitrate_bps': statistics.median(rates) if rates else None,
                     'status': 'estimate' if rates else 'UNKNOWN_INSUFFICIENT_CONTIGUOUS_PCR',
                     'minimum_samples': 3, 'minimum_seconds': 0.1, 'minimum_packet_distance': 100,
                     'caveat': 'PCR-clock estimate within individual sync segments; not USB throughput. Loss/TEI can bias it; no cross-segment PCR join.',
                     'diagnostic_only': {'status': 'NONCONFORMANT_HEURISTIC_NOT_VALIDATED_BITRATE',
                                         'median_bitrate_bps': statistics.median(diagnostic_rates) if diagnostic_rates else None,
                                         'eligible_windows': sum(w['bitrate_bps'] is not None for w in diagnostic_windows),
+                                        'by_pid': pcr_pid_report(diagnostic_windows, pids),
                                         'windows': diagnostic_windows,
                                         'assumptions': 'Ignores signaled PCR discontinuity and PCR reserved-bit errors, but still splits on TEI, invalid TS header, CC errors and non-monotonic PCR. Never substitute this for the strict estimate.'}},
             'stale_prefix': {'label': 'STALE_PREFIX', 'status': 'HYPOTHESIS_NOT_PROVEN',
@@ -675,6 +1133,38 @@ def markdown(r):
               'JSON chứa vị trí URB, so sánh CC, các cửa sổ PCR, thống kê CRC, SHA và nguồn trích xuất. Không nối PCR hoặc PSI qua chỗ mất đồng bộ. Bitrate là ước lượng theo đồng hồ PCR; lỗi/mất gói có thể làm sai lệch.', '',
               'Tên DVB mặc định ISO-6937 chỉ hiển thị ASCII/escape nếu không có selector được hỗ trợ; descriptor_hex giữ nguyên byte.', '',
               'Chênh lệch submitted−reaped chỉ là mô hình số URB ứng dụng chưa thu hồi; không chứng minh hàng đợi phần cứng host hoặc hardware starvation. Analyzer không đo hai đại lượng phần cứng này (UNKNOWN).', '']
+    timing = r.get('completion_frames', {})
+    lines += ['', '## Frame theo timestamp completion', '',
+              '- Trạng thái: `%s`.' % timing.get('status', 'UNKNOWN')]
+    if timing.get('total') is not None:
+        baseline, cadence, after = timing['baseline'], timing['cadence'], timing['after_5s']
+        lines += ['- Loại timestamp: `%s`; mốc: `%s`; phiên bản `%s`.' % (timing['timestamp_kind'], timing['origin_basis'], timing['time_origin_version']),
+                  '- Baseline: `%s`, %s byte; median frame lớn ứng viên: %s byte. Chỉ baseline độc lập mới cho phép FULL.' % (baseline['status'], baseline['bytes'], baseline['candidate_large_frame_median_bytes']),
+                  '- Cadence (nhịp bắt đầu burst): %s ms, `%s`; ranh giới gap >15 ms.' % (cadence['ms'], cadence['status']),
+                  '- Số frame: `%s`; thời gian xác nhận FULL đầu: %s ms.' % (timing['frame_counts'], timing['time_to_first_full_ms']),
+                  '- Toàn bộ: `%s`.' % timing['total'],
+                  '- Sau 5 giây: `%s`; metrics: `%s`; FULL%% quan sát / gồm MISSING: %s / %s.' % (after['status'], after['metrics'], after.get('full_percent_observed_frames'), after.get('full_percent_including_missing')),
+                  '- Burst rate median: %s bps; nhịp byte completion trong dải đông nhất: %s bps, tách biệt bitrate PCR.' % (timing['burst_rate']['median_bps'], timing['burst_rate']['completion_cadence_rate_bps']),
+                  '- Khả năng chia frame: `%s`.' % timing['grouping'],
+                  '', 'Khoảng dồn nhiều completion <0,2 ms gợi ý host nhận muộn. Nhịp đều trong burst chỉ tương thích với nguồn tạm ngừng; không chứng minh nguyên nhân khi thiếu kernel/bus timestamps.',
+                  '', '| Frame | Start ms | Byte | Gói | CC lỗi / so sánh | TEI | Null | Loại | Gap inference |',
+                  '| --- | --- | --- | --- | --- | --- | --- | --- | --- |']
+        for f in timing['frames']:
+            m = f['metrics']
+            lines.append('| %d | %.3f | %d | %d | %d / %d | %d | %d | %s | %s |' % (
+                f['index'], f['start_ms'], m['bytes'], m['packets'], m['cc_errors'], m['cc_comparisons'],
+                m['tei_packets'], m['null_packets'], f['classification'], f['gap_inference']['label']))
+        lines += ['', 'MISSING là số vị trí cadence suy ra, không phải chứng minh mất frame trên sóng; JSON giữ từng khoảng và giới hạn.', '']
+    lines += ['', '## PCR từng PID — chỉ cửa sổ liên mạch', '',
+              '| PID | Cửa sổ đủ điều kiện / tổng | Bitrate bps | Trạng thái |', '| --- | --- | --- | --- |']
+    for p in r['pcr'].get('by_pid', []):
+        lines.append('| %d | %d / %d | %s | %s |' % (p['pid'], p['eligible_windows'], p['windows'], p['median_bitrate_bps'], p['status']))
+    monitor = r.get('monitor', {})
+    lines += ['', '## Monitor tín hiệu và writer', '',
+              '- Monitor: `%s`; sau 5 giây: `%s`.' % (monitor.get('status', 'UNKNOWN_NOT_PROVIDED'), monitor.get('after_5s', {})),
+              '- Audit thời gian native: submit_begin_ns=%s; native_begin_ns=%s; first_data_delay_ns=%s; submit_to_end_ns=%s. Các mốc này không thay mốc dữ liệu của after5s/FULL; thiếu native_begin là UNKNOWN, không suy từ quyền hoặc submit.' % tuple(cell(r['input'].get('native_audit', {}).get(k)) for k in ('submit_begin_ns', 'native_begin_ns', 'first_data_delay_ns', 'submit_to_end_ns')),
+              '- Writer: `%s`. Thiếu trường B3 là UNKNOWN, không tự coi bằng 0.' % r['input'].get('native_audit', {}).get('writer', 'UNKNOWN_NOT_REPORTED'),
+              '- BER/PER/FER chưa có nghĩa được xác minh giữ UNKNOWN/null; không suy từ byte register.', '']
     lines.extend('- ' + item for item in r['limitations'])
     return '\n'.join(lines) + '\n'
 
@@ -688,6 +1178,10 @@ def main(argv=None):
     ap.add_argument('--device', type=lambda s: int(s, 0))
     ap.add_argument('--min-sync-packets', type=int, default=5)
     ap.add_argument('--skip-prefix', type=int, default=0, help='explicit analysis-only prefix exclusion; retain raw SHA and absolute offsets')
+    ap.add_argument('--monitor', type=Path, help='optional monitor JSONL measurements; no register decoding or cross-host clock alignment')
+    ap.add_argument('--native-audit', type=Path, help='raw only: complete native 15-*.jsonl audit; binds actual completion lengths')
+    ap.add_argument('--frame-baseline-bytes', type=int, help='independent reference median frame size; required to qualify FULL/PARTIAL')
+    ap.add_argument('--frame-cadence-ms', type=float, help='independent reference start-to-start cadence; otherwise inferred with >=3 similar gaps')
     ap.add_argument('--json', type=Path)
     ap.add_argument('--markdown', type=Path)
     ap.add_argument('--extract-raw', type=Path, help='pcap only; exact concatenated successful payloads, never resynchronized')
@@ -695,21 +1189,39 @@ def main(argv=None):
     try:
         outputs = [p for p in (args.json, args.markdown, args.extract_raw) if p is not None]
         resolved = [p.resolve() for p in outputs]
-        if len(set(resolved)) != len(resolved) or args.input.resolve() in resolved or any(p.exists() for p in outputs):
+        if (len(set(resolved)) != len(resolved) or args.input.resolve() in resolved
+                or any(p is not None and p.resolve() in resolved for p in (args.native_audit, args.monitor))
+                or any(p.exists() for p in outputs)):
             raise ValueError('Outputs must be distinct new paths, never the input or existing files')
         source = args.input.read_bytes()
+        timing_metadata = None
+        cadence_ns = None
+        if args.frame_cadence_ms is not None:
+            if not 0 < args.frame_cadence_ms < 1e9:
+                raise ValueError('--frame-cadence-ms must be finite and positive')
+            cadence_ns = round(args.frame_cadence_ms * 1e6)
         is_pcap = args.format == 'pcap' or (args.format == 'auto' and (source[:4] in (
             b'\xd4\xc3\xb2\xa1', b'\xa1\xb2\xc3\xd4', b'\x4d\x3c\xb2\xa1', b'\xa1\xb2\x3c\x4d', b'\x0a\x0d\x0d\x0a') or args.input.suffix.lower() in ('.pcap', '.pcapng')))
         if is_pcap:
-            if args.urb_size is not None:
-                raise ValueError('--urb-size is raw-only; pcap has actual completion lengths')
+            if args.urb_size is not None or args.native_audit is not None:
+                raise ValueError('--urb-size/--native-audit are raw-only; pcap has actual completion lengths')
             data, spans, barriers, extraction = extract_usbpcap(source, args.bus, args.device)
         else:
             if args.bus is not None or args.device is not None or args.extract_raw is not None:
                 raise ValueError('--bus/--device/--extract-raw require pcap input')
+            if args.native_audit is not None and args.urb_size is not None:
+                raise ValueError('--native-audit provides actual lengths; do not combine with --urb-size')
             data, spans, barriers, extraction = source, raw_spans(len(source), args.urb_size), [], {'format': 'raw'}
-        result = analyze(data, spans, barriers, args.min_sync_packets, args.skip_prefix)
+            if args.native_audit is not None:
+                spans, barriers, timing_metadata = native_completions(args.native_audit.read_bytes(), len(data))
+                extraction['native_audit'] = {'path': str(args.native_audit.resolve()), **timing_metadata}
+        result = analyze(data, spans, barriers, args.min_sync_packets, args.skip_prefix,
+                         frame_baseline_bytes=args.frame_baseline_bytes, frame_cadence_ns=cadence_ns,
+                         timing_metadata=timing_metadata)
         result['input'] = {'path': str(args.input.resolve()), 'bytes': len(source), 'sha256': sha256(source), **extraction}
+        result['monitor'] = monitor_report(args.monitor.read_bytes() if args.monitor else None, timing_metadata)
+        if args.monitor:
+            result['monitor']['path'] = str(args.monitor.resolve())
         encoded = json.dumps(result, ensure_ascii=False, indent=2) + '\n'
         if args.json:
             with args.json.open('x', encoding='utf-8', newline='\n') as f:

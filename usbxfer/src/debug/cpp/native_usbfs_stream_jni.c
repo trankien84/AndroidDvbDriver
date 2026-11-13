@@ -53,16 +53,47 @@ static void io_error(JNIEnv *env, const char *message) {
     if (cls) (*env)->ThrowNew(env, cls, message);
 }
 #define JNI(name) Java_info_martinmarinov_usbxfer_NativeUsbfsStream_##name
-JNIEXPORT jlong JNICALL JNI(create)(JNIEnv *env, jclass cls, jint fd, jint depth, jint chunk,
-                                    jint max_bytes, jint duration_ms) {
-    (void)env; (void)cls;
+static jlong create_receiver(jint fd, jint depth, jint chunk, jint max_bytes, jint duration_ms, int file_backed) {
     if (fd < 0) return 0;
     struct stream_receiver *r = calloc(1, sizeof(*r));
     if (!r) return 0;
     r->fd = fd;
     struct tbs_stream_ops ops = {r, allocate, release, prepare, submit, reap, discard, metadata, nanos, wait_ready};
-    if (tbs_stream_init(&r->stream, ops, depth, chunk, max_bytes, duration_ms) != 0) { free(r); return 0; }
+    int rc = file_backed ? tbs_stream_init_file(&r->stream, ops, depth, chunk, max_bytes, duration_ms)
+        : tbs_stream_init(&r->stream, ops, depth, chunk, max_bytes, duration_ms);
+    if (rc != 0) { free(r); return 0; }
     return (jlong)(uintptr_t)r;
+}
+JNIEXPORT jlong JNICALL JNI(create)(JNIEnv *env, jclass cls, jint fd, jint depth, jint chunk,
+                                    jint max_bytes, jint duration_ms) {
+    (void)env; (void)cls; return create_receiver(fd, depth, chunk, max_bytes, duration_ms, 0);
+}
+JNIEXPORT jlong JNICALL JNI(createFile)(JNIEnv *env, jclass cls, jint fd, jint depth, jint chunk,
+                                        jint max_bytes, jint duration_ms) {
+    (void)env; (void)cls; return create_receiver(fd, depth, chunk, max_bytes, duration_ms, 1);
+}
+JNIEXPORT void JNICALL JNI(writerAttach)(JNIEnv *env, jclass cls, jlong h) {
+    (void)cls;
+    if (tbs_stream_writer_attach(&get(h)->stream) != 0) io_error(env, "Native writer attach refused");
+}
+JNIEXPORT jint JNICALL JNI(writerRead)(JNIEnv *env, jclass cls, jlong h, jbyteArray bytes) {
+    (void)cls; struct tbs_stream *s = &get(h)->stream;
+    if (!atomic_load(&s->writer_active) || !bytes || (*env)->GetArrayLength(env, bytes) < s->chunk) {
+        io_error(env, "Native writer requires attached consumer and chunk capacity"); return -1;
+    }
+    const unsigned char *data = NULL;
+    int count = tbs_stream_writer_peek(s, &data);
+    if (count > 0) {
+        (*env)->SetByteArrayRegion(env, bytes, 0, count, (const jbyte *)data);
+        if (!(*env)->ExceptionCheck(env)) tbs_stream_writer_consume(s);
+    }
+    return count;
+}
+JNIEXPORT void JNICALL JNI(writerFinish)(JNIEnv *env, jclass cls, jlong h) {
+    (void)env; (void)cls; tbs_stream_writer_finish(&get(h)->stream);
+}
+JNIEXPORT void JNICALL JNI(writerDetach)(JNIEnv *env, jclass cls, jlong h) {
+    (void)env; (void)cls; tbs_stream_writer_detach(&get(h)->stream);
 }
 JNIEXPORT void JNICALL JNI(run)(JNIEnv *env, jclass cls, jlong h) {
     (void)cls;
@@ -73,7 +104,7 @@ JNIEXPORT void JNICALL JNI(stop)(JNIEnv *env, jclass cls, jlong h) {
 }
 JNIEXPORT jint JNICALL JNI(copy)(JNIEnv *env, jclass cls, jlong h, jbyteArray bytes) {
     (void)cls; struct tbs_stream *s = &get(h)->stream;
-    if (!s->finished || !bytes || (*env)->GetArrayLength(env, bytes) < s->delivered) {
+    if (!s->finished || s->file_backed || !bytes || (*env)->GetArrayLength(env, bytes) < s->delivered) {
         io_error(env, "Native stream copy requires a drained receive and preallocated capacity"); return 0;
     }
     (*env)->SetByteArrayRegion(env, bytes, 0, s->delivered, (const jbyte *)s->data);
@@ -109,6 +140,30 @@ JNIEXPORT jlongArray JNICALL JNI(eventBatch)(JNIEnv *env, jclass cls, jlong h, j
         values[i * TBS_STREAM_EVENT_WIDTH + j] = s->events[offset + i].v[j];
     jlongArray a = (*env)->NewLongArray(env, count * TBS_STREAM_EVENT_WIDTH);
     if (a) (*env)->SetLongArrayRegion(env, a, 0, count * TBS_STREAM_EVENT_WIDTH, values);
+    return a;
+}
+JNIEXPORT jlongArray JNICALL JNI(mappingBatch)(JNIEnv *env, jclass cls, jlong h, jint offset) {
+    (void)cls; struct tbs_stream *s = &get(h)->stream;
+    if (!s->finished || atomic_load(&s->writer_active) || offset < 0 || offset > s->mapping_count) {
+        io_error(env, "Native mappings require a drained writer and receive"); return NULL;
+    }
+    int count = s->mapping_count - offset;
+    if (count > 64) count = 64;
+    jlong values[64 * TBS_STREAM_MAPPING_WIDTH];
+    for (int i = 0; i < count; ++i) for (int j = 0; j < TBS_STREAM_MAPPING_WIDTH; ++j)
+        values[i * TBS_STREAM_MAPPING_WIDTH + j] = s->mappings[offset + i][j];
+    jlongArray a = (*env)->NewLongArray(env, count * TBS_STREAM_MAPPING_WIDTH);
+    if (a) (*env)->SetLongArrayRegion(env, a, 0, count * TBS_STREAM_MAPPING_WIDTH, values);
+    return a;
+}
+JNIEXPORT jlongArray JNICALL JNI(writerMetrics)(JNIEnv *env, jclass cls, jlong h) {
+    (void)cls; struct tbs_stream *s = &get(h)->stream;
+    if (!s->finished || atomic_load(&s->writer_active)) {
+        io_error(env, "Native writer metrics require a drained receive and writer"); return NULL;
+    }
+    jlong values[] = {s->writer_queued_bytes, s->writer_drop_bytes};
+    jlongArray a = (*env)->NewLongArray(env, 2);
+    if (a) (*env)->SetLongArrayRegion(env, a, 0, 2, values);
     return a;
 }
 JNIEXPORT jboolean JNICALL JNI(destroy)(JNIEnv *env, jclass cls, jlong h) {

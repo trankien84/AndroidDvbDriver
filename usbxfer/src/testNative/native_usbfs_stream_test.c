@@ -17,11 +17,14 @@ struct model {
     int allocations, frees, fail_alloc_at, duplicate_alloc, submissions, discards, reaps;
     int fail_submit_at, fail_reap_at, fail_wait, status_at, status, bad_at, bad_kind;
     int stop_at, stuck_drain, discard_error, idle, draining, foreign;
+    int scripted, short_bytes, consume_every, writer_map_index;
+    int64_t cadence, writer_bytes, writer_chunks;
     int64_t now, produced, dropped, latency, jitter, prior_available, syscall_cost, stop_time;
     unsigned char fifo[8192];
     int fifo_size, fifo_count, fifo_head;
 };
 static int tests;
+#define MODEL_RATE 3437500LL /* Synthetic source cadence only, never a runtime starvation assumption. */
 static unsigned char ts_byte(int64_t index) {
     int offset = (int)(index % 188); int64_t packet = index / 188;
     if (!offset) return 0x47;
@@ -56,10 +59,10 @@ static void push_byte(struct model *f, unsigned char byte, int64_t at) {
 static void advance(struct model *f, int64_t duration) {
     int64_t target = f->now + duration;
     if (!f->idle) {
-        int64_t count = target * TBS_STREAM_RATE / 1000000000LL;
+        int64_t count = target * MODEL_RATE / 1000000000LL;
         while (f->produced < count) {
             int64_t index = f->produced++;
-            push_byte(f, ts_byte(index), (index + 1) * 1000000000LL / TBS_STREAM_RATE);
+            push_byte(f, ts_byte(index), (index + 1) * 1000000000LL / MODEL_RATE);
         }
     }
     f->now = target;
@@ -87,7 +90,7 @@ static void prepare(void *request, unsigned char *buffer, int capacity, void *co
 }
 static struct tbs_stream_call submit(void *opaque, void *request) {
     struct model *f = opaque; struct request *r = request;
-    assert(f->stream.data && f->stream.events && f->stream.resubmit);
+    assert((f->stream.data || f->stream.ring) && f->stream.events && f->stream.resubmit);
     assert(f->stream.depth == f->allocations);
     ++f->submissions;
     advance(f, f->syscall_cost);
@@ -100,9 +103,33 @@ static struct tbs_stream_call submit(void *opaque, void *request) {
     }
     return (struct tbs_stream_call){0, 0};
 }
+static void consume_writer(struct model *f) {
+    const unsigned char *bytes;
+    int count;
+    while ((count = tbs_stream_writer_peek(&f->stream, &bytes)) > 0) {
+        while (f->writer_map_index < f->stream.mapping_count && f->stream.mappings[f->writer_map_index][4])
+            ++f->writer_map_index;
+        assert(f->writer_map_index < f->stream.mapping_count);
+        int64_t *m = f->stream.mappings[f->writer_map_index++];
+        assert(m[2] == f->writer_bytes && m[3] == count);
+        assert(bytes[0] == (unsigned char)((m[0] - 1) & 255));
+        f->writer_bytes += count; ++f->writer_chunks;
+        tbs_stream_writer_consume(&f->stream);
+    }
+}
 static struct tbs_stream_call reap(void *opaque, void **request) {
     struct model *f = opaque;
     advance(f, f->syscall_cost);
+    if (f->scripted && !f->draining) {
+        if (f->consume_every > 0 && f->reaps % f->consume_every == 0) consume_writer(f);
+        advance(f, f->cadence);
+        struct request *r = next_active(f);
+        assert(r);
+        r->active = 0; r->ready = 1; r->available = f->now;
+        r->meta.actual = f->short_bytes ? f->short_bytes : r->meta.requested;
+        r->meta.status = 0;
+        memset(r->meta.buffer, f->reaps & 255, (size_t)r->meta.actual);
+    }
     if (!f->draining && f->fail_reap_at && f->reaps + 1 == f->fail_reap_at)
         return (struct tbs_stream_call){-1, ENODEV};
     if (f->draining && f->stuck_drain) return (struct tbs_stream_call){-1, EAGAIN};
@@ -171,7 +198,7 @@ static void cleanup(struct model *f) {
 static void fake_kernel_shutdown(struct model *f) {
     assert(f->stream.uncertain);
     assert(tbs_stream_destroy(&f->stream) == -EBUSY);
-    assert(f->frees == 0 && f->stream.data);
+    assert(f->frees == 0 && (f->stream.data || f->stream.ring));
     /* Host simulation only: the fake kernel is now destroyed, unlike a live fd. */
     f->stream.outstanding = f->stream.uncertain = 0;
     cleanup(f);
@@ -196,9 +223,9 @@ static void test_default_jitter_and_fifo(void) {
     cleanup(f);
     f = fixture(16, 16384, 1024 * 1024, 1000); f->latency = 150000000;
     run(f);
-    assert(f->dropped > 0 && f->stream.horizon_count > 0 && f->stream.starvation_count > 0);
+    assert(f->dropped > 0 && f->stream.horizon_count == 0 && f->stream.starvation_count == 0);
     assert(f->stream.min_outstanding > 0 && f->stream.zero_outstanding_count == 0);
-    printf("beyond-reserve: drops=%lld horizon_risks=%lld software_min=%d (not hardware queue depth)\n",
+    printf("beyond-reserve: model_drops=%lld disabled_horizon=%lld software_min=%d (source loss does not imply software zero)\n",
         (long long)f->dropped, (long long)f->stream.horizon_count, f->stream.min_outstanding);
     cleanup(f);
     f = fixture(16, 16384, 65536, 1000); f->fifo_size = 512; f->jitter = 30000000;
@@ -309,7 +336,91 @@ static void test_syscalls_and_limits(void) {
     assert(tbs_stream_init(&f->stream, ops(f), 16, 16384, 100000, 2000) == -ENOMEM);
     assert(f->allocations == 1 && f->frees == 1); free(f); ++tests;
 }
+static struct model *file_fixture(int depth, int max_bytes, int duration) {
+    struct model *f = calloc(1, sizeof(*f)); assert(f);
+    f->idle = 1; f->scripted = 1; f->cadence = 4766254; f->syscall_cost = 5000;
+    assert(tbs_stream_init_file(&f->stream, ops(f), depth, 16384, max_bytes, duration) == 0);
+    assert(!f->stream.data && f->stream.ring);
+    assert(tbs_stream_writer_attach(&f->stream) == 0);
+    assert(tbs_stream_writer_attach(&f->stream) == -EINVAL);
+    return f;
+}
+static void file_cleanup(struct model *f) {
+    tbs_stream_writer_detach(&f->stream);
+    if (f->stream.uncertain) fake_kernel_shutdown(f); else cleanup(f);
+}
+static void test_file_long_capture(void) {
+    for (int depth = 16; depth <= 32; depth += 16) {
+        struct model *f = file_fixture(depth, TBS_STREAM_FILE_MAX_BYTES, 60000);
+        f->consume_every = 1;
+        run(f); consume_writer(f);
+        assert(atomic_load(&f->stream.stop) == TBS_STREAM_DEADLINE);
+        assert(f->stream.elapsed >= 60000000000LL && f->stream.elapsed < 60010000000LL);
+        assert(f->stream.mapping_count > 12000 && f->stream.mapping_count < 13000);
+        assert(f->writer_bytes == f->stream.delivered && f->stream.writer_drop_bytes == 0);
+        assert(f->stream.delivered > 190000000 && !f->stream.outstanding && !f->stream.uncertain);
+        for (int i = 0; i < f->stream.mapping_count; ++i) {
+            int64_t *m = f->stream.mappings[i];
+            assert(m[0] == i + 1 && m[1] == (int64_t)i * 16384 && m[2] == m[1]);
+            assert(m[3] == 16384 && m[4] == 0 && m[5] > 0);
+        }
+        size_t bounded = TBS_STREAM_RING_BYTES + (size_t)f->stream.event_capacity *
+            (sizeof(struct tbs_stream_event) + sizeof(int64_t))
+            + TBS_STREAM_FILE_COMPLETIONS * sizeof(*f->stream.mappings) + (size_t)depth * 16384;
+        assert(bounded < 16 * 1024 * 1024);
+        assert(tbs_stream_destroy(&f->stream) == -EBUSY); /* JNI consumer still attached. */
+        printf("file60s: depth=%d received=%d written=%lld mappings=%d bounded_native_bytes=%zu drops=0\n",
+            depth, f->stream.delivered, (long long)f->writer_bytes, f->stream.mapping_count, bounded);
+        file_cleanup(f);
+    }
+}
+static void test_file_backpressure_and_exhaustion(void) {
+    struct model *f = file_fixture(16, 8 * 1024 * 1024 + 123, 60000);
+    run(f); /* Consumer deliberately never scheduled: producer still reaches the byte cap. */
+    assert(atomic_load(&f->stream.stop) == TBS_STREAM_BYTE_CAP);
+    assert(f->stream.writer_queued_bytes == TBS_STREAM_RING_BYTES);
+    assert(f->stream.writer_drop_bytes == f->stream.delivered - TBS_STREAM_RING_BYTES);
+    assert(f->stream.elapsed < 3000000000LL && f->stream.max_resubmit < 1000000);
+    for (int i = 0; i < f->stream.mapping_count; ++i) {
+        int64_t *m = f->stream.mappings[i];
+        assert(m[1] == (int64_t)i * 16384 && m[4] == (i >= 256));
+        assert(m[2] == (i < 256 ? m[1] : -1));
+    }
+    consume_writer(f); assert(f->writer_bytes == TBS_STREAM_RING_BYTES);
+    printf("slow-writer: received=%d written=%lld exact_drop=%lld max_resubmit_ns=%lld\n",
+        f->stream.delivered, (long long)f->writer_bytes, (long long)f->stream.writer_drop_bytes,
+        (long long)f->stream.max_resubmit);
+    file_cleanup(f);
+    f = file_fixture(16, 8 * 1024 * 1024 + 123, 60000); f->consume_every = 300;
+    run(f); consume_writer(f);
+    assert(f->stream.writer_drop_bytes == 44 * 16384);
+    assert(f->stream.mappings[299][2] == -1 && f->stream.mappings[299][4] == 1);
+    assert(f->stream.mappings[300][1] == 300 * 16384 && f->stream.mappings[300][2] == 256 * 16384);
+    assert(f->stream.mappings[300][4] == 0 && f->writer_bytes + f->stream.writer_drop_bytes == f->stream.delivered);
+    file_cleanup(f);
+    f = file_fixture(32, TBS_STREAM_FILE_MAX_BYTES, 60000);
+    f->short_bytes = 512; f->cadence = 1000; run(f);
+    assert(atomic_load(&f->stream.stop) == TBS_STREAM_EVENT_CAP);
+    assert(f->stream.mapping_count <= TBS_STREAM_FILE_COMPLETIONS);
+    assert(!f->stream.outstanding && !f->stream.uncertain);
+    assert(f->stream.writer_drop_bytes + f->stream.writer_queued_bytes == f->stream.delivered);
+    file_cleanup(f);
+    f = file_fixture(16, TBS_STREAM_FILE_MAX_BYTES, 60000); f->status_at = 4; f->status = -75; run(f);
+    assert(f->stream.first_status == -75 && f->stream.delivered == 3 * 16384); file_cleanup(f);
+    f = file_fixture(16, TBS_STREAM_FILE_MAX_BYTES, 60000); f->stop_at = 3; run(f);
+    assert(atomic_load(&f->stream.stop) == TBS_STREAM_STOP); file_cleanup(f);
+    f = file_fixture(16, TBS_STREAM_FILE_MAX_BYTES, 25); f->stuck_drain = 1; run(f);
+    assert(f->stream.uncertain && f->stream.outstanding); file_cleanup(f);
+    int invalid[][4] = {{8,16384,1,60000},{16,4096,1,60000},{16,16384,TBS_STREAM_FILE_MAX_BYTES+1,60000},
+        {32,16384,1,60001},{16,16384,0,60000}};
+    for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        f = calloc(1, sizeof(*f)); assert(f);
+        assert(tbs_stream_init_file(&f->stream, ops(f), invalid[i][0], invalid[i][1], invalid[i][2], invalid[i][3]) == -EINVAL);
+        assert(f->allocations == 0); free(f); ++tests;
+    }
+}
 int main(void) {
+    test_file_long_capture(); test_file_backpressure_and_exhaustion();
     test_default_jitter_and_fifo(); test_legacy_35ms_seams(); test_status_first_middle();
     test_bad_completion(); test_stops_deadline_and_drain(); test_syscalls_and_limits();
     printf("PASS %d native stream cases; real C core, synthetic TS/finite FIFO; no hardware claim\n", tests);

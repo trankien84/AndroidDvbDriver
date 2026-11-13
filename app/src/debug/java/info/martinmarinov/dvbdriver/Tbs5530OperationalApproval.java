@@ -95,6 +95,8 @@ final class Tbs5530OperationalApproval implements Tbs5530ControlProbe.Authorizat
                 + "|readTimeoutMs=" + limits.readTimeoutMillis + "|chunkBytes=" + limits.readChunkBytes
                 + (limits.readApi == Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_STREAM
                 ? "|readApi=NATIVE_USBFS_STREAM|queueDepth=" + limits.queueDepth + "|drainMaxMs=1000|watchdogMs=100|stalePrefix=2048"
+                        + (limits.b4Capture ? "|B4_FILE_CAPTURE|writer=BOUNDED_NONBLOCKING|monitorMs=250|tunerRssi=" + limits.tunerRssi
+                        + "|monitorWrites=BANK_SELECT_FREEZE_UNFREEZE_ONLY|clock=CLOCK_MONOTONIC" : "")
                 : nativeUrbReception ? "|readApi=USBDEVFS_URB_8X" + limits.readChunkBytes + "|queueDepth=8|drainMaxMs=1000|bulkStreamId=0|errorPayload=METADATA_ONLY"
                 : queuedReception ? "|readApi=USB_REQUEST_QUEUE_8X4096_API26|queueDepth=8|drainMaxMs=1000" : "|readApi=USBDEVFS_BULK_ERRNO")
                 + (endpointPreparation ? "|prepare=USBDEVFS_CLEAR_HALT:82|prepareMaxMs=5000"

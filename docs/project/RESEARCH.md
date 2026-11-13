@@ -1,5 +1,111 @@
 # Research log (append-only)
 
+## 2026-11-13, B4 cặp 1 — Không đủ cửa sổ so parity; cờ TS lock Android mất liên tục
+
+**RUNTIME-OBSERVED:** Sau `OK B4` đúng card SHA `742010f6e556acb1dcade2890457e18486b462cfb6a074ab3dcca8b37d5c9864`, đã thu Windows trước rồi Samsung ngay sau khi người dùng xác nhận ngắt cả nguồn ≥5 giây. Anten thụ động ngoài trời trên nóc nhà giữ nguyên, RF IN/không DC, cổng Windows cold2; Android dùng cáp chữ Y/pin dự phòng theo xác nhận. Không biến cách nối giống nhau thành chứng minh SNR tương đương.
+
+### Đối chứng cùng ngày
+
+| Chỉ số | Windows1 | Android1 | Giới hạn |
+| --- | --- | --- | --- |
+| Thời gian có dữ liệu USB | 42,736914 giây | 2,274172 giây; native run 2,278498 giây | Windows TSDuck thu 40 giây tại tầng BDA, không cùng mốc với raw USB. |
+| FULL/PARTIAL/MISSING toàn lượt | 77/75/25 | 0/8/2 | Cùng analyzer frozen, baseline độc lập 540672 byte/242,3545 ms. |
+| Sau prefix: CC/TEI/null | 4383/6925/21848 | 214/0/674 | Không so số tuyệt đối giữa hai thời lượng khác nhau. |
+| FULL sau 5 giây, gồm MISSING | 46,79% | UNKNOWN | Android dừng trước ngưỡng. |
+| CC+TEI/phút sau 5 giây | 10665,42 | UNKNOWN | Không thay bằng rate toàn lượt Android ngắn. |
+| SNR hợp lệ sau 5 giây | 12,9/14,35/16,1 dB, 24 mẫu | UNKNOWN | Mẫu Android 28,6 dB đầu còn cắt mép dữ liệu, không dùng so parity. |
+| PAT/PMT/service rows | 14/14/14 | 14/14/14 | SDT actual CRC hợp lệ 0 ở cả hai, tên dịch vụ UNKNOWN. |
+| PCR chuẩn | UNKNOWN | UNKNOWN | Windows BDA cũng sai reserved bits; không dùng diagnostic 27,5 Mbps thay chuẩn. |
+| Writer/native/drain Android | Không áp dụng writer Android | Drop 0/failure null/data errors 0/outstanding 0 | PASS riêng vận chuyển, không chất lượng TS. |
+
+Windows1 pcap 63706295 byte/SHA `f47edbf0ca1c39e09edd4fe04177457424e72cf9957d8e197ebbcd364db474c6`; BDA TS 61698968 byte/SHA `5196fbe2f501b7d1764ede807372940f4097aba490c171faf72701b52573b0a8`. Frozen parser xác nhận Windows MANUAL0/drive `55/55`, 1431 reads/36 nhóm/warnings 0. Sau 5 giây có 106 LOCKED/101 LOST, đoạn LOST dài nhất với khoảng poll ≤500 ms là 1075,128 ms. Không gọi mẫu Windows sạch hoặc chắc RF tốt.
+
+Android raw 2146304 byte, 131 completion data được capture, first status/errno 0; submitted/completed 147 gồm 16 hủy khi drain. Max/median reap→resubmit 143693/20538 ns; writer/raw mapping đúng, min software outstanding 15/zero 0, không `-75` hoặc detach. Monitor 10 samples lỗi I²C 0/cleanup true: một `20:10=26`, chín `06`; mẫu cuối confirmed loss 2002360231 ns. Cờ `06` vẫn có sync state 6 nhưng không bit TS lock: không dịch thành chắc chắn mất RF hoặc mất kết nối USB. Stop reason WATCHDOG/B4_LOCK_LOST_OVER_2_SECONDS phù hợp card; không đổi ngưỡng dừng để ép đủ 30 giây.
+
+Kết quả tool comparison: **`INSUFFICIENT_EVIDENCE`**. Không có dữ liệu Android sau 5 giây, SNR tương ứng hoặc PCR/SDT chuẩn; không gán PARITY_PASS, GAP hoặc RF_LIMITED. `TS_SMOKE_PASS` chưa đạt; Phase 4 chưa mở. Timeline/JSON/Markdown ở `pair-1/windows`, `pair-1/android`, `pair-1/comparison` trong bundle ngoài Git.
+
+### Lỗi host sau drain và bảo toàn chứng cứ
+
+Helper tạo `01-report.json` 116 byte chứa lỗi shell thay vì report. Đối chiếu argv xác nhận `exec-out` giữ nguyên đối số, lớp nháy đơn bọc command cho `sh -c` làm shell coi cả `head -c ...` là tên executable. Fake cũ chỉ nhận prefix và tự ghi fixture, nên che được lỗi này. Bản tái hiện exact ArgumentList exit 127 trước sửa và 0 sau sửa, binary 256 byte/hash đúng; B4 131/131/B3 126/126 PASS. Bản sửa chỉ bỏ quote sai và siết fake, giữ mọi hash/size/drain/bounds; chưa dùng hardware.
+
+Budget đã ghi HOST_ABORTED_NO_RETRY/session_closed=true dù runtime đã drain. Không sửa receipt hoặc mở lại; hash `72666fe5e63f70a72781f14dbaf2e6c5e7a7bcca965a6634cc5748aa311e0356` giữ nguyên. Người dùng rút/ngắt nguồn rồi cho sửa lỗi trong session. Đã thu lại đúng 35 tệp đã lưu bằng `exec-out run-as cat <path>` và kiểm SHA/size tablet trước/sau-host khớp, không firmware/TS receive mới. Các output lỗi scratch giữ riêng, không tính evidence.
+
+408 source files thực dùng Android1 đã được lưu và đối soát manifest frozen ngoài Git; helper gốc `21d34889…` tách bản mới `4105a44d…`, không rollback workspace. [ADR-057](DECISIONS.md) giữ chốt ngân sách, yêu cầu card/hash mới nếu có phép thử bổ sung. Hướng điều tra an toàn là đối chiếu freeze/TS lock và timeline nguồn; chưa có bằng chứng buộc sửa drive, PLP, nguồn hoặc anten.
+
+### Hậu kiểm monitor: chưa chứng minh dừng giả hoặc mất lock vật lý liên tục
+
+Đối chiếu source frozen, samples và Windows1 xác nhận mask/timer đúng: `06` có sync 6, TS_LOCK 0, unlock-detected 0; chín snapshot cách nhau khoảng 250 ms vượt ngưỡng hơn 2 giây. Tuy nhiên snapshot không chứng minh trạng thái giữ nguyên giữa hai lần đọc. Có 99 completion/1622016 byte thành công giữa mẫu `06` đầu và cuối, không đủ đảo `06` thành `26` hoặc bảo đảm dữ liệu RF sạch.
+
+Windows thực cũng freeze khi bank đang là 20 hoặc 22, không luôn chọn bank 00. Có 26 status `26` trong freeze và 65 status `06` ngoài freeze, nên không có căn cứ nói freeze luôn ép TS_LOCK về 0. Android gom tám reads vào một freeze, còn Windows chia các cửa sổ nhỏ và có đọc status ngoài freeze; đây là khác biệt telemetry có thật, chưa chứng minh gây mất lock. Official/CoreELEC đọc status không freeze. Không đổi monitor hoặc bỏ chốt dừng khi chưa có phép đo phân biệt.
+
+**Giới hạn audit Android:** control mirror 455 records kết thúc ở stream select, không chứa monitor EP0. Đường monitor dùng raw connection được pin thread/scope và giữ EP0 mutex, nhưng không đi qua mirror; vì vậy thứ tự ghi bank/freeze/unfreeze chỉ SOURCE-CONFIRMED cộng kết quả samples, không phải transcript USB runtime độc lập. Không dựng thêm giao dịch vào mirror để lấp bằng chứng. Báo cáo `monitor/post-live-lock-review/REPORT.md` ghi exact source/frame/timestamp và các phần UNKNOWN. Candidate telemetry tiếp theo có thể bổ sung quan sát RAM riêng trước khi cần card mới; không xem đó là nguyên nhân gốc hoặc quyền hardware hiện tại.
+
+## 2026-11-13, B4 offline — Thanh ghi Windows thực ở bank 22; chưa có công thức BER/PER cho tập đọc này
+
+**Nguồn và phạm vi:** baseline Android `8d05adb24de221399deaf2392b7fef1218cfab3d`; official TBS `2ce787de9f6e81b4294692a45de15596ae2e1322`, community C `c5fa27eecbe80633cbb365cc44656daea1c0e2e3`, CoreELEC `072f8e99e0ac66d88d7278784e922e08e8253210`, Go `6aaa1899991c875ba0482fa9098adc6c83b01fd8`. Parser mới phân tích nguyên capture cold2 đúng SHA `70fced47614ff8ec17c9e78f79fca16408c23e6bcadcfb6ad25a4c69cd7f9ded`, không capture hoặc I/O phần cứng mới.
+
+### Nhịp nhận, PCR và các điểm không khớp nhận xét đầu vào
+
+Analyzer có 64 tests frame/PCR/PSI và công cụ comparison có 8 tests PASS ở mốc kiểm đầu B4. Hai capture Windows độc lập cho kích thước burst lớn trung vị 540672 byte và nhịp khoảng 242,35 ms; tốc độ trong burst khoảng 27,5 Mbps. Tỷ số kích thước/nhịp tương đương khoảng 17,85 Mbps, chỉ là ước lượng từ cadence, **chưa phải bitrate PCR đã xác nhận**.
+
+| Input, sau prefix 2048 | FULL / PARTIAL / MISSING | CC / TEI / null | PAT / PMT / SDT sections |
+| --- | --- | --- | --- |
+| Windows cold2 | 45 / 17 / 8 | 1705 / 3054 / 11511 | 24 / 373 / 0 |
+| Windows prep2 | 14 / 2 / 0 | 424 / 0 / 2381 | 6 / 70 / 0 |
+| B3 16 × 16384 | 0 / 7 / 2 | 166 / 0 / 581 | 3 / 0 / 0 |
+| B3 32 × 16384 | 0 / 6 / 2 | 140 / 0 / 549 | 1 / 14 / 0 |
+| B3 16 × 65536 | UNKNOWN | 50 / 66 / 295 | 0 / 0 / 0 |
+
+FULL được so với baseline kích thước độc lập, không tự gọi các nửa-frame là FULL. Với chunk 64 KiB, khoảng completion khoảng 19 ms đã lớn hơn ngưỡng 15 ms; phải trả UNKNOWN thay vì đếm mỗi completion thành frame. Gap được phân loại `SOURCE_LIKE_INFERRED` ở hai lượt B3 16 KiB vì completion trong đợt vẫn đều; không có timestamp kernel nên đây không phải bằng chứng FX2/host không thể rơi gói. Outstanding 15 chỉ là sổ theo dõi phần mềm, không đồng nhất với 15 URB đang thực sự chờ trên bus.
+
+Cold2 có burst FULL đầu được xác nhận ở 519,639 ms sau dữ liệu đầu, không phải lần đầu sau 3,7 giây. Burst đó còn 16 lỗi CC và 1072 TEI. Chuỗi tám FULL đều bắt đầu ở 3754,622 ms, phù hợp nhận xét về giai đoạn ổn định khoảng 3,7 giây nhưng vẫn không chứng minh TS sạch. Sau 5 giây đầu, FULL là 80% trên frame quan sát, hoặc 73,469% nếu tính cả vị trí MISSING; CC 1279 và TEI 1614. Ba B3 và prep2 quá ngắn để đánh giá cửa sổ sau 5 giây.
+
+Số CC 1705 được tái hiện theo định nghĩa analyzer; số 2614 của review đầu chưa truy được nguồn, không ép output cho khớp. Report TSDuck cũ có counter khác là 2395; không đồng nhất các counter hoặc gọi một summary error là số packet lỗi. Quan trọng hơn, 3731 trường PCR trên 14 PID dịch vụ trong USB raw cold2 đều sai reserved bits: không có PCR chuẩn, không chỉ do mẫu quá ngắn. Giữ ước lượng chẩn đoán 27,487 Mbps riêng, không dùng thay bitrate multiplex chuẩn hoặc tiêu chí parity. SDT cũng chưa quan sát, dù PAT/PMT cho 14 dịch vụ và B3 lượt 32 URB có cấu trúc PID khớp Windows.
+
+Ba comparison B3/Windows hiện là `INSUFFICIENT_EVIDENCE`, không phải parity FAIL theo tiêu chí sai hoặc PASS. B4 phải giữ rõ những trường còn thiếu, rồi thu dài và đối chứng mới; không mặc định mọi lỗi còn lại thuộc RF. Bảng từng burst và giải thích nằm trong `analyzer/verified/REPORT.md` cùng `analyzer/followup-cold2-20261113-004751/FOLLOWUP.md` của bundle ngoài Git.
+
+Bản v2 sửa mốc thời gian cả hai host về completion dữ liệu thành công đầu, không dùng submit đầu của Android làm sớm cửa sổ sau 5 giây. Regression chờ dữ liệu 500 ms đã FAIL trước sửa và PASS sau; 23 tests focused PASS, parser/PCR/CC không đổi. `analyzer/verified-data-origin-v2/REPORT.md` là nguồn timing mới, các report trước giữ nguyên. File BDA gốc cũng còn PCR sai reserved bits trên các PID dịch vụ; 3713 packet có PCR flag được ghép đều giống nguyên packet USB raw, không quan sát BDA sửa chúng. Vì vậy không quy việc thiếu PCR chuẩn chỉ cho cách trích capture USB.
+
+### Register inventory và ý nghĩa đã chứng minh
+
+Parser ghép request/completion theo bus/device/endpoint/IRP, rồi ghép pointer `0x90` với reply `0x91`, theo dõi bank riêng cho mỗi địa chỉ. Có 886 lần đọc, 36 nhóm register và 123 nhóm ghi; không cảnh báo pairing. Bảng đầy đủ giá trị, độ dài, số lần và nhịp nằm trong `REGISTER-INVENTORY.md`/CSV ngoài Git ở bundle B4, không chép raw hoặc định danh vào hồ sơ.
+
+| Địa chỉ / bank / reg | Quan sát Windows | Nghĩa có nguồn và giới hạn |
+| --- | --- | --- |
+| `C8 20:10` | 169 reads; `26` 79 lần, `06` 73 lần; còn `02/03/05/25` lúc vào lock | Lock: sync 6 và TS bit `20`, không unlock bit `10`; official `cxd2878_read_status:3313–3323`, CoreELEC `:2620–2633`. `06` không có TS lock, không phải lỗi USB. |
+| `C8 20:28`, 2 byte | 54 reads; ví dụ `0370`, `00D9` | SNR: word BE16, clamp 10876; đường cong `10 log10(r/(12600-r)) + 32` dB. Official dùng log nguyên, kết quả cuối trừ 1,5 dB; `sony_math_log2/log10:134–186`, `read_status:3480–3485,3591`. Chỉ nhận SNR khi có LOCKED trong cùng cửa sổ freeze. |
+| `C8 20:72` | 54 reads, luôn `18` | UNKNOWN; không gọi byte này là FFT/GI/TI hoặc kỳ đếm lỗi. |
+| `C8 22:12/5B/5C/5E` | Lần lượt 108/108/54/54 reads, giá trị `01/03/02/01` | **Bank 22**, khác bank 20 trong giả định ban đầu. `22:5E` có vai trò chọn độ dài LDPC ở Go `sony/errors.go:154–160`, nhưng riêng byte này không đủ tính BER. Không áp mapping modulation/code rate của bank 20 sang bank 22. |
+| `C8 24:40`, 4 byte | 55 reads; `00000000`, `010003B5` và các giá trị khác | Raw có thật, nhưng valid bit/numerator/denominator/đơn vị chưa được chứng minh cho cùng chip: BER/FER/PER UNKNOWN. |
+| `CC 00:A5/82/A2` | Mỗi reg 59 reads cùng các write lặp | Nhóm LED lock, không thêm vào monitor Android hoặc xem là lệnh giữ TS. |
+| `C0 59/5B/69/87/88` | Bảy chuỗi đo ADC/RSSI; cleanup Windows `88=00` | Official `ascot3_read_rssi:453–563` cleanup `88=04`, khác Windows. Cờ RSSI bị từ chối trước I/O, không chọn một chuỗi ghi chưa đủ căn cứ. |
+| USB request `81` | 3228 requests/replies, reply `00` | Không gán thành RF lock/I²C status; không phát lại trong monitor. |
+
+Official PER dùng `24:FA(3)` và `24:DC` làm kỳ đếm (`cxd2878_read_status:3622–3639`); Go pre-LDPC BER dùng `20:39(4)` và `20:6F` (`sony/errors.go:130–163`). Những register này **không có** trong tập Windows đang được phép đọc. Vì vậy B4 giữ raw đã quan sát và giá trị BER/PER/FER là UNKNOWN, không mở thêm read hoặc giả công thức để có số. IF AGC, active PLP, FFT/GI/modulation/code rate/TI cũng UNKNOWN nếu chỉ dùng inventory này.
+
+### Chất lượng tín hiệu Windows theo thời gian
+
+First Bulk completion có payload tại 23060,890 ms kể từ đầu capture. SNR đủ điều kiện cùng freeze và LOCKED có 21/54 mẫu, min/trung vị/max 12,4/13,3/19,4 dB; sau 5 giây đầu có 18 mẫu, 12,4/13,3/16,9 dB. Không đưa 33 mẫu không có LOCKED cùng freeze vào thống kê SNR hợp lệ. Sau 5 giây có 59 status LOCKED và 46 LOST; chuỗi mất TS lock liên tiếp dài nhất với khoảng lấy mẫu không quá 500 ms là 1117,756 ms, chưa hơn 2 giây.
+
+Những số này ủng hộ việc đo RF song song trong B4, nhưng chưa đủ quy toàn bộ lỗi TS cho sóng hoặc anten. Không dùng SNR lúc LOST làm bằng chứng tương đương sóng. BER/PER/FER vẫn UNKNOWN, không phải 0. Cần ghép timeline với frame/TEI/CC trên cùng clock của từng host, không trừ trực tiếp timestamp Windows với Android.
+
+### Khác biệt cấu hình — chỉ lập bảng, không sửa
+
+| Mục | Android | Windows cold2 | Trạng thái |
+| --- | --- | --- | --- |
+| Drive `96/97` | `54/54`, source init | `55/55`, frames 913/921 | Khác biệt đã quan sát; ảnh hưởng chất lượng chân TS là HYPOTHESIS. |
+| PLP | MANUAL 0 | `23:AF=00`, `AD=01` | Cấu hình giống nhau; chưa đọc active PLP. |
+| TS parallel/clock/gap | C4/C6, D3/DE/DA, D9=08, reg32/33 theo source | Tương đồng phần được capture | Không suy mọi bit/pin giống nhau hoặc một bit clock gây khoảng trống 170–406 ms. |
+| TS error/TEI | CE/CF=`01/01` | Ghi CE `0101`, frame 1165 | Byte giống nhau; chưa chứng minh ý nghĩa mọi bit. |
+| Stream/init | Chỉ `8A 0A00` đã duyệt | Có `0A00`, `0400`, `0401` trước init | Không phát lại `040x`; chức năng/nhu cầu cho Android UNKNOWN. |
+| Định kỳ | B3 chưa monitor; B4 chỉ demod bank/freeze/read | Thêm LED, tuner ADC và poll81 | Không có bằng chứng các lệnh này làm nguồn TS ổn định hơn. |
+
+### Đính chính
+
+Mục B3 và đối chứng Windows ngay bên dưới giữ nguyên như lịch sử. ADR-056 rút lại việc coi 27,5 Mbps là bitrate multiplex và horizon `3437500 B/s`; đó là tốc độ trong đợt. Capture Windows cũng có lỗi và lock thay đổi, không phải mẫu sạch. Ba capture B3 chỉ khoảng 2 giây nên không đủ kết luận chất lượng ổn định sau lock; lỗi CC/TEI đo được vẫn là lỗi thật, nhưng chưa xác định lớp gây lỗi. Phần phân tích frame/PCR và kiểm tích hợp B4 đang tiếp tục; chưa có phép đo Windows/Android cùng ngày mới.
+
+**Evidence:** bundle `phase31-b4-20261112-235953-98a481b8`, thư mục `monitor` dưới reports/logs của `D:\TSDuck`; `REPORT.md`, `REGISTER-INVENTORY.md`, `qualified-summary.json`, `windows-monitor-complete.json`, `validation-manifest.json`. Golden monitor Java lượt đầu 13/13, sau bổ sung hàm tính toán BER/PER thuần là 18/18, Python 8/8 PASS. Các hàm thuần chỉ kiểm công thức Go/official với dữ liệu giả hợp lệ và biên, không thêm read hoặc biến `24:40` thành BER/PER. Không thay cho Android runtime hoặc TS parity.
+
 ## 2026-11-12, B3 thực đầu — Vòng native nhanh nhưng còn khoảng trống 170–406 ms
 
 **RUNTIME-OBSERVED:** Hai lượt chuẩn bị đầu không tới firmware: host foreground parser cũ không nhận Samsung global ResumedActivity, sau sửa thì hộp thoại chọn mở app gây FOREGROUND_LOST tại WAIT_DEVICE. Đã đối soát không grant/firmware ở lượt đầu và typed drain/firmware null ở lượt thứ hai. Người dùng cho tăng ngân sách; card permission-first duyệt tổng hữu hạn năm lượt, giữ hai consumed manifests cũ. Xử lý hộp thoại mở app trước grant rồi Activity permission-only xác minh OS_PERMISSION_VERIFIED đã cho bootstrap/reload B2 hoàn tất.
