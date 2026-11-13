@@ -5,51 +5,61 @@ import java.util.List;
 
 /** Pure CXD6802 decoding. Null means UNKNOWN/unavailable, never a fabricated zero. */
 public final class Tbs5530SignalMetrics {
-    private static final int[] LOG2_FRACTIONS = {0,4,9,13,17,21,25,29,32,36,39,43,46,49,52,55,
-            58,61,64,67,70,73,75,78,81,83,86,88,91,93,95,98};
+    private static final int[][] BCH_BITS = {
+            {7200, 9720, 10800, 11880, 12600, 13320, 5400, 6480},
+            {32400, 38880, 43200, 48600, 51840, 54000, 21600, 25920}
+    };
+    private static final String[] CODE_RATES = {"1/2", "3/5", "2/3", "3/4", "4/5", "5/6", "1/3", "2/5"};
+    private static final String[] MODULATIONS = {"QPSK", "16-QAM", "64-QAM", "256-QAM"};
     public enum Lock { LOCKED, LOST, UNKNOWN }
     public final Lock lock;
     public final Integer syncState;
     public final Boolean tsLock, unlockDetected;
     public final Integer snrRaw, officialCnrMilliDb;
     public final Double snrDbCurve, officialCnrDb;
-    public final Double ber = null, fer = null, per = null, rssiDbm = null;
+    public final Double ber, fer = null, per = null, rssiDbm = null;
     public final Integer ifAgc = null;
-    public final String fft = null, guardInterval = null, modulation = null, codeRate = null;
-    public final Integer plpId = null, timeInterleaving = null;
-    public final String unavailableReason = "UNKNOWN: no proven same-chip mapping/denominator for Windows bank22 signaling and bank24:40";
+    public final String fft = null, guardInterval = null, modulation, codeRate, fec;
+    public final Integer plpId, timeInterleaving;
+    public final String unavailableReason;
 
-    private Tbs5530SignalMetrics(Integer status, Integer snr) {
+    private Tbs5530SignalMetrics(List<Tbs5530SignalMonitor.RegisterRead> reads) {
+        Integer status = octet(reads, 0x20, 0x10);
         syncState = status == null ? null : status & 7;
         tsLock = status == null ? null : (status & 0x20) != 0;
         unlockDetected = status == null ? null : (status & 0x10) != 0;
-        // Official cxd2878_read_status at 2ce787de9f6e, lines 3313-3323.
-        // Sync state 7 is reserved: do not turn an invalid measurement into a lock-loss stop.
+        // TS lock is independent telemetry, not a demodulator-lock prerequisite.
         lock = status == null || syncState == 7 ? Lock.UNKNOWN
-                : syncState >= 6 && tsLock && !unlockDetected ? Lock.LOCKED : Lock.LOST;
-        snrRaw = snr;
-        snrDbCurve = lock == Lock.LOCKED && snr != null ? snrDb(snr) : null;
-        officialCnrMilliDb = snrDbCurve == null ? null : officialCnrMilliDb(snr);
-        officialCnrDb = officialCnrMilliDb == null ? null : officialCnrMilliDb / 1000.0;
+                : syncState == 6 && !unlockDetected ? Lock.LOCKED : Lock.LOST;
+        byte[] snr = bytes(reads, 0x20, 0x28, 2);
+        snrRaw = snr == null ? null : ((snr[0] & 255) << 8) | (snr[1] & 255);
+        snrDbCurve = snrRaw == null ? null : snrDb(snrRaw);
+        officialCnrMilliDb = snrRaw == null ? null : officialCnrMilliDb(snrRaw);
+        officialCnrDb = snrDbCurve;
+
+        Integer l1 = octet(reads, 0x22, 0x12), cr = octet(reads, 0x22, 0x5b);
+        Integer mod = octet(reads, 0x22, 0x5c), fecType = octet(reads, 0x22, 0x5e);
+        boolean validL1 = lock == Lock.LOCKED && l1 != null && (l1 & 1) != 0;
+        codeRate = validL1 && cr != null ? CODE_RATES[cr & 7] : null;
+        modulation = validL1 && mod != null && (mod & 7) < MODULATIONS.length ? MODULATIONS[mod & 7] : null;
+        fec = validL1 && fecType != null && (fecType & 3) < 2
+                ? ((fecType & 3) == 0 ? "16K" : "64K") : null;
+        plpId = validL1 ? octet(reads, 0x22, 0x54) : null;
+        timeInterleaving = validL1 ? octet(reads, 0x22, 0x62) : null;
+        Integer period = octet(reads, 0x20, 0x72);
+        ber = validL1 && cr != null && fecType != null && period != null
+                ? preBchBer(bytes(reads, 0x24, 0x40, 4), period, fecType, cr) : null;
+        unavailableReason = "UNKNOWN fields require valid same-sample reads; BER is pre-BCH, not pre-LDPC; "
+                + "FFT/GI/FER/PER unavailable; RSSI requires a separate OFF-only tuner sample";
     }
 
-    /** Exact integer-log curve and -1500 mdB offset from official cxd2878.c:134-186,3480-3485,3591. */
+    /** Compatibility name: B5 reports the unshifted real-log curve, rounded to milli-dB. */
     public static Integer officialCnrMilliDb(int raw) {
-        if (raw < 0 || raw > 65535) throw new IllegalArgumentException("SNR word outside uint16");
-        if (raw == 0) return null;
-        int r = Math.min(raw, 10876);
-        return 100 * (sonyLog10(r) - sonyLog10(12600 - r)) + 32000 - 1500;
+        Double db = snrDb(raw);
+        return db == null ? null : (int) Math.round(db * 1000.0);
     }
 
-    // Sony/TurboSight GPL-2.0-or-later integer logarithm, constants from cxd2878_priv.h:12-14.
-    private static int sonyLog10(int value) {
-        int count = 31 - Integer.numberOfLeadingZeros(value);
-        int log2 = count * 100;
-        if (count > 0) log2 += LOG2_FRACTIONS[(count <= 5 ? value << (5 - count) : value >> (count - 5)) & 31];
-        return (100 * log2 + 166) / 332;
-    }
-
-    /** Real-log counterpart of the official integer-log curve, not bit-exact vendor output. */
+    /** Mainline cxd2880 dvbt2_calc_snr: clamp 10876, denominator 12600-r, +32 dB. */
     public static Double snrDb(int raw) {
         if (raw < 0 || raw > 65535) throw new IllegalArgumentException("SNR word outside uint16");
         if (raw == 0) return null;
@@ -91,14 +101,36 @@ public final class Tbs5530SignalMetrics {
 
     private static boolean registerByte(int value) { return value >= 0 && value <= 255; }
 
-    public static Tbs5530SignalMetrics decode(List<Tbs5530SignalMonitor.RegisterRead> reads) {
-        Integer status = null, snr = null;
+    /** Pre-BCH ratio; reserved FEC types, missing validity and impossible counts stay UNKNOWN. */
+    public static Double preBchBer(byte[] counter24_40, int period20_72, int fec22_5e, int cr22_5b) {
+        if (counter24_40 == null || counter24_40.length != 4 || (counter24_40[0] & 1) == 0
+                || !registerByte(period20_72) || !registerByte(fec22_5e) || !registerByte(cr22_5b)
+                || (fec22_5e & 3) > 1) return null;
+        long errors = ((long) (counter24_40[1] & 63) << 16)
+                | ((long) (counter24_40[2] & 255) << 8) | (counter24_40[3] & 255);
+        long bits = (1L << (period20_72 & 15)) * BCH_BITS[fec22_5e & 3][cr22_5b & 7];
+        return errors > bits ? null : (double) errors / bits;
+    }
+
+    private static Integer octet(List<Tbs5530SignalMonitor.RegisterRead> reads, int bank, int register) {
+        byte[] b = bytes(reads, bank, register, 1);
+        return b == null ? null : b[0] & 255;
+    }
+
+    private static byte[] bytes(List<Tbs5530SignalMonitor.RegisterRead> reads, int bank, int register, int length) {
+        byte[] found = null;
         for (Tbs5530SignalMonitor.RegisterRead read : reads) {
             byte[] b = read.getBytes();
-            if (read.bank == 0x20 && read.register == 0x10 && b.length == 1) status = b[0] & 255;
-            if (read.bank == 0x20 && read.register == 0x28 && b.length == 2)
-                snr = ((b[0] & 255) << 8) | (b[1] & 255);
+            int offset = register - read.register;
+            if (read.bank != bank || offset < 0 || offset + length > b.length) continue;
+            byte[] candidate = java.util.Arrays.copyOfRange(b, offset, offset + length);
+            if (found != null && !java.util.Arrays.equals(found, candidate)) return null;
+            found = candidate;
         }
-        return new Tbs5530SignalMetrics(status, snr);
+        return found;
+    }
+
+    public static Tbs5530SignalMetrics decode(List<Tbs5530SignalMonitor.RegisterRead> reads) {
+        return new Tbs5530SignalMetrics(java.util.Objects.requireNonNull(reads));
     }
 }

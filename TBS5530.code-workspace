@@ -1,12 +1,28 @@
 {
   "folders": [
-    { "name": "AndroidDvbDriver (MAIN)", "path": "." },
-    { "name": "TBS Official Linux (READ-ONLY)", "path": "../references/tbs-linux_media" },
-    { "name": "CXD28xx (READ-ONLY)", "path": "../references/cxd28xx" },
-    { "name": "Coax userspace (READ-ONLY)", "path": "../references/coax" },
-    { "name": "CoreELEC Linux Amlogic (READ-ONLY)", "path": "../references/coreelec-linux-amlogic" }
+    {
+      "name": "AndroidDvbDriver (MAIN)",
+      "path": "."
+    },
+    {
+      "name": "TBS Official Linux (READ-ONLY)",
+      "path": "../references/tbs-linux_media"
+    },
+    {
+      "name": "CXD28xx (READ-ONLY)",
+      "path": "../references/cxd28xx"
+    },
+    {
+      "name": "Coax userspace (READ-ONLY)",
+      "path": "../references/coax"
+    },
+    {
+      "name": "CoreELEC Linux Amlogic (READ-ONLY)",
+      "path": "../references/coreelec-linux-amlogic"
+    }
   ],
   "settings": {
-    "terminal.integrated.defaultProfile.windows": "PowerShell"
+    "terminal.integrated.defaultProfile.windows": "PowerShell",
+    "java.configuration.updateBuildConfiguration": "interactive"
   }
 }

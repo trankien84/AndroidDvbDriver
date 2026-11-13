@@ -39,7 +39,7 @@ final class Tbs5530NativeStreamBackend implements Tbs5530AndroidUsbFacade.Receiv
         output = new FileOutputStream(file);
         audit = new OutputStreamWriter(output, StandardCharsets.UTF_8);
         try {
-            File raw = limits.b4Capture ? new File(directory, "phase31-native-stream-" + runId + ".ts") : null;
+            File raw = limits.b4Capture || limits.b5Capture ? new File(directory, "phase31-native-stream-" + runId + ".ts") : null;
             receiver = new NativeUsbfsStream(connection.getFileDescriptor(), limits.queueDepth, limits.readChunkBytes,
                     limits.maxBytes, limits.durationMillis, runId, consent::requireCurrent, audit, raw);
         } catch (IOException | RuntimeException | Error error) {
@@ -58,6 +58,7 @@ final class Tbs5530NativeStreamBackend implements Tbs5530AndroidUsbFacade.Receiv
     }
     @Override public int errno() { return (int) receiver.snapshot()[7]; }
     long[] snapshot() { return receiver.snapshot(); }
+    long lastCompletionNanos() { return receiver.lastCompletionNanos(); }
     boolean quarantined() { return receiver.isQuarantined(); }
     @Override public void close() throws IOException {
         if (closed) {

@@ -18,11 +18,21 @@ final class Tbs5530AutonomousCapture implements Tbs5530TsSmoke.ChunkObserver, Au
     Tbs5530AutonomousCapture(File directory, int maximumBytes, boolean nativeStream) throws IOException {
         this(directory, maximumBytes, nativeStream, false);
     }
+    Tbs5530AutonomousCapture(File directory, Tbs5530B5Runner.Phase phase) throws IOException {
+        this(directory, 256 * 1024 * 1024, true, true, phaseFile(phase));
+    }
+    private static String phaseFile(Tbs5530B5Runner.Phase phase) throws IOException {
+        if (phase == null || !phase.on) throw new IOException("B5 raw requires an ON phase");
+        return "received-" + phase + ".ts";
+    }
     Tbs5530AutonomousCapture(File directory, int maximumBytes, boolean nativeStream, boolean b4Capture) throws IOException {
+        this(directory, maximumBytes, nativeStream, b4Capture, "received.ts");
+    }
+    private Tbs5530AutonomousCapture(File directory, int maximumBytes, boolean nativeStream, boolean b4Capture, String name) throws IOException {
         if (b4Capture ? !nativeStream || maximumBytes != 256 * 1024 * 1024
                 : nativeStream ? maximumBytes < 65536 || maximumBytes > 16 * 1024 * 1024 : maximumBytes != 65536)
             throw new IOException("Raw capture limits not allowlisted");
-        File file = new File(directory, "received.ts");
+        File file = new File(directory, name);
         if (!file.createNewFile()) throw new IOException("Raw capture already exists; no overwrite");
         output = new FileOutputStream(file); limit = maximumBytes;
     }

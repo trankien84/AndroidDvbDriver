@@ -85,28 +85,28 @@ public class Tbs5530SignalMonitorTest {
     }
 
     @Test public void tickDoesNotCatchUpOrStopBeforeStrictlyMoreThanTwoSeconds() {
-        Io io = new Io(); io.status = 0x06; Clock clock = new Clock();
+        Io io = new Io(); io.status = 0x05; Clock clock = new Clock();
         Tbs5530SignalMonitor m = new Tbs5530SignalMonitor(io, clock);
         assertFalse(m.sampleIfDue().stopForLockLoss); assertNull(m.sampleIfDue());
         for (int n = 1; n <= 8; n++) { clock.tick(); assertFalse(m.sampleIfDue().stopForLockLoss); }
         clock.tick(); Tbs5530SignalMonitor.Sample s = m.sampleIfDue();
         assertTrue(s.stopForLockLoss); assertEquals(2_250_000_000L, s.confirmedLockLossNanos);
         io.status = 0x26; clock.tick(); assertFalse(m.sample().stopForLockLoss);
-        io.status = 0x06; clock.now += 3_000_000_000L;
+        io.status = 0x05; clock.now += 3_000_000_000L;
         assertFalse(m.sampleIfDue().stopForLockLoss); assertNull(m.sampleIfDue());
     }
 
     @Test public void unknownReadOrReservedStatusBreaksContinuousLossAndNextTickRecovers() {
-        Io io = new Io(); io.status = 0x06; Clock c = new Clock(); Tbs5530SignalMonitor m = new Tbs5530SignalMonitor(io, c);
+        Io io = new Io(); io.status = 0x05; Clock c = new Clock(); Tbs5530SignalMonitor m = new Tbs5530SignalMonitor(io, c);
         m.sample(); for (int i = 0; i < 7; i++) { c.tick(); m.sample(); }
         io.failStatus = true; c.tick(); assertFalse(m.sample().stopForLockLoss);
         io.failStatus = false; c.tick(); assertEquals(0, m.sample().confirmedLockLossNanos);
         io.status = 7; c.tick(); assertEquals(Tbs5530SignalMetrics.Lock.UNKNOWN, m.sample().metrics.lock);
-        io.status = 0x06; c.tick(); assertEquals(0, m.sample().confirmedLockLossNanos);
+        io.status = 0x05; c.tick(); assertEquals(0, m.sample().confirmedLockLossNanos);
     }
 
     @Test public void uncertainCleanupAndLongSamplingGapNeverConfirmLoss() {
-        Io io = new Io(); io.status = 0x06; Clock c = new Clock(); Tbs5530SignalMonitor m = new Tbs5530SignalMonitor(io, c);
+        Io io = new Io(); io.status = 0x05; Clock c = new Clock(); Tbs5530SignalMonitor m = new Tbs5530SignalMonitor(io, c);
         m.sample(); c.now += 2_500_000_000L; assertFalse(m.sample().stopForLockLoss);
         io.failUnfreeze = true; c.tick(); Tbs5530SignalMonitor.Sample s = m.sample();
         assertFalse(s.cleanupSucceeded); assertFalse(s.stopForLockLoss);
@@ -161,11 +161,25 @@ public class Tbs5530SignalMonitorTest {
                 return result;
             }
         };
-        io.status = 0x06; Tbs5530SignalMonitor m = new Tbs5530SignalMonitor(io, c);
+        io.status = 0x05; Tbs5530SignalMonitor m = new Tbs5530SignalMonitor(io, c);
         m.sample(); for (int i = 0; i < 7; i++) { c.tick(); m.sample(); }
         c.tick(); assertFalse(m.sample().stopForLockLoss);
         c.tick(); assertEquals(0, m.sample().confirmedLockLossNanos);
         c.now = -1_000_000_000L; assertFalse(m.sample().stopForLockLoss);
+    }
+
+    @Test public void b5AddsPlpAndInterleavingWithoutChangingLegacyInventory() {
+        Io io = new Io();
+        Tbs5530SignalMonitor.Sample sample = new Tbs5530SignalMonitor(io, new Clock(), false, true).sample();
+        assertEquals(10, sample.rawReads.size());
+        assertTrue(io.reads.contains("22:54:1")); assertTrue(io.reads.contains("22:62:1"));
+    }
+    @Test public void tsBitFlappingDoesNotStopDemodLockedMonitor() {
+        Io io = new Io(); Clock c = new Clock(); Tbs5530SignalMonitor monitor = new Tbs5530SignalMonitor(io, c);
+        for (int i = 0; i < 30; i++) {
+            io.status = i % 2 == 0 ? 0x26 : 0x06;
+            assertFalse(monitor.sample().stopForLockLoss); c.tick();
+        }
     }
 
     @Test public void tunerRssiIsRefusedBeforeAnyIo() {

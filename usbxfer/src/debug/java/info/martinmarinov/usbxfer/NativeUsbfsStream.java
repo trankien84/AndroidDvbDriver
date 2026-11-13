@@ -28,6 +28,7 @@ public final class NativeUsbfsStream implements AutoCloseable {
         long[] metrics();
         long[] events(int offset) throws IOException;
         boolean destroy();
+        default long lastCompletionNanos() { return 0; }
         default void writerAttach() throws IOException { throw new IOException("File writer unsupported"); }
         default int writerRead(byte[] bytes) throws IOException { throw new IOException("File writer unsupported"); }
         default void writerFinish() { }
@@ -316,6 +317,8 @@ public final class NativeUsbfsStream implements AutoCloseable {
     }
     private static final class Bindings implements Port {
         static { System.loadLibrary("Tbs5530UsbfsDiagnostic"); }
+        static void load() { }
+        public long lastCompletionNanos() { return lastCompletion(handle); }
         private final long handle;
         Bindings(int fd, int depth, int chunk, int bytes, int duration, boolean file) throws IOException {
             handle = file ? createFile(fd, depth, chunk, bytes, duration) : create(fd, depth, chunk, bytes, duration);
@@ -335,6 +338,17 @@ public final class NativeUsbfsStream implements AutoCloseable {
         public long[] writerMetrics() throws IOException { return NativeUsbfsStream.writerMetrics(handle); }
         public long[] mappings(int offset) throws IOException { return mappingBatch(handle, offset); }
     }
+    public static boolean completionStalled(long now, long started, long lastCompletion) {
+        long baseline = lastCompletion == 0 ? started : lastCompletion;
+        return started >= 0 && baseline >= started && now >= baseline && now - baseline > 2_000_000_000L;
+    }
+    /** Same native CLOCK_MONOTONIC source as the USB completion audit. */
+    public static long monotonicNanos() { Bindings.load(); return clockNanos(); }
+    public long lastCompletionNanos() {
+        synchronized (lifecycle) { return closed ? 0 : port.lastCompletionNanos(); }
+    }
+    private static native long clockNanos();
+    private static native long lastCompletion(long handle);
     private static native long create(int fd, int depth, int chunk, int bytes, int duration);
     private static native long createFile(int fd, int depth, int chunk, int bytes, int duration);
     private static native void writerAttach(long handle) throws IOException;

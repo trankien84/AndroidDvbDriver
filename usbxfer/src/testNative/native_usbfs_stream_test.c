@@ -215,6 +215,8 @@ static void test_default_jitter_and_fifo(void) {
     assert(f->stream.starvation_count == 0 && !f->stream.uncertain && !f->stream.outstanding);
     for (int i = 0; i < f->stream.delivered; ++i) assert(f->stream.data[i] == ts_byte(i));
     assert(f->stream.min_outstanding == 15);
+    assert(atomic_load(&f->stream.completion_nanos) > 0);
+    assert(atomic_load(&f->stream.completion_nanos) <= f->stream.begin + f->stream.elapsed);
     assert(f->stream.max_resubmit > 0 && f->stream.max_resubmit < 1000000);
     assert(f->stream.median_resubmit <= f->stream.max_resubmit);
     printf("continuous: bytes=%d drops=%lld starvation_risk=%lld min_software_outstanding=%d max_resubmit_ns=%lld median_ns=%lld elapsed_ns=%lld\n",
@@ -290,7 +292,9 @@ static void test_stops_deadline_and_drain(void) {
     assert(f->stream.elapsed >= 100000000 && f->stream.elapsed < 103000000); cleanup(f);
     f = fixture(16, 16384, 1024 * 1024, 25); f->idle = 1; run(f);
     assert(atomic_load(&f->stream.stop) == TBS_STREAM_DEADLINE);
-    assert(f->stream.elapsed >= 25000000 && f->stream.elapsed < 28000000); cleanup(f);
+    assert(f->stream.elapsed >= 25000000 && f->stream.elapsed < 28000000);
+    assert(f->stream.completed == 16); /* Cancellation completions must not count as ON progress. */
+    assert(atomic_load(&f->stream.completion_nanos) == 0); cleanup(f);
     f = fixture(16, 16384, 1024 * 1024, 25); f->idle = 1; f->stuck_drain = 1; run(f);
     assert(f->stream.uncertain && f->stream.outstanding == 16);
     assert(f->now - f->stream.elapsed >= 1000000000 && f->now - f->stream.elapsed < 1003000000);

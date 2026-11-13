@@ -79,6 +79,20 @@ public final class Tbs5530Fx2Reload {
                 + "|bootstrap=ORIGINAL_USB_DEVICE_CONNECTION_APP_BOUNDARIES132_DRAIN_SAME_EPOCH"
                 + "|drive=54,54|stream=8A:0A00:UNCHANGED|urb=8x4096|retry=0|maxReloadPerPhysicalEpoch=1";
     }
+    public static String b5Transcript(Tbs5530FrontendExperiment experiment, String model, int api) {
+        if (experiment == null || !experiment.isB5() || experiment.automatic()
+                || !("GM1900".equals(model) && api == 30 || "SM-X926B".equals(model) && api == 36))
+            throw new IllegalArgumentException("Exact B5 reload host and manual-first frontend required");
+        return "B5_RELOAD_AFTER_SET_CONFIG|firmware=" + Tbs5530FirmwareValidation.SHA256
+                + "|bytes=8192|TBS_SOURCE_DUAL_RESET|132|after=OS_PERMISSION,CLAIM|before=80,90,91,8A"
+                + "|planDelayMs=100|additionalWaitAfterFinalReleaseMs=1500|descriptor=" + DESCRIPTOR_SHA256
+                + "|speed=3|host=" + model + ":" + api + "|frontend=" + experiment.name()
+                + "|bootstrap=ORIGINAL_USB_DEVICE_CONNECTION_APP_BOUNDARIES132_DRAIN_SAME_EPOCH"
+                + "|drive=54,54|stream=8A:0A00:UNCHANGED|urb=16x16384|retry=0|maxReloadPerPhysicalEpoch=1";
+    }
+    public static String b5PlanSha256(Tbs5530FrontendExperiment experiment, String model, int api) {
+        return Tbs5530AutonomousPlans.hash(b5Transcript(experiment, model, api));
+    }
     public static String planSha256() { return Tbs5530AutonomousPlans.hash(transcript()); }
     public synchronized Snapshot snapshot() { return new Snapshot(this); }
     /** Broadcast latches even if enumeration later reuses the same Android path/id. */

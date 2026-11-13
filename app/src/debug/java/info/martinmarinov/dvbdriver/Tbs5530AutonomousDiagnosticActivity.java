@@ -19,6 +19,12 @@ import java.io.IOException;
 
 /** Debug-only bounded session. Launch intents publish a challenge, never consent. */
 public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
+    static final class ControlPlaneTestIdentity {
+        final String model; final int api, boot;
+        ControlPlaneTestIdentity(String model, int api, int boot) { this.model = model; this.api = api; this.boot = boot; }
+    }
+    // In-process instrumentation seam only; never read from an Intent or used by a live session.
+    static volatile ControlPlaneTestIdentity controlPlaneTestIdentity;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private Object reservation = new Object();
     private Tbs5530PermissionState permission = new Tbs5530PermissionState();
@@ -109,11 +115,17 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
         uploaded = false; stopped = false; busy = false; waitingGrant = true; reserved = false; cleanupFault = false;
         bytes = 0; packets = 0; errno = -1; result = "WAIT_HOST_SESSION_GRANT";
         session = null;
-        session = new Tbs5530AutonomousSession(this, intent.getStringExtra("read_api"),
-                intent.getBooleanExtra("control_mirror", false), intent.getBooleanExtra("explicit_set_interface_alt0", false),
-                token, intent.getBooleanExtra(Tbs5530AutonomousLaunch.CONTROL_ONLY, false),
-                intent.getBooleanExtra("sony_ts_output_readback",false), intent.getStringExtra("frontend_experiment"));
+        boolean controlOnly = intent.getBooleanExtra(Tbs5530AutonomousLaunch.CONTROL_ONLY, false);
+        ControlPlaneTestIdentity fixture = controlOnly ? controlPlaneTestIdentity : null;
+        session = fixture == null
+                ? new Tbs5530AutonomousSession(this, intent.getStringExtra("read_api"),
+                    intent.getBooleanExtra("control_mirror", false), intent.getBooleanExtra("explicit_set_interface_alt0", false),
+                    token, controlOnly, intent.getBooleanExtra("sony_ts_output_readback",false), intent.getStringExtra("frontend_experiment"))
+                : new Tbs5530AutonomousSession(this, intent.getStringExtra("read_api"), fixture.model, fixture.api, fixture.boot,
+                    intent.getBooleanExtra("control_mirror", false), intent.getBooleanExtra("explicit_set_interface_alt0", false),
+                    token, true, intent.getBooleanExtra("sony_ts_output_readback",false), intent.getStringExtra("frontend_experiment"));
         if (session.nativeStream) session.configureStream(intent.getIntExtra("b3_queue_depth", 16), intent.getIntExtra("b3_urb_bytes", 16384));
+        if (intent.getBooleanExtra("b5_enabled", false)) session.configureB5();
         if (intent.getBooleanExtra("b4_enabled", false)) session.configureB4(
                 intent.getIntExtra("b4_duration_ms", 30000), intent.getIntExtra("b4_max_bytes", 256 * 1024 * 1024),
                 intent.getBooleanExtra("b4_tuner_rssi", false));
@@ -449,7 +461,7 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
         handoff = new Tbs5530OperationalHandoff(getApplicationContext(), runtime, this::requirePhysical, session.readApi, session.id, session.reloadEnabled());
         if (session.controlMirror != null) handoff.controlMirror(session.controlMirror);
         if (session.reloadEnabled()) handoff.reloadNativeAudit(session.directory);
-        if (session.b4Capture) handoff.signalMonitorAudit(getFilesDir());
+        if (session.b4Capture || session.b5Capture) handoff.signalMonitorAudit(getFilesDir());
         handoff.start(device); result = "ACQUIRING_FRESH_OPERATIONAL_OWNER"; ui.postDelayed(this::awaitOwner, 25);
     }
     private void awaitOwner() {
@@ -506,10 +518,19 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
                 session.policy.transition(Tbs5530AutonomousPolicy.State.FRONTEND_INIT);
                 execute(probe, probe.planInitialize()); probe.readyForTune();
                 Tbs5530DvbT2TuneParameters tune = session.frontendExperiment.parameters();
-                execute(probe, session.frontendExperiment == Tbs5530FrontendExperiment.BASELINE_AUTO
+                execute(probe, session.frontendExperiment.automatic()
                         ? probe.planExperimentalAutoTune(tune) : probe.planTune(tune));
                 Tbs5530Frontend.Result lock = execute(probe, probe.planPollStatus(3));
-                if (lock.status == null || !lock.status.locked) throw new IOException(
+                if (session.b5Capture) {
+                    session.b5ManualDemodLock = lock.status == null ? null : lock.status.demodLocked;
+                    if (Boolean.FALSE.equals(session.b5ManualDemodLock)
+                            && session.frontendExperiment == Tbs5530FrontendExperiment.B5_K25_MANUAL_PLP0) {
+                        Tbs5530Frontend.Plan fallback = probe.planExperimentalAutoTune(Tbs5530FrontendExperiment.B5_K25_AUTO.parameters());
+                        approval = session.fallbackApproval(fallback); probe.execute(fallback);
+                        lock = execute(probe, probe.planPollStatus(3));
+                    }
+                }
+                if (lock.status == null || !(session.b5Capture ? lock.status.demodLocked : lock.status.locked)) throw new IOException(
                         session.frontendExperiment != Tbs5530FrontendExperiment.BASELINE_AUTO
                                 ? "PLP_MANUAL0_NO_LOCK" : "No confirmed lock");
                 session.policy.transition(Tbs5530AutonomousPolicy.State.LOCK_CONFIRMED);
@@ -517,6 +538,10 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
                     sonyReadback=probe.sonyOutputReadback(session.sonyAuthorization(),SystemClock::elapsedRealtimeNanos);
                     observeSony(Tbs5530SonyTsOutputReadback.Stage.AFTER_LOCK);
                     handoff.sonyReadbackHook(()->observeSony(Tbs5530SonyTsOutputReadback.Stage.BEFORE_FIRST_URB));
+                }
+                if (session.b5Capture) {
+                    runB5(); session.policy.transition(Tbs5530AutonomousPolicy.State.REPORT);
+                    stop("B5_FOUR_PHASES_COMPLETE"); return;
                 }
                 Tbs5530TsSmoke.Limits limits = session.b4Capture
                         ? Tbs5530TsSmoke.Limits.b4(session.streamDurationMillis, session.streamQueueDepth, session.tunerRssi)
@@ -573,6 +598,58 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
                 fail(error);
             }
         });
+    }
+    private void runB5() throws IOException {
+        final Tbs5530TsSmoke.Limits b5Limits = Tbs5530TsSmoke.Limits.b5("ON1");
+        approval = session.approval(null, b5Limits);
+        session.policy.transition(Tbs5530AutonomousPolicy.State.TS_CAPTURE);
+        session.b5Runner = new Tbs5530B5Runner();
+        final java.util.Map<String, java.util.List<Tbs5530SignalRssi.Result>> rssi = new java.util.LinkedHashMap<>();
+        try {
+            session.b5Runner.run(new Tbs5530B5Runner.Port() {
+                public long nanos() { return info.martinmarinov.usbxfer.NativeUsbfsStream.monotonicNanos(); }
+                public void require() throws IOException { requirePhysical(); current().requireCurrent(); handoff.requireB5Deadline(); }
+                public void pause(int millis) throws IOException {
+                    try { Thread.sleep(millis); }
+                    catch (InterruptedException error) { Thread.currentThread().interrupt(); throw new IOException(error); }
+                }
+                public void selectStream() throws IOException { handoff.beginB5(current(), b5Limits); }
+                public void rssi(Tbs5530B5Runner.Phase phase) throws IOException {
+                    result = "B5_" + phase;
+                    java.util.List<Tbs5530SignalRssi.Result> samples = rssi.get(phase.name());
+                    if (samples == null) { samples = new java.util.ArrayList<>(); rssi.put(phase.name(), samples); }
+                    samples.add(handoff.sampleB5Rssi(phase.name(), (int)(session.frontendExperiment.frequencyHz() / 1000)));
+                }
+                public Tbs5530B5Runner.Outcome receive(Tbs5530B5Runner.Phase phase) throws IOException {
+                    result = "B5_" + phase;
+                    info.martinmarinov.usbxfer.NativeUsbfsStream.Result stream = handoff.receiveB5(phase.name());
+                    session.b5Results.put(phase.name(), stream); preserveNativeReceiveSnapshot();
+                    String reason = handoff.b5WatchdogReason() == null ? stream.stopReason : handoff.b5WatchdogReason();
+                    try (Tbs5530AutonomousCapture raw = new Tbs5530AutonomousCapture(session.directory, phase)) {
+                        session.capture = raw; session.b5Captures.put(phase.name(), raw);
+                        byte[] chunk = new byte[65536];
+                        try (java.io.InputStream input = stream.openData()) {
+                            for (int n; (n = input.read(chunk)) != -1;) if (n > 0) raw.accept(chunk, n);
+                        }
+                        bytes += raw.bytes();
+                    }
+                    boolean clean = stream.firstStatus == 0 && stream.firstErrno == 0
+                            && stream.writerFailure == null && stream.dropBytes == 0;
+                    if (!clean && "DEADLINE".equals(reason)) reason = "USB_OR_WRITER_FAILURE";
+                    return new Tbs5530B5Runner.Outcome(stream.writtenBytes, stream.outstanding == 0,
+                            stream.quarantined, reason);
+                }
+                public void drain() throws IOException { handoff.drainB5(); }
+                public boolean monitorOff(Tbs5530B5Runner.Phase phase) throws IOException { return handoff.sampleB5OffMonitor(phase.name()); }
+                public int monitorDelayMillis() { return 80 + java.util.concurrent.ThreadLocalRandom.current().nextInt(41); }
+            });
+        } finally {
+            preserveNativeReceiveSnapshot();
+            session.signalSampleCount = handoff.signalSampleCount(); session.signalMonitorFailure = handoff.signalMonitorFailure();
+            handoff.writeB5OffMonitor();
+            for (java.util.Map.Entry<String, java.util.List<Tbs5530SignalRssi.Result>> entry : rssi.entrySet())
+                handoff.writeB5Rssi(entry.getKey(), entry.getValue());
+        }
     }
     private void observeSony(Tbs5530SonyTsOutputReadback.Stage stage) throws IOException {
         if(sonyReadback==null)throw new IOException("Sony snapshot observer unavailable");

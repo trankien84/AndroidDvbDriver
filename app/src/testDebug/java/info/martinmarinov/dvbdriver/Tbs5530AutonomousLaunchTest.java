@@ -7,6 +7,15 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class Tbs5530AutonomousLaunchTest {
+    @Test public void b5BudgetRequiresPinnedCardBoundedOrdinalAndFreshColdConfirmation() throws Exception {
+        String id = UUID.randomUUID().toString(), card = new String(new char[64]).replace('\0', 'a');
+        Tbs5530AutonomousLaunch.requireB5Budget(card, id, id, 6, 6, 5);
+        assertThrows(IOException.class, () -> Tbs5530AutonomousLaunch.requireB5Budget(card, id, id, 7, 6, 5));
+        assertThrows(IOException.class, () -> Tbs5530AutonomousLaunch.requireB5Budget(card, id, id, 1, 7, 5));
+        assertThrows(IOException.class, () -> Tbs5530AutonomousLaunch.requireB5Budget(card, id, id, 1, 6, 4));
+        assertThrows(IOException.class, () -> Tbs5530AutonomousLaunch.requireB5Budget("BAD", id, id, 1, 6, 5));
+        assertThrows(IOException.class, () -> Tbs5530AutonomousLaunch.requireB5Budget(card, "legacy", id, 1, 6, 5));
+    }
     @Test public void launchCorrelationIsNotPermissionToReplaceAnActiveWorkflow() throws Exception {
         Tbs5530AutonomousLaunch gate = new Tbs5530AutonomousLaunch(); String first = UUID.randomUUID().toString();
         gate.begin(first); assertTrue(gate.matches(first)); assertFalse(gate.cleaned());

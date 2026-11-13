@@ -57,7 +57,24 @@ final class Tbs5530ReloadAndroidManager implements Tbs5530AndroidUsbFacade.Manag
         if (!(owned.receive instanceof Tbs5530NativeStreamBackend)) throw new IOException("Foreign stream backend");
         return ((Tbs5530NativeStreamBackend)owned.receive).receive();
     }
-    Tbs5530ControlIo monitorControl(Thread monitorThread) throws IOException {
+    void drainStream() throws IOException {
+        if (owned == null) throw new IOException("No owned stream connection");
+        owned.worker();
+        if (owned.receive != null) {
+            if (!(owned.receive instanceof Tbs5530NativeStreamBackend)) throw new IOException("Foreign B5 receive backend");
+            Tbs5530NativeStreamBackend stream = (Tbs5530NativeStreamBackend) owned.receive;
+            long[] state = stream.snapshot();
+            if (state[3] != 0 || state[6] != 0 || stream.quarantined()) throw new IOException("B5_QUARANTINED");
+            stream.close();
+            owned.receive = null;
+        }
+    }
+    Tbs5530ControlIo offMonitorControl() throws IOException {
+        if (owned == null || owned.receive != null) throw new IOException("OFF monitor requires drained Bulk");
+        owned.worker(); return monitorControl(Thread.currentThread(), true);
+    }
+    Tbs5530ControlIo monitorControl(Thread monitorThread) throws IOException { return monitorControl(monitorThread, false); }
+    private Tbs5530ControlIo monitorControl(Thread monitorThread, boolean off) throws IOException {
         if (owned == null || !owned.claimed || owned.closed || monitorThread == null)
             throw new IOException("Claimed B4 monitor owner required");
         final Raw raw = owned;
@@ -70,17 +87,32 @@ final class Tbs5530ReloadAndroidManager implements Tbs5530AndroidUsbFacade.Manag
                     || (type == 0x40 && request == 0x90 && length == 3)
                     || (type == 0xc0 && request == 0x91 && length <= 50)))
                 throw new IOException("B4 monitor control scope changed");
-            if (request == 0x80 && (length != 4 || (bytes[offset] & 255) != 3 || (bytes[offset + 1] & 255) != 0xc8
+            boolean offTuner = off && b5OffTunerCommand(type, request, bytes, offset, length);
+            if (off && raw.receive != null) throw new IOException("OFF monitor cannot overlap Bulk");
+            if (request == 0x80 && !offTuner && (length != 4 || (bytes[offset] & 255) != 3 || (bytes[offset + 1] & 255) != 0xc8
                     || !((bytes[offset + 2] == 0 && ((bytes[offset + 3] & 255) == 0x20
                     || (bytes[offset + 3] & 255) == 0x22 || (bytes[offset + 3] & 255) == 0x24))
                     || (bytes[offset + 2] == 1 && (bytes[offset + 3] == 0 || bytes[offset + 3] == 1)))))
                 throw new IOException("Unreviewed B4 monitor write refused");
-            if (request == 0x90 && (bytes[offset + 1] & 255) != 0xc8)
+            if (request == 0x90 && !offTuner && (bytes[offset + 1] & 255) != 0xc8)
                 throw new IOException("Unreviewed B4 monitor address refused");
             int count = raw.connection.controlTransfer(type, request, value, index, bytes, offset, length, timeout);
             if (count != length) throw new IOException("Monitor short control transfer: " + count + "/" + length);
             return count;
         };
+    }
+    static boolean b5OffTunerCommand(int type, int request, byte[] bytes, int offset, int length) {
+        if (bytes == null || offset < 0 || length < 3 || offset > bytes.length - length || type != 0x40) return false;
+        int address = bytes[offset + 1] & 255, register = bytes[offset + 2] & 255;
+        if (request == 0x90) return length == 3 && bytes[offset] == 1 && address == 0xc0 && (register == 0x5b || register == 0x69);
+        if (request != 0x80 || (bytes[offset] & 255) != length - 1) return false;
+        if (address == 0xcc && length == 4)
+            return register == 0 && bytes[offset + 3] == 0 || register == 8 && (bytes[offset + 3] == 0 || bytes[offset + 3] == 1);
+        if (address != 0xc0) return false;
+        if (length == 5) return register == 0x87 && (bytes[offset + 3] & 255) == 0xc4 && bytes[offset + 4] == 0x41
+                || register == 0x59 && (bytes[offset + 3] == 5 || bytes[offset + 3] == 3) && bytes[offset + 4] == 1;
+        return length == 4 && (register == 0x59 && bytes[offset + 3] == 4
+                || register == 0x88 && bytes[offset + 3] == 0 || register == 0x87 && (bytes[offset + 3] & 255) == 0xc0);
     }
     private final class Raw implements Tbs5530AndroidUsbFacade.RawConnection {
         final UsbDevice device;

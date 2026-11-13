@@ -87,7 +87,7 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
             Tbs5530AndroidUsbFacade.ReceiveBackendFactory factory = (connection, intf, endpoint) -> {
                         if (api == Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_STREAM) {
                             Tbs5530NativeStreamBackend backend = new Tbs5530NativeStreamBackend(connection, intf, endpoint,
-                                    context.getFilesDir(), configuration.runId, configuration.limits, () -> {
+                                    context.getFilesDir(), configuration.runId + (configuration.limits != null && configuration.limits.b5Capture ? "-" + configuration.limits.b5Phase : ""), configuration.limits, () -> {
                                         consent.requireCurrent();
                                         if (configuration.pollGuard == null) throw new IOException("Stream watchdog unavailable");
                                         configuration.pollGuard.requireCurrent();
@@ -380,6 +380,139 @@ public final class Tbs5530OperationalHandoff implements AutoCloseable {
         });
         return smoke;
     }
+    private final java.util.Map<String, Tbs5530SignalMonitor> b5OffMonitors = new java.util.LinkedHashMap<>();
+    private final java.util.Map<String, java.util.List<Tbs5530SignalMonitor.Sample>> b5OffSamples = new java.util.LinkedHashMap<>();
+    public boolean sampleB5OffMonitor(String phase) throws IOException {
+        consent.requireCurrent(); session.requireUsable(generation());
+        if (!b5Selected || !("OFF1".equals(phase) && b5Phase == null || "OFF2".equals(phase) && "ON1".equals(b5Phase)))
+            throw new IOException("Demod OFF monitor requires an idle B5 phase");
+        drainB5();
+        Tbs5530SignalMonitor monitor = b5OffMonitors.get(phase);
+        if (monitor == null) {
+            monitor = new Tbs5530SignalMonitor(b5OffControl(), info.martinmarinov.usbxfer.NativeUsbfsStream::monotonicNanos, false, true);
+            b5OffMonitors.put(phase, monitor); b5OffSamples.put(phase, new java.util.ArrayList<>());
+        }
+        java.util.List<Tbs5530SignalMonitor.Sample> samples = b5OffSamples.get(phase);
+        if (samples.size() >= 256) throw new IOException("B5_OFF_MONITOR_CAPACITY");
+        final Tbs5530SignalMonitor current = monitor;
+        final Tbs5530SignalMonitor.Sample[] sample = new Tbs5530SignalMonitor.Sample[1];
+        session.transaction(generation(), () -> sample[0] = current.sample());
+        samples.add(sample[0]); return sample[0].stopForLockLoss;
+    }
+    public void writeB5OffMonitor() throws IOException {
+        for (java.util.Map.Entry<String, java.util.List<Tbs5530SignalMonitor.Sample>> entry : b5OffSamples.entrySet())
+            Tbs5530SignalAudit.write(signalDirectory, nativeConfiguration.runId + "-" + entry.getKey(), entry.getValue(), null, entry.getKey());
+    }
+    private boolean b5Selected;
+    private String b5Phase, b5WatchdogReason;
+    private long b5OnStarted, b5SessionStarted;
+    public void requireB5Deadline() throws IOException {
+        if (b5SessionStarted == 0) return;
+        long elapsed = info.martinmarinov.usbxfer.NativeUsbfsStream.monotonicNanos() - b5SessionStarted;
+        if (elapsed < 0 || elapsed >= 65_000_000_000L) throw new IOException("B5_PROGRAM_DEADLINE");
+    }
+    public String b5WatchdogReason() { return b5WatchdogReason; }
+    public void beginB5(Tbs5530TsSmoke.Permission permission, Tbs5530TsSmoke.Limits limits) throws IOException {
+        consent.requireCurrent(); session.requireUsable(generation()); requireReloadComplete();
+        if (b5Selected || nativeConfiguration == null || nativeConfiguration.reloadManager == null
+                || readApi != Tbs5530TsSmoke.ReadApi.NATIVE_USBFS_STREAM || !session.isFrontendLocked())
+            throw new IOException("B5 requires a fresh locked reload owner");
+        if (!limits.b5Capture || !"ON1".equals(limits.b5Phase)) throw new IOException("Exact B5 ON1 scope required");
+        permission.requireCurrent(generation()); permission.consume(limits, generation());
+        b5SessionStarted = info.martinmarinov.usbxfer.NativeUsbfsStream.monotonicNanos();
+        if (b5SessionStarted <= 0) throw new IOException("B5_CLOCK_UNAVAILABLE");
+        permission.audit("B5_STREAM_SELECT_INTENT", 0, 2);
+        new Tbs5530Bridge(controlIo(), session, generation()).selectTerrestrialStream();
+        session.streamingStarted(generation());
+        permission.audit("B5_STREAM_SELECT_COMPLETE", 0, 2);
+        b5Selected = true;
+        nativeConfiguration.pollGuard = () -> {
+            consent.requireCurrent(); session.requireUsable(generation()); permission.requireCurrent(generation()); requireB5Deadline();
+            if (!operationalOwner() || !session.isStreaming()) throw new IOException("B5_OWNER_REVOKED");
+            if (signalLockLost()) { b5WatchdogReason = "DEMOD_UNLOCK_OVER_2_SECONDS"; throw new IOException(b5WatchdogReason); }
+            Tbs5530NativeStreamBackend backend = nativeConfiguration.streamBackend;
+            long completion = backend == null ? 0 : backend.lastCompletionNanos();
+            long now = info.martinmarinov.usbxfer.NativeUsbfsStream.monotonicNanos();
+            if (now < b5OnStarted || completion < 0 || completion > now) throw new IOException("B5_NATIVE_CLOCK_INVALID");
+            if (info.martinmarinov.usbxfer.NativeUsbfsStream.completionStalled(now, b5OnStarted, completion)) {
+                b5WatchdogReason = "BULK_STALL_OVER_2_SECONDS"; throw new IOException(b5WatchdogReason);
+            }
+        };
+    }
+    public void drainB5() throws IOException {
+        if (nativeConfiguration == null || nativeConfiguration.reloadManager == null) throw new IOException("B5 owner unavailable");
+        nativeConfiguration.reloadManager.drainStream();
+    }
+    public info.martinmarinov.usbxfer.NativeUsbfsStream.Result receiveB5(String phase) throws IOException {
+        consent.requireCurrent(); session.requireUsable(generation());
+        if (!b5Selected || !("ON1".equals(phase) && b5Phase == null || "ON2".equals(phase) && "ON1".equals(b5Phase)))
+            throw new IOException("B5 phases cannot be reordered or retried");
+        drainB5(); b5Phase = phase; b5WatchdogReason = null;
+        nativeConfiguration.limits = Tbs5530TsSmoke.Limits.b5(phase);
+        nativeConfiguration.streamBackend = null;
+        b5OnStarted = info.martinmarinov.usbxfer.NativeUsbfsStream.monotonicNanos();
+        final info.martinmarinov.usbxfer.NativeUsbfsStream.Result[] result = new info.martinmarinov.usbxfer.NativeUsbfsStream.Result[1];
+        session.receiveTransaction(generation(), () -> {
+            try {
+            signalSampler = new Tbs5530SignalSampler((thread, stopping) -> {
+                Tbs5530ControlIo raw = nativeConfiguration.reloadManager.monitorControl(thread);
+                Tbs5530SignalMonitor monitor = new Tbs5530SignalMonitor((type, request, value, index, bytes, offset, length, timeout) -> {
+                    consent.requireCurrent(); session.requireUsable(generation());
+                    return raw.controlTransfer(type, request, value, index, bytes, offset, length, timeout);
+                }, info.martinmarinov.usbxfer.NativeUsbfsStream::monotonicNanos, false, true);
+                return () -> {
+                    final Tbs5530SignalMonitor.Sample[] sample = new Tbs5530SignalMonitor.Sample[1];
+                    session.transaction(generation(), () -> sample[0] = monitor.sample()); return sample[0];
+                };
+            }, true);
+            try { signalSampler.start(); result[0] = nativeConfiguration.reloadManager.receiveStream(); }
+            finally { signalSampler.close(); }
+            } catch (IOException error) { throw new Tbs5530ControlIo.TransferException(Tbs5530ControlIo.FailureKind.IO_FAILURE, "B5 receive failed", error); }
+        });
+        if (signalDirectory == null) throw new IOException("B5 signal audit destination required");
+        Tbs5530SignalAudit.write(signalDirectory, nativeConfiguration.runId + "-" + phase,
+                signalSampler.samples(), signalSampler.failure(), phase);
+        return result[0];
+    }
+    public Tbs5530SignalRssi.Result sampleB5Rssi(String phase, int frequencyKhz) throws IOException {
+        consent.requireCurrent(); session.requireUsable(generation());
+        if (!b5Selected || !("OFF1".equals(phase) && b5Phase == null || "OFF2".equals(phase) && "ON1".equals(b5Phase)))
+            throw new IOException("RSSI requires an idle B5 OFF phase");
+        drainB5();
+        final Tbs5530SignalRssi.Result[] result = new Tbs5530SignalRssi.Result[1];
+        session.transaction(generation(), () -> {
+            try {
+                Tbs5530ControlIo io = b5OffControl();
+                try {
+                    b5Repeater(io, true);
+                    result[0] = Tbs5530SignalRssi.sample(Tbs5530SignalRssi.Phase.OFF,
+                            io, info.martinmarinov.usbxfer.NativeUsbfsStream::monotonicNanos, frequencyKhz);
+                } finally { b5Repeater(io, false); }
+            }
+            catch (IOException error) { throw new Tbs5530ControlIo.TransferException(Tbs5530ControlIo.FailureKind.IO_FAILURE, "B5 RSSI sample failed", error); }
+        });
+        return result[0];
+    }
+    private Tbs5530ControlIo b5OffControl() throws IOException {
+        Tbs5530ControlIo raw = nativeConfiguration.reloadManager.offMonitorControl();
+        return (type, request, value, index, bytes, offset, length, timeout) -> {
+            consent.requireCurrent(); session.requireUsable(generation()); requireReloadComplete(); requireB5Deadline();
+            int result = raw.controlTransfer(type, request, value, index, bytes, offset, length, timeout);
+            consent.requireCurrent(); session.requireUsable(generation()); return result;
+        };
+    }
+    private static void b5Repeater(Tbs5530ControlIo io, boolean enabled) throws IOException {
+        // Same SLV-X bank0/08 sequence and 20 ms delay as cxd2878_i2c_repeater.
+        for (byte[] payload : new byte[][]{{3, (byte)0xcc, 0, 0}, {3, (byte)0xcc, 8, (byte)(enabled ? 1 : 0)}})
+            if (io.controlTransfer(0x40, 0x80, 0, 0, payload, 0, payload.length, 2000) != payload.length)
+                throw new IOException("B5_REPEATER_SHORT_TRANSFER");
+        try { Thread.sleep(20); }
+        catch (InterruptedException error) { Thread.currentThread().interrupt(); throw new IOException(error); }
+    }
+    public void writeB5Rssi(String phase, java.util.List<Tbs5530SignalRssi.Result> samples) throws IOException {
+        Tbs5530SignalAudit.writeRssi(signalDirectory, nativeConfiguration.runId, phase, samples);
+    }
+
     void programCompleted(Tbs5530Frontend.Plan plan) {
         if (nativeConfiguration == null) return;
         if (plan.operation == Tbs5530Frontend.Operation.INITIALIZE || plan.operation == Tbs5530Frontend.Operation.TUNE) {

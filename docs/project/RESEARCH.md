@@ -1,5 +1,124 @@
 # Research log (append-only)
 
+## 2026-11-13, OnePlus K25 B5 thực — ON làm SNR/BER xấu hơn nhưng chưa đạt ngưỡng lặp để kết luận USB EMI
+
+**RUNTIME-OBSERVED:** Ordinal 4 theo card `0aad1b96…f217c5` được người dùng duyệt riêng, OnePlus GM1900/API 30/boot 408, OTG trực tiếp/không nguồn phụ, K25 506 MHz/8 MHz/MANUAL PLP0, bố trí khoảng 33 cm. Bootstrap 132/132/image 8192 byte/payload 8196 byte đầy đủ; reload sau SET_CONFIGURATION 132/132 COMPLETE, detach_ns=-1. Đủ bốn pha, ON1 34340864 byte và ON2 11141120 byte, first status/errno 0, data errors 0, writer drop 0/failure null, outstanding 0/quarantine false và DRAIN_CONFIRMED. Đây là lần đầu OnePlus được kiểm thật với reload; không có `-75`/`-71` trong lượt này.
+
+### Số đo theo pha
+
+Giá trị là min/trung vị/max; SNR dùng raw hợp lệ và không lọc TS bit. L1 ổn định 64-QAM/5/6/64K, PLP ID đọc được 0; tổng số PLP trên kênh UNKNOWN. Có 584 monitor samples hợp lệ, tất cả demod LOCKED, cleanup lỗi 0; ba RSSI mỗi OFF hợp lệ. Các record kết thúc/summary không được đếm thành lock loss.
+
+| Pha / thời lượng | SNR, dB | Pre-BCH BER | RSSI, dBm | TS lock bật / tắt |
+| --- | --- | --- | --- | --- |
+| OFF1 / 10 giây | 24,695 / 25,475 / 26,127 | 0 / 0 / 0 | −64,85 / −64,85 / −64,85 | 93 / 0 |
+| ON1 / 30 giây | 16,132 / 18,460 / 25,035 | 0 / 1,09086e-4 / 1,93721e-4 | Không đo | 76 / 227 |
+| OFF2 / 10 giây | 21,653 / 22,087 / 22,664 | 0 / 0 / 0 | −64,85 / −64,85 / −64,85 | 88 / 0 |
+| ON2 / 10 giây | 17,873 / 20,332 / 22,400 | 0 / 4,98409e-5 / 1,08796e-4 | Không đo | 26 / 74 |
+
+OFF1−ON1 trung vị 7,015 dB, OFF2−ON2 chỉ 1,755 dB. OFF2 hồi phục nhưng không trở về mức OFF1 trong cửa sổ 10 giây. Ngưỡng ≥6 dB không lặp ở cặp hai, nên chỉ ghi association, không xác nhận H-USB-EMI. H-ESTIMATOR/H-TBS-RF và tác động luồng/ước lượng/chờ FIFO vẫn chưa được loại bằng một lượt. RSSI OFF không đổi không chứng minh SNR phải không đổi.
+
+Pearson SNR với thời gian từ completion dữ liệu gần nhất: ON1 r=0,364 với 302 pairs, OFF2 r=0,427 với 88 pairs, ON2 r=0,246 với 100 pairs; OFF1 trước data đầu nên UNKNOWN. Native audit, monitor và phase boundaries cùng CLOCK_MONOTONIC. Reload/handoff dùng elapsed time được giữ riêng, không trừ trực tiếp clock reload với native để suy gap. SVG/CSV đánh dấu burst/gap và toàn bộ điểm đo ở `android4-k25/` ngoài Git.
+
+### Chất lượng TS và giới hạn kết luận
+
+| Phần mẫu | Bytes / CC / TEI toàn mẫu | Sau first-data +5 giây | PSI/SI / PCR |
+| --- | --- | --- | --- |
+| ON1 | 34340864 / 2698 / 198 | 5467,85 CC/phút, 31,20 TEI/phút trong 24,997010 giây | Có PAT/PMT đủ 13 dịch vụ, SDT 3 sections hợp lệ, VTV1 HD và dịch vụ VTV; PCR estimate sau 5 giây khoảng 13,28 Mbps, chưa đủ từng dịch vụ/stability. |
+| ON2 | 11141120 / 870 / 0 | 5233,57 CC/phút, TEI 0 trong 4,998497 giây | PAT 13/PMT 9 sau 5 giây, chưa SDT; PCR estimate khoảng 14,08 Mbps, stability UNKNOWN. |
+
+**TS_SMOKE_PASS=false** vì CC/TEI đã vi phạm điều kiện zero-error. Analyzer vẫn ghi INSUFFICIENT_EVIDENCE do thiếu PCR/SDT ở một số cửa sổ; đó là trục độ đầy đủ bằng chứng, không đảo lỗi chất lượng thành thành công chưa xác định. Không mở Phase 4 hoặc ROOT_CAUSE_CONFIRMED.
+
+ON1 sau STALE_PREFIX 2048 có một đoạn sync/0 break, căn đầu thêm 106 byte; ON2 có một break gần prefix 2048 sau OFF2. Không tự bỏ seam ON2 hoặc sửa raw để chứng nhận. FULL/PARTIAL UNKNOWN vì chưa baseline kích thước K25 độc lập; các vị trí MISSING theo cadence thuật toán chỉ là suy luận, không đo trực tiếp frame RF. Không dùng baseline K36 hoặc phần trăm frame giả để so parity.
+
+TSDuck raw auto-detection không nhận dạng hai input có prefix; stdout có thể exit 0 nhưng báo không đủ PCR. Dẫn xuất ON1 chỉ căn đoạn sync đầu, không bỏ lỗi giữa luồng, cho nominal khoảng 35,51 Mbps nhưng vẫn cảnh báo insufficient PCR; không dùng làm raw PASS hoặc thay PCR stable. BDA Windows có bitrate 35,58 Mbps nhưng không thay được missing packets/clock Android.
+
+### Permission, handoff và export
+
+B5 cuối đã xử lý Open app trước helper, kiểm permission OS thật rồi mới grant. Handoff events OnePlus có initial FX2 descriptor → detach → bootstrap drained/UI reset → một ATTACH_BROADCAST → PERMISSION_REQUEST/callback → ON_NEW_INTENT → descriptor admission seal/owner start. Cùng loại một broadcast/một intent đã thấy trên Samsung B4; khác biệt trước grant là Open app trên OnePlus làm permission-only bị hủy nếu mở preflight trước chooser. Không lấy source onStop thay trace runtime của lượt hủy.
+
+Helper live `5bdc3334…159bd2b` timeout ADB 10000 ms tại B5_EXPORT_AFTER_DRAIN, partial ON1 25099776 byte, receipt HOST_ABORTED_NO_RETRY/drained=true/closed=true. User rút tuner sau typed drain. Đã xuất lại 40 file/95374481 byte vào thư mục mới, mỗi file kiểm remote SHA/size trước–sau và host khớp; ON1 SHA `67601de440c1b04d2bec7264a27aa79d5ccdcf664a0e183359677ff5b215af7e`. Không xuất lại firmware hoặc chạy USB mới. Bản partial và mọi ledger/receipt giữ nguyên.
+
+Candidate export sau live `a3480759…ec24660` chỉ tăng deadline binary đã chứng minh drain/size theo 90–180 giây, không tăng timeout live/heartbeat/TTL hoặc nới hash guards; focused 23/regression 90 PASS, NOT USED ON HARDWARE. K36 Android và phép tách xa NOT RUN; người dùng không có phụ kiện khác. Bước tiếp đề xuất so nguồn/init/TS output và mô hình SNR/BER offline, rồi mới xin phép lặp hữu hạn nếu phân biệt được giả thuyết.
+
+## 2026-11-13, Windows K25 B5 — Có dịch vụ VTV/PCR nhưng vẫn CC/TEI; chưa có Android OFF/ON
+
+**RUNTIME-OBSERVED:** Sau card v2 được `OK B5`, cold/owner/UAC đã được người dùng xác nhận; USBPcap ARMED header 24 byte trước yêu cầu cắm. Windows BDA TBS 2.0.0.2/TSDuck 3.45-4798 nhận DVB-T2 tại 506 MHz/8 MHz. TS 159999844 byte/SHA `c3e2fc6566c0ae43e92c0d276dd6dd90f0e9c93f9d4e55c7fb5a1e5f1756901a`, pcap 163272178 byte/SHA `10d57a21738ae67bb19688a93d2991e6c7f96f5dee64851891aaae359d304dde`. Các process capture đã đóng; người dùng xác nhận rút tuner. Không Android install/launch/bootstrap/reload/receive mới.
+
+TSDuck natural exit 0 sau wall 39,721323 giây, helper yêu cầu wall ít nhất 40 giây nên receipt CAPTURE_INCOMPLETE/session_closed=true. TS đúng `851063*188 = 159999844`, phù hợp byte cap 160000000 đã làm tròn xuống packet; plugin until dừng khi một điều kiện đạt. Chưa có reason nội bộ để gọi byte cap là log thực, và không suy lỗi USB transport từ việc chưa đủ thời lượng. Sổ đóng được giữ nguyên; [ADR-059](DECISIONS.md) ghi thiết kế tiếp nối đã được người dùng chọn nhưng vẫn chờ guard/card mới.
+
+### Chất lượng và số đo K25
+
+| Chỉ số | Kết quả thật / tính lại offline | Giới hạn |
+| --- | --- | --- |
+| BDA packets / sync | 851063 / 0 sync break | Có TS không đồng nghĩa sạch. |
+| CC / TEI toàn BDA | 837 / 24036 | TSDuck xác nhận cùng số TEI; error-summary lines không phải packet count. |
+| Sau 5 giây từ first Bulk data | 709 CC / 20278 TEI trong 33,049332 giây | Tương ứng 1287,17 CC/phút và 36814,06 TEI/phút; dùng clock capture của chính host. |
+| PAT/PMT/SDT actual | 370/978/17 CRC-valid sections, 13 dịch vụ | Có VTV1 HD, VTV2 HD, VTV3 HD, VTV5 HD và các dịch vụ VTV khác. |
+| PCR | Analyzer 35,579739 Mbps; TSDuck 35,564977 Mbps | Có PCR chuẩn ước lượng, nhưng 158 PCR errors; chưa chứng nhận ổn định. |
+| SNR mọi raw hợp lệ | 120 mẫu: 19,6955/20,3467/21,5589 dB | Không có pha OFF Windows để so trước stream; không gọi đây là Android B5. |
+| Status | `26`×240, `06`×18, còn 19 mẫu vào lock | Demod lock 258 mẫu; bit TS tách riêng. |
+| L1 | `22:5B=05`, `5C=02`, `5E=01`, validity `12=01` | Mapping nguồn B5: 5/6, 64-QAM, 64K; khác K36 code rate 3/4. |
+| Pre-BCH BER tính lại | 120 valid counter, min/trung vị/max 0/0,00000282118/0,0000818142 | Period exponent 8, mẫu số `256*54000=13824000`; không phải BER sau sửa lỗi hoặc packet loss. |
+| RSSI tính lại | IFAGC `36`=54, RFAGC `07`, `69=88`, 506 MHz → −64,85 dBm | Bảy cặp AGC đúng thứ tự; dùng helper Java thuần, chưa phải công suất RF hiệu chuẩn. |
+| FULL/PARTIAL/MISSING | UNKNOWN / UNKNOWN / chưa chứng nhận | Không áp baseline kích thước/nhịp K36 cho K25. Nhiều nhóm completion gộp, chưa có baseline K25 độc lập nên không ép FULL%. |
+
+USB raw 160276480 byte, một đoạn sync, 0 break; BDA đã chọn cửa sổ ngắn hơn USB raw nhưng cùng CC/TEI tổng. Analyzer chọn input gốc, giữ prefix/SHA/offset; kết quả ở bundle B5 `windows-k25/`, TSDuck độc lập exit 0 cả ba lệnh JSON/error-analysis/bitrate. Parser monitor có descriptor target verified, pending 0/warnings 0. Nhãn semantics UNKNOWN lịch sử trong inventory không được sửa hồi tố; bảng này giải mã lại theo nguồn pin ở phần B5 bên dưới.
+
+**Chưa kết luận nguyên nhân chất lượng TS.** K25 có SNR cao hơn K36 B4 nhưng code rate khác và vẫn TEI/CC; chưa có phép bật/tắt Bulk trên OnePlus nên chưa phân biệt H-USB-EMI/H-ESTIMATOR/H-TBS-RF. Không ROOT_CAUSE_CONFIRMED, TS_SMOKE_PASS hoặc Phase 4. Phần Android vẫn NOT RUN; không tự mở receipt đã đóng.
+
+## 2026-11-13, B5 offline — Đính chính lock B4; kiểm lại SNR, RSSI và L1 trước phép thử bật/tắt Bulk
+
+**OFFLINE-TESTED / RUNTIME-OBSERVED từ dữ liệu cũ:** Đã đọc lại pcap B4 `f47edbf0ca1c39e09edd4fe04177457424e72cf9957d8e197ebbcd364db474c6`, TS Windows `5196fbe2f501b7d1764ede807372940f4097aba490c171faf72701b52573b0a8` và export Android `readonly-full-export-b8b36864`. Không thu phần cứng mới. Báo cáo đầy đủ và JSON tính lại ở bundle B5 ngoài Git, mục `metrics/REPORT.md`; không sửa raw hoặc report B4 lịch sử.
+
+### Đính chính
+
+B4 đã thực thi đúng card cũ, nhưng tiêu chí dùng bit TS lock để kết luận mất khóa demod gây **false positive**: cả 10 mẫu Android đều có SYNC_STAT 6, unlockDetected 0; chín mẫu `06` nằm giữa các đợt Bulk. Native vẫn có completion dữ liệu trong cửa sổ hơn hai giây đó. Các mục lịch sử ghi “dừng đúng mất TS lock” mô tả quy tắc đã chạy, **không còn là bằng chứng demod unlock**. Snapshot vẫn không chứng minh RF khóa liên tục giữa các lần đọc. B5 đổi điều kiện dừng sang demod lock và completion timeout, không bỏ chốt an toàn để ép đủ thời lượng.
+
+SNR B4 bị ẩn khi TS bit bằng 0. Tính lại **mọi raw hợp lệ** bằng đường cong `10*log10(r/(12600-r))+32`, clamp 10876, không trừ 1,5 dB, cho kết quả dưới đây. Offset −1,5 dB cũ có trong hàm xuất CNR của official TBS, không phải lỗi chép số; B5 chủ ý dùng đường cong không offset theo yêu cầu và mainline. Không thay thầm tập SNR qualified sau năm giây trong report cũ bằng tập raw mới.
+
+| Tập mẫu | Số mẫu | SNR min / trung vị / max, dB |
+| --- | ---: | --- |
+| Windows, mọi raw | 91 | 14,009 / 15,706 / 19,735 |
+| Windows, trong burst FULL | 19 | 15,437 / 16,337 / 17,606 |
+| Windows, trong burst PARTIAL | 2 | 15,304 / 15,906 / 16,508 |
+| Windows, khoảng nghỉ | 70 | 14,009 / 15,542 / 19,735 |
+| Android, mọi raw | 10 | 15,721 / 17,510 / 30,109 |
+| Android, chín mẫu giữa burst | 9 | 15,721 / 16,868 / 22,275 |
+
+Mẫu Android trước completion dữ liệu đầu có raw `13 56` = 4950, cho 30,109 dB. Chín mẫu còn lại đều được đọc trong khoảng nghỉ theo timestamp sample so với completion; không có mẫu Android nằm trọn trong burst để tự tách hiệu ứng ON/OFF. Mức 15,7–21 dB trong đề bài là xấp xỉ, chưa bao hết số thực tính lại. B5 cần OFF đủ dài, ON rồi OFF2/ON2 để phân biệt nhiễu Bulk với bộ ước lượng chưa ổn định.
+
+| Vị trí status Windows | `26` | `06` |
+| --- | ---: | ---: |
+| Trong nhóm completion FULL | 95 | 18 |
+| Trong nhóm completion PARTIAL | 15 | 5 |
+| Giữa các burst | 9 | 107 |
+| Ngoài cửa sổ dữ liệu | 2 | 0 |
+
+Bảng trên phân loại cả khoảng submit→complete của lần đọc và giữ riêng trường hợp vượt mép, không dùng nhãn “trong lúc có dữ liệu” chưa định nghĩa. Vì thế không ép số theo bảng nhận xét ban đầu. Tổng 270 status Windows gồm 251 demod LOCKED, 19 trạng thái vào lock; bit TS vẫn có thể bằng 0 ngay trong nhóm FULL. Các khoảng nghỉ không tự chứng minh mất RF hoặc lỗi USB.
+
+### RSSI và trạng thái tuner trước đo
+
+Pcap có bảy chuỗi RSSI đầy đủ: `87=C4 41 → 59=05 01 → read5B=3C → 59=03 01 → read5B=07 → 59=04 → 88=00 → 87=C0 → read69=88`. TShark đối chứng frame 2381/2409 xác nhận byte cleanup `00`. Công thức `ascot3_read_rssi()` tại 594 MHz cho **−63,52 dBm**; đây là ước lượng từ gain tuner, không phải máy đo RF đã hiệu chuẩn hoặc phần trăm chất lượng của đầu thu.
+
+**Đính chính đề bài B5 và quyết định người dùng:** `88=04` là cleanup trong nguồn Linux, không phải byte Windows B4. Người dùng đã chọn B5 dùng **`88=00`, `87=C0` đúng Windows**, chỉ đo ở OFF. Đã kiểm golden Android được xuất từ kế hoạch thật: INITIALIZE có lệnh cuối cho tuner `88=00` tại USB ordinal 47, `87=C0` tại ordinal 48; TUNE MANUAL K25/K36 có `88=00`/`87=C0` tại ordinals 90/91. Chúng khớp trạng thái cleanup được chọn. Đây là SOURCE-CONFIRMED/OFFLINE-TESTED, chưa phải readback giá trị thanh ghi trên OnePlus. Không có khác biệt cần đổi init hoặc hỏi quyền ghi bổ sung.
+
+### BER, L1 và nguồn tham chiếu pin
+
+Mapping bổ sung xác định pre-BCH counter tại `24:40..43`: valid bit 0 của byte đầu, lỗi 22 bit trong ba byte sau; period là low nibble `20:72`; mẫu số `2^period * nBCH`. L1 validity là `22:12[0]`, code rate `22:5B=03` → 3/4, modulation `22:5C=02` → 64-QAM, FEC `22:5E=01` → 64K. Với B4 period `18`, mẫu số là `256 * 48600 = 12441600` bit. Cả mười mẫu Android có L1/counter hợp lệ, BER tính lại từ 0 đến 0,0000950842. Không dùng BER trước BCH thay số lỗi packet hoặc BER sau sửa lỗi. B4 không đọc PLP ID `22:54`/time-interleaving `22:62`, nên chúng vẫn UNKNOWN trong lịch sử.
+
+| Reference | SHA / file / hàm / dòng | Phạm vi xác nhận |
+| --- | --- | --- |
+| [Linux mainline monitor](https://github.com/torvalds/linux/blob/f97fa3dcb2db02013e6904c032a1d2d45707ee40/drivers/media/dvb-frontends/cxd2880/cxd2880_tnrdmd_dvbt2_mon.c) | `f97fa3dcb2db02013e6904c032a1d2d45707ee40`; `cxd2880_tnrdmd_dvbt2_mon_sync_stat:23–60`, `dvbt2_calc_snr:1280–1296`, `active_plp:603–710`, `qam:1568–1650`, `code_rate:1651–1740` | Semantics sync/TS/unlock, công thức SNR và enum L1. Bank CXD2880 khác target, không chép địa chỉ trực tiếp. |
+| [Linux mainline BCH](https://github.com/torvalds/linux/blob/bf4afc53b77aeaa48b5409da5c8da6bb4eff7f43/drivers/media/dvb-frontends/cxd2880/cxd2880_top.c) | `bf4afc53b77aeaa48b5409da5c8da6bb4eff7f43`; `cxd2880_post_bit_err_t2:255–361` | Bảng nBCH và mẫu số; từ chối FEC dự trữ/counter vượt tổng bit. |
+| [Sony public CXD285X mapping](https://github.com/kansonkong/libatsc3/blob/70b275e106818680f0489fdac0a63828dc81b32e/android/atsc3_phy_sony/src/jni/sony/demod/api/CXD285X/sony_cxd_demod_dvbt2_monitor.c) | `70b275e106818680f0489fdac0a63828dc81b32e`; `PreBCHBER:1712–1865`, `ActivePLP:666–798`, `QAM:2494–2588`, `CodeRate:2590–2684` | Nguồn bổ sung cho đúng bank24/22/20 của họ chip; vẫn là đối chiếu nguồn, không chứng nhận mọi chức năng silicon target. |
+| Official TBS / CoreELEC / community C / Go | HEAD mới lần lượt `2ce787de9f6e81b4294692a45de15596ae2e1322`, `072f8e99e0ac66d88d7278784e922e08e8253210`, `c5fa27eecbe80633cbb365cc44656daea1c0e2e3`, `6aaa1899991c875ba0482fa9098adc6c83b01fd8` | `ascot3_read_rssi` official dòng 453–559, CoreELEC từ 400, C từ 465; Go `tuner_ascot3.go:283–348`. Linux dùng `88=04`, Windows dùng `00`; không sync/sửa reference trees. |
+
+### Giả thuyết và thiết kế đo
+
+**USER-REPORTED:** đầu thu Pantesat xem tốt K25/K36 bằng cùng cáp, không bộ chia; xem [ENVIRONMENT.md](ENVIRONMENT.md). **HYPOTHESIS:** nhiễu từ lưu lượng USB được ưu tiên kiểm bằng OFF/ON lặp lại; bộ ước lượng SNR chưa ổn định và phần RF/cấu hình tuner TBS vẫn chưa bị loại trừ. SNR khoảng 15 dB với 64-QAM/3/4 có thể cần xem xét biên giải mã, nhưng chưa có ngưỡng hiệu chuẩn của tín hiệu cụ thể để kết luận nguyên nhân.
+
+B5 giữ init/reload/frontend/stream-select trong từng lượt; đổi đúng việc submit URB qua OFF1/ON1/OFF2/ON2, đo RSSI chỉ OFF. K25 MANUAL0 golden khác K36 đúng trường tần số tuner `50 10 09 → 90 B8 07`; AUTO fallback có golden retune riêng, không dùng golden cold. Phần cứng, tương quan theo bố trí và kết luận B5 **NOT RUN**, chờ card/`OK B5`; không gọi ROOT_CAUSE_CONFIRMED hoặc TS_SMOKE_PASS từ phân tích B4 này. Xem [ADR-058](DECISIONS.md).
+
 ## 2026-11-13, B4 cặp 1 — Không đủ cửa sổ so parity; cờ TS lock Android mất liên tục
 
 **RUNTIME-OBSERVED:** Sau `OK B4` đúng card SHA `742010f6e556acb1dcade2890457e18486b462cfb6a074ab3dcca8b37d5c9864`, đã thu Windows trước rồi Samsung ngay sau khi người dùng xác nhận ngắt cả nguồn ≥5 giây. Anten thụ động ngoài trời trên nóc nhà giữ nguyên, RF IN/không DC, cổng Windows cold2; Android dùng cáp chữ Y/pin dự phòng theo xác nhận. Không biến cách nối giống nhau thành chứng minh SNR tương đương.

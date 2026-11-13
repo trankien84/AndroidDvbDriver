@@ -83,6 +83,24 @@ public class Tbs5530AutonomousCaptureTest {
         } finally { clean(dir); }
     }
 
+    @Test public void b5KeepsStalePrefixInRawAndSeparatesOnFilesWithoutOverwrite() throws Exception {
+        File dir = directory();
+        File on1 = new File(dir, "received-ON1.ts"), on2 = new File(dir, "received-ON2.ts");
+        try {
+            assertThrows(IOException.class, () -> new Tbs5530AutonomousCapture(dir, Tbs5530B5Runner.Phase.OFF1));
+            byte[] first = new byte[2048 + 188]; java.util.Arrays.fill(first, 0, 2048, (byte)0x55); first[2048] = 0x47;
+            try (Tbs5530AutonomousCapture capture = new Tbs5530AutonomousCapture(dir, Tbs5530B5Runner.Phase.ON1)) {
+                capture.accept(first, first.length);
+            }
+            try (Tbs5530AutonomousCapture capture = new Tbs5530AutonomousCapture(dir, Tbs5530B5Runner.Phase.ON2)) {
+                capture.accept(new byte[]{0x47, 1, 2}, 3);
+            }
+            assertEquals(first.length, on1.length()); assertEquals(3, on2.length());
+            assertArrayEquals(first, java.nio.file.Files.readAllBytes(on1.toPath()));
+            assertArrayEquals(new byte[]{0x47, 1, 2}, java.nio.file.Files.readAllBytes(on2.toPath()));
+            assertThrows(IOException.class, () -> new Tbs5530AutonomousCapture(dir, Tbs5530B5Runner.Phase.ON1));
+        } finally { java.nio.file.Files.deleteIfExists(on1.toPath()); java.nio.file.Files.deleteIfExists(on2.toPath()); clean(dir); }
+    }
     @Test public void rejectsInvalidInputAndUnreviewedLimitBeforeOutput() throws Exception {
         File dir = directory();
         try {

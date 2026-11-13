@@ -65,6 +65,13 @@ public class NativeUsbfsStreamTest {
         return new NativeUsbfsStream(port, 4096, "b3-test", consent, audit);
     }
     private static void await(CountDownLatch latch) throws InterruptedException { assertTrue(latch.await(3,TimeUnit.SECONDS)); }
+    @Test public void bulkStallUsesNativeCompletionNotSoftwareOutstandingOrTsBit() {
+        assertFalse(NativeUsbfsStream.completionStalled(2_000_000_100L, 100, 0));
+        assertTrue(NativeUsbfsStream.completionStalled(2_000_000_101L, 100, 0));
+        assertFalse(NativeUsbfsStream.completionStalled(3_000_000_000L, 100, 2_500_000_000L));
+        assertTrue(NativeUsbfsStream.completionStalled(4_500_000_001L, 100, 2_500_000_000L));
+        assertFalse(NativeUsbfsStream.completionStalled(99, 100, 0));
+    }
     @Test public void receiveReturnsRawMetricsAndAuditOnlyAfterNativeDrain() throws Exception {
         Port port = new Port(); port.auditEvent = true;
         StringWriter audit = new StringWriter();

@@ -10,6 +10,31 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class Tbs5530SignalSamplerTest {
+    @Test public void b5KeepsSamplingAfterAnOperationFailureWithoutStoppingReceive() throws Exception {
+        AtomicInteger attempts = new AtomicInteger();
+        CountDownLatch recovered = new CountDownLatch(1);
+        Tbs5530SignalSampler sampler = new Tbs5530SignalSampler((thread, stopping) -> () -> {
+            if (attempts.getAndIncrement() == 0) throw new IOException("Synthetic monitor failure");
+            Tbs5530SignalMonitor monitor = new Tbs5530SignalMonitor((a,b,c,d,e,f,g,h) -> g, System::nanoTime);
+            Tbs5530SignalMonitor.Sample result = monitor.sample();
+            recovered.countDown(); return result;
+        }, true);
+        try {
+            sampler.start(); assertTrue(recovered.await(2, TimeUnit.SECONDS));
+        } finally { sampler.close(); }
+        assertFalse(sampler.lockLost()); assertTrue(sampler.samples().size() >= 1);
+        assertEquals("MONITOR_SAMPLE_ERROR:IOException", sampler.failure());
+    }
+    @Test public void legacyWorkerStillStopsOnOperationFailure() throws Exception {
+        AtomicInteger attempts = new AtomicInteger();
+        CountDownLatch attempted = new CountDownLatch(1);
+        Tbs5530SignalSampler sampler = new Tbs5530SignalSampler((thread, stopping) -> () -> {
+            attempts.incrementAndGet(); attempted.countDown(); throw new IOException("Synthetic monitor failure");
+        });
+        try { sampler.start(); assertTrue(attempted.await(2, TimeUnit.SECONDS)); }
+        finally { sampler.close(); }
+        assertEquals(1, attempts.get()); assertEquals("MONITOR_WORKER_ERROR:IOException", sampler.failure());
+    }
     @Test public void monitorIoErrorsDoNotStopConcurrentBulkOrReleaseItsOwner() throws Exception {
         Tbs5530Session session = new Tbs5530Session();
         AtomicInteger releases = new AtomicInteger(), closes = new AtomicInteger();

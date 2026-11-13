@@ -66,6 +66,7 @@ struct tbs_stream {
     int64_t starvation_count, zero_outstanding_count, horizon_count; /* horizon_count is reserved, always zero. */
     atomic_int stop;
     atomic_llong published[14];
+    atomic_llong completion_nanos;
 };
 int tbs_stream_init(struct tbs_stream *s, struct tbs_stream_ops ops,
                     int depth, int chunk, int max_bytes, int duration_ms);

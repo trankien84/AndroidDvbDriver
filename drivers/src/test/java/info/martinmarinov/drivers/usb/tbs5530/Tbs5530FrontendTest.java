@@ -440,6 +440,18 @@ public class Tbs5530FrontendTest {
         tuneFixture(r.script, autoParameters(), false); r.frontend.execute(auto); r.script.assertComplete();
     }
 
+    @Test public void k25AutoRemainsExplicitAndUsesReviewedFrequencyOnly() throws Exception {
+        Rig r = new Rig(); r.initialize();
+        Tbs5530DvbT2TuneParameters k25 = new Tbs5530DvbT2TuneParameters(506_000_000L, 8_000_000,
+                Tbs5530DvbT2TuneParameters.Selection.automatic());
+        assertThrows(UnsupportedOperationException.class, () -> r.frontend.planTune(k25));
+        assertThrows(UnsupportedOperationException.class, () -> r.frontend.planTune(
+                new Tbs5530DvbT2TuneParameters(506_000_000L, 7_000_000,
+                        Tbs5530DvbT2TuneParameters.Selection.automatic()), true));
+        tuneFixture(r.script, k25, false);
+        r.frontend.execute(r.frontend.planTune(k25, true)); r.script.assertComplete();
+    }
+
     @Test public void autoToManualRetuneWritesTheNewIdAndAdOneEveryTime() throws Exception {
         Rig r = new Rig(); r.initialize();
         tuneFixture(r.script, autoParameters(), false); r.frontend.execute(r.frontend.planTune(autoParameters(), true));
@@ -493,8 +505,10 @@ public class Tbs5530FrontendTest {
         for (int raw = 0; raw < 256; raw++) {
             statusFixture(r.script, raw);
             Tbs5530Frontend.Result result = r.frontend.execute(r.frontend.planStatus());
-            boolean expected = (raw & 7) == 6 && (raw & 0x20) != 0 && (raw & 0x10) == 0;
+            boolean expected = (raw & 7) == 6 && (raw & 0x10) == 0;
             assertEquals(expected, result.status.locked);
+            assertEquals(expected, result.status.demodLocked);
+            assertEquals((raw & 0x20) != 0, result.status.tsLock);
             assertEquals(expected ? State.DVBT2_LOCKED : State.READY_FOR_TUNE, result.state);
             assertEquals(Tbs5530Frontend.Metric.NOT_AVAILABLE, result.status.signalStrength);
             assertEquals(Tbs5530Frontend.Metric.NOT_AVAILABLE, result.status.cnr);
@@ -505,7 +519,7 @@ public class Tbs5530FrontendTest {
     }
 
     @Test public void pollingHasFiniteExactUpperBoundSourceIntervalAndEarlyStops() throws Exception {
-        for (int terminal : new int[]{0, 0x26, 0x10}) {
+        for (int terminal : new int[]{0, 0x06, 0x26, 0x10}) {
             Rig r = new Rig(); r.initialize(); r.tune(parameters(8_000_000, 0), false);
             int samples = terminal == 0 ? 20 : 2;
             for (int i = 0; i < samples; i++) statusFixture(r.script, i == samples - 1 ? terminal : 0);
@@ -519,7 +533,7 @@ public class Tbs5530FrontendTest {
             assertEquals((samples - 1) * 1000L, r.clock.now - before);
             assertEquals(samples * 2, result.usbOutCompleted);
             assertEquals(samples, result.usbInCompleted);
-            assertEquals(terminal == 0x26, result.status.locked);
+            assertEquals(terminal == 0x06 || terminal == 0x26, result.status.locked);
             assertThrows(IllegalArgumentException.class, () -> r.frontend.planPollStatus(0));
             assertThrows(IllegalArgumentException.class, () -> r.frontend.planPollStatus(21));
             r.script.assertComplete();
@@ -694,8 +708,9 @@ public class Tbs5530FrontendTest {
             case 8_000_000: bw = 2; offset = 0x1c; widthOffset = 0x1a; break;
             default: throw new AssertionError();
         }
-        assertTrue(p.frequencyHz == 594_000_000L || p.frequencyHz == 666_000_000L);
-        int[] channel = p.frequencyHz == 594_000_000L ? new int[]{0x50, 0x10, 0x09} : new int[]{0x90, 0x29, 0x0a};
+        assertTrue(p.frequencyHz == 506_000_000L || p.frequencyHz == 594_000_000L || p.frequencyHz == 666_000_000L);
+        int[] channel = p.frequencyHz == 506_000_000L ? new int[]{0x90, 0xb8, 0x07}
+                : p.frequencyHz == 594_000_000L ? new int[]{0x50, 0x10, 0x09} : new int[]{0x90, 0x29, 0x0a};
         w(f, U, 0x68, 0, 0x88, 0, 0x0b, 0x22, bw, offset, widthOffset, channel[0], channel[1], channel[2], 255, 0x11, 0x99, 0, 0x24, 0x87);
         w(f, U, 0x88, 0); w(f, U, 0x87, 0xc0); w(f, X, 0, 0); w(f, X, 8, 0);
         w(f, T, 0, 0); w(f, T, 0xfe, 1); streamFixture(f, true);

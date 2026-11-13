@@ -53,6 +53,12 @@ static void io_error(JNIEnv *env, const char *message) {
     if (cls) (*env)->ThrowNew(env, cls, message);
 }
 #define JNI(name) Java_info_martinmarinov_usbxfer_NativeUsbfsStream_##name
+JNIEXPORT jlong JNICALL JNI(clockNanos)(JNIEnv *env, jclass cls) {
+    (void)env; (void)cls; return nanos(NULL);
+}
+JNIEXPORT jlong JNICALL JNI(lastCompletion)(JNIEnv *env, jclass cls, jlong h) {
+    (void)env; (void)cls; return atomic_load(&get(h)->stream.completion_nanos);
+}
 static jlong create_receiver(jint fd, jint depth, jint chunk, jint max_bytes, jint duration_ms, int file_backed) {
     if (fd < 0) return 0;
     struct stream_receiver *r = calloc(1, sizeof(*r));

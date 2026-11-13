@@ -1,5 +1,94 @@
 # TBS5530 test matrix
 
+## 2026-11-13, B5 ordinal 4 OnePlus K25 — Runtime/drain PASS; TS quality FAIL, không root cause
+
+| Phép kiểm thật | Kết quả | Evidence / giới hạn |
+| --- | --- | --- |
+| Duyệt card/lượt bổ sung | PASS hữu hạn | Card `0aad1b96…f217c5`, đúng một ordinal 4 K25 kế thừa ba refusal, cùng budget/session; không tăng vô hạn hoặc tự 5/6. |
+| Host foreground/extension | PASS 40/49/34/90 offline, actual card PASS | Fixture OnePlus thực FAIL guard cũ/PASS guard mới; cùng helper live `5bdc3334…159bd2b`. Không đổi APK để qua chốt. |
+| Bootstrap/reload OnePlus lần đầu | PASS đúng lượt | Mỗi loại 132/132, original image 8192 byte, reload COMPLETE/detach=-1; không `-75`/`-71`. Chưa kiểm mọi OnePlus/kernel. |
+| Bốn pha | PASS runtime | OFF1 10 s/ON1 30 s/OFF2 10 s/ON2 10 s; ON bytes 34340864/11141120, OFF không Bulk/RSSI ba lần mỗi OFF. |
+| Native/writer/drain | PASS | First status/errno 0, data error 0, writer drop 0/failure null; outstanding 0/quarantine false, DRAIN_CONFIRMED. Cancellation drain không tính lỗi data. |
+| Demod/TS lock | PASS semantics | 584 samples hợp lệ demod LOCKED; TS bit OFF1 93/0, ON1 76/227, OFF2 88/0, ON2 26/74 bật/tắt, không dừng giả. |
+| SNR/RSSI/BER theo pha | OBSERVED | SNR trung vị 25,475/18,460/22,087/20,332 dB; RSSI hai OFF −64,85 dBm; BER OFF 0, ON1/ON2 trung vị 1,09086e-4/4,98409e-5. |
+| Chất lượng TS | FAIL | ON1 total CC 2698/TEI 198; ON2 CC 870/TEI 0. Sau 5 s ON1 5467,85/31,20 mỗi phút, ON2 5233,57/0. TS_SMOKE_PASS=false. |
+| PSI/PCR/frame | INSUFFICIENT_EVIDENCE riêng completeness | ON1 sau 5 s có PAT/PMT/SDT/VTV; ON2 thiếu SDT/PMT đủ dịch vụ. PCR chưa coverage/stability, FULL% thiếu baseline K25 độc lập. Không dùng UNKNOWN đảo CC FAIL thành PASS. |
+| Giả thuyết USB EMI | UNCONFIRMED | Chênh OFF−ON trung vị 7,015 rồi 1,755 dB, không lặp ngưỡng 6 dB; một lượt, chưa root cause. |
+| Export helper sau drain | FAIL host | ADB timeout 10000 ms, ON1 partial 25099776 byte, receipt HOST_ABORTED_NO_RETRY/drained=true/closed=true; không receive retry. |
+| Export chỉ đọc mới | PASS 40 tệp | 95374481 byte, SHA/size remote trước–sau/host khớp; nguyên raw ON1/ON2 đầy đủ, không firmware export. |
+| Candidate export hậu kiểm | PASS 23 + 90, NOT USED ON HARDWARE | `a3480759…ec24660` chỉ binary AfterDrain 90–180 s theo size, lệnh khác/live/heartbeat/TTL và SHA/size guards nguyên. |
+| K36/tách xa/phụ kiện | NOT RUN | Đã dùng bốn Android gồm ba preparation/một receive; budget đóng, không tự dùng trần còn lại. |
+| Cleanup cuối | PASS xác nhận | User rút/ngắt nguồn sau drain; helper/capture/emulator thuộc phiên đã kết thúc, không worker nhận USB còn chạy. |
+
+Evidence ở bundle B5 `android4-k25/`, `android4-readonly-export/` và frozen live source; SVG/CSV 584 điểm đã đối chiếu với audit CLOCK_MONOTONIC. Giữ các log FAIL trước sửa và FAIL lịch sử driver lint/fake heartbeat chưa chạy lại; không chứng nhận Phase 4 hoặc ROOT_CAUSE_CONFIRMED chất lượng TS.
+
+## 2026-11-13, ordinal 3 sau chuyển target — Permission PASS, foreground host refusal trước grant
+
+| Kiểm | Kết quả | Giới hạn |
+| --- | --- | --- |
+| Target migration helper | PASS 34/49/90 tests và actual card validator | Card `b9cbeb87…51ddd3`, giữ hai lượt cũ/cùng budget, không thêm lượt ở bước đó. |
+| Permission OnePlus thật | PASS quyền OS | GRANTED/OS_PERMISSION_VERIFIED/AUTO_PERMISSION_HANDLED_BY_OS; UID app khớp device_permissions, challenge model/API/live_ready đúng. |
+| Foreground host | FAIL trước grant | B5_FOREGROUND_UNVERIFIED, parser cũ đòi một dòng; snapshot sau lỗi có mResumedActivity/ResumedActivity cùng record. |
+| Parser candidate | PASS 13 tests, gồm snapshot thực | Frozen guard FAIL trước sửa; candidate chỉ gộp hai nhãn khác nhau với toàn record trùng, các ambiguity bị từ chối. |
+| Firmware/reload/TS ordinal 3 | NOT RUN | Receipt PRE_GRANT_HOST_REFUSAL/grant_may=false; history 581 byte/hash nguyên. Không gọi refusal là lỗi USB hoặc RF. |
+| Cleanup người dùng | PASS xác nhận physical | Không I/O pending; người dùng đã rút tuner/ngắt nguồn để kiểm offline. |
+| Lượt bổ sung | APPROVED DESIGN, NOT RUN | Người dùng chọn đúng ordinal 4 K25, tổng 4/6; cần extension guards và card/OK riêng theo ADR-061. Không ordinal 5/6 tự động. |
+
+## 2026-11-13, OnePlus sau cài candidate — Hai refusal trước grant, lượt 3 chưa consume
+
+| Kiểm / lượt | Kết quả | Giới hạn |
+| --- | --- | --- |
+| Install-r candidate | PASS một lần | APK `90c7c616…a6bf7e4` đúng; history 581 byte/SHA `556f248a…98d128` trước-sau nguyên. Không clear/uninstall. |
+| Carry-forward Windows → Android | PASS 49 focused/90 regression và actual card guard | Giữ nguyên Windows ledger/result, cùng budget/session, chưa là phép thử tuner. |
+| Android preparation 1, K25 | PRE_GRANT_HOST_REFUSAL | Permission-only timeout khi tuner còn rút; không grant/firmware/URB. Ordinal 1 đã consume, giữ receipt. |
+| Android preparation 2, K36 | PRE_GRANT_HOST_REFUSAL | CANCELLED sau khoảng 4 giây khi Open app chooser xuất hiện; chưa request timestamp/quyền verified, không grant/firmware/URB. Chưa có lifecycle trace để kết luận onStop thực. |
+| Review hai lượt | PASS chỉ đọc | PRE_IO_REFUSED với hash chứng cứ thật; không giả drain hoặc capture PASS. Ledger giữ hai consume. |
+| Android ordinal 3 | NOT RUN, chưa consume | Target ADB cũ mất sau người dùng ngắt/nối lại; không launch thử bằng alias cũ hoặc thay target ngầm định. |
+| Alias mới | PASS identity chỉ đọc | GM1900/API 30/boot 408/history nguyên; cần chuyển target theo ADR-060 và card mới, không phải quyền live. |
+| K36/tách xa/TS Android | NOT RUN | Hai lượt trước chỉ preparation, không phải kết quả RF hoặc reload. |
+
+## 2026-11-13, Windows K25 B5 thật — Có mẫu, receipt đóng vì giới hạn; Android chưa chạy
+
+| Kiểm thật | Kết quả | Giới hạn |
+| --- | --- | --- |
+| Sửa kiểu số JSON Windows | PASS 150/150 fake | V2 nhận đúng Int32/Int64 và từ chối kiểu khác; serialized card/marker được kiểm, frozen helper/card cũ nguyên. |
+| Android cùng lỗi JSON | PASS 91/91 + 90/90 regression | Không mắc lỗi guard Int64; APK/source Android không đổi ở bước này. |
+| Duyệt/cold/UAC/ARMED | PASS có phạm vi | Card v2 `8f799b34…d6fe6`, recorder header 24 byte trước attach; target đúng root/VID:PID/driver BDA và owner Windows. |
+| Capture Windows K25 | CAPTURE_INCOMPLETE, giữ raw | TS 159999844 byte/pcap 163272178 byte, TSDuck natural exit 0/wall 39,721323 giây; receipt đóng, không sửa thành PASS đủ 40 giây. |
+| Đồng bộ/PSI-SI | Có TS, không chất lượng PASS | 851063 BDA packets, 0 sync break; PAT/PMT/SDT hợp lệ và 13 dịch vụ VTV. |
+| CC/TEI | FAIL chất lượng | 837 CC/24036 TEI toàn BDA; sau 5 giây USB có 709/20278 trong 33,049332 giây. |
+| PCR/frame | UNKNOWN stability/FULL% | PCR ước lượng 35,58 Mbps có 158 lỗi; chưa baseline K25 độc lập để tính FULL/PARTIAL. Không áp K36. |
+| Monitor giải mã lại | PASS offline có nguồn | 120 raw SNR 19,696/20,347/21,559 dB; BER 0/2,82118e-6/8,18142e-5; RSSI AGC −64,85 dBm. Không OFF/ON Android. |
+| Cleanup | PASS process/physical confirmation | PID helper/recorder/TSDuck đã thoát; người dùng xác nhận rút tuner/ngắt nguồn. Không hardware service còn chạy. |
+| Tiếp nối | APPROVED DESIGN, NOT RUN | Người dùng chọn carry số lượt; guard/card mới còn phải kiểm và duyệt theo ADR-059. Ledger 443 byte/SHA `d0e3a267…5c845` giữ nguyên; Android chưa consume. |
+
+## 2026-11-13, B5 offline — Kiểm số đo và golden; đang chờ gates tích hợp
+
+| Kiểm đã thực hiện | Kết quả | Evidence / giới hạn |
+| --- | --- | --- |
+| Baseline | PASS | Đúng nhánh yêu cầu/HEAD `6adde854…`, working tree sạch trước sửa. Không stage/commit/push. |
+| Kiểm lại B4 pcap và export | PASS offline có phạm vi | Đúng SHA input, strict pairing/owner/pending/warnings hợp lệ. Android 10/10 demod LOCKED, 9 status `06` giữa burst; đính chính diễn giải lock-loss cũ, không hardware mới. |
+| Metrics/Sampler/Audit/RSSI trước đính chính cleanup | PASS 23/23 focused JUnit | SNR không gated bởi TS bit, BER/L1 valid/UNKNOWN, RSSI OFF-only và cleanup lỗi; direct javac Java 8, không phải Gradle tích hợp. |
+| RSSI sau chọn Windows `88=00`/`87=C0` | PASS 8/8 focused JUnit | Helper/audit/golden cập nhật, RSSI −63,52 dBm; chỉ offline, chưa đọc tuner. Log windows-rssi-followup-junit.log. |
+| Golden init/tune trước card | PASS_SOURCE_ONLY | Bốn program init/tune K25/K36 kết thúc `87=C0`, `88=00`; kiểm source và ordinals export, không readback OnePlus. |
+| Frontend/K25/allowlist/fallback | PASS 41/41 JUnit | Golden K25 chỉ khác ba byte tần số, counts/delay không đổi; AUTO retune pin riêng, cold AUTO/K36 bị từ chối ở fallback; 256 status bit combinations và `06` dừng poll ở demod lock. |
+| JUnit invocation sai tên class | FAIL invocation, đã sửa | Dùng slash trong tên lớp gây ClassNotFound trước suite; gọi tên fully-qualified đúng sau đó 41/41 PASS. Giữ lỗi invocation, không gọi lỗi source. |
+| Gates Gradle tích hợp | PASS có phạm vi | Lượt đầu app compile FAIL do thiếu dependency debug usbxfer; thêm `debugImplementation`, chạy lại full gate exit 0/16m45s/392 tasks. App 112 PASS, driver 528 PASS + 5 SKIP, usbxfer 62, service 13; debug/release/AndroidTest/app lint PASS. |
+| Native host | PASS 87 cases | Fake C nguồn B5, timestamp completion thật chỉ cập nhật ngoài drain; không phải đo USB Android hoặc test runtime bốn ABI. |
+| ABI/ELF/release isolation | PASS tĩnh | 12 ELF/bốn ABI trong APK debug/release, alignment hai ABI 64-bit ít nhất 16 KiB; release không lớp/thư viện debug. Cần đối soát hash APK cuối sau sửa fixture. |
+| Helper Android/Windows và analyzer | PASS fake/offline | Android 90 checks, Windows helper ngoài Git 33 checks, Python 93 tests gồm 12 B5; helper hash đúng handoff. Không gọi ADB/BDA/capture thật từ fake. |
+| Emulator instrumentation đầu | FAIL 5/15 | Một expectation SNR cũ và bốn lifecycle do model emulator ngoài allowlist. ADB exit 0 nhưng nội dung có FAIL, không gọi PASS. |
+| Emulator sau fixture lifecycle | PASS 14/15 ở lượt hai | Cả năm lifecycle PASS với seam chỉ control-plane, không mở allowlist live; vẫn còn một signal audit FAIL ở lượt đó. |
+| Audit sau sửa qualification | PASS 3/3 JVM; emulator signal PASS | Giữ SNR khi TS bit bằng 0; nếu cleanup/read lỗi thì `snr_db=null`, vẫn lưu `snr_raw` và `snr_db_observed` chưa chứng nhận. Targeted Gradle/build/app lint exit 0/5m04s. |
+| Emulator mở rộng cuối | PASS 37/38, chưa chốt | B5 4/4, signal audit, 22 approval/heartbeat và permission lifecycle PASS; clearTop lifecycle còn race token cũ, đang sửa điều kiện chờ của fixture. Không giả mọi instrumentation đã PASS. |
+| Emulator chốt đúng candidate | PASS 38/38 | Bốn B5 report, signal audit, frontend approval, năm lifecycle, 22 approval/heartbeat và một permission lifecycle. CLEAR_TOP fixture gửi từ Activity foreground và chờ đúng token/session mới; không nới model live hoặc tăng timeout. Log emulator-b5-final-v2.txt. |
+| Freeze card/source/APK | PASS offline | Card `0c9de165…acae2d`, APK `90c7c616…a6bf7e4`, 502 source từng SHA khớp. Bản private có serial không đưa vào Git; chưa OK B5 hoặc install OnePlus. |
+| Cleanup emulator | PASS | emu kill đúng emulator-5580, attached process exit 0, cổng 5580/5581 không listener. |
+| B5 OnePlus reload/permission/handoff/TS | NOT RUN | Chưa card/OK B5 hoặc thiết bị OnePlus hiện hành; lịch sử `-75`/`-71` trước reload không phải kết quả candidate. |
+| Windows K25/K36 B5 | CAPTURE NOT RUN; preparation FAIL | Sau OK/UAC/cold, helper thoát 1 trước ARMED/ready/result/budget. Offline tái hiện guard Int32 từ chối Int64 do JSON, trước consume/I/O; chưa có stderr runtime. Không retry/helper mới bằng quyền cũ. |
+
+Evidence mới ở bundle `phase31-b5-20261113-124425-302b54cb` ngoài Git, mục metrics/golden/frontend. Giữ các FAIL driver lint, lifecycle emulator và fake heartbeat lịch sử cho đến khi có phép kiểm tương ứng; không tự chuyển PASS. [ADR-058](DECISIONS.md) ghi thiết kế và điều kiện mở phần cứng.
+
 ## 2026-11-13, B4 cặp 1 — Dừng có bằng chứng, chưa parity
 
 | Phép kiểm thật | Kết quả | Giới hạn / evidence |

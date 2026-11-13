@@ -16,6 +16,11 @@ final class Tbs5530AutonomousLaunch {
         return value != null && value.matches("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}")
                 && !value.equals("00000000-0000-0000-0000-000000000000");
     }
+    static void requireB5Budget(String card, String budget, String hostSession, int ordinal, int maximum, int coldSeconds) throws IOException {
+        if (card == null || !card.matches("[a-f0-9]{64}") || !valid(budget) || !valid(hostSession)
+                || maximum < 1 || maximum > 6 || ordinal < 1 || ordinal > maximum || coldSeconds < 5)
+            throw new IOException("Invalid B5 card, fresh budget, attempt or physical cold confirmation");
+    }
     synchronized void begin(String value) throws IOException {
         if (active && !cleanupConfirmed) throw new IOException("Previous workflow cleanup is not certified");
         if (value != null && (!valid(value) || used.contains(value) || used.size() >= 16))

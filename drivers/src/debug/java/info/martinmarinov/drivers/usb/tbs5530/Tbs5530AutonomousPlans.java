@@ -30,8 +30,14 @@ public final class Tbs5530AutonomousPlans {
         this.experiment = experiment;
         hashes = dryRun(experiment);
         for (int i = 0; i < OPERATIONS.length; i++) {
-            String expected = experiment != Tbs5530FrontendExperiment.BASELINE_AUTO && OPERATIONS[i] == Tbs5530Frontend.Operation.TUNE
-                    ? MANUAL_PLP0_TUNE : PINNED[i];
+            String expected = PINNED[i];
+            if (OPERATIONS[i] == Tbs5530Frontend.Operation.TUNE) {
+                if (experiment == Tbs5530FrontendExperiment.B5_K25_MANUAL_PLP0)
+                    expected = "82c8e610ff7f132e0df0a2057c76af38ab26bd100973f8984f2dcae004a034a9";
+                else if (experiment == Tbs5530FrontendExperiment.B5_K25_AUTO)
+                    expected = "e7e09c29551546d4949d1eef7a08fe4354b6ba4ed3b44b9a704fd4d2e734b9b9";
+                else if (experiment != Tbs5530FrontendExperiment.BASELINE_AUTO) expected = MANUAL_PLP0_TUNE;
+            }
             if (!expected.equals(hashes.get(OPERATIONS[i]))) throw new IOException("Golden dry-run mismatch: " + OPERATIONS[i]);
         }
     }
@@ -40,6 +46,14 @@ public final class Tbs5530AutonomousPlans {
         if (plan == null || !canonical(plan).equals(hashes.get(plan.operation))) throw new IOException("Plan is not allowlisted");
         if (plan.operation == Tbs5530Frontend.Operation.TUNE && !experiment.matches(plan.tuneParameters))
             throw new IOException("Tune differs from the exact frontend experiment");
+    }
+    public static final String K25_FALLBACK_TUNE_SHA256 = "fc5ed9752b3b9899f17277d6631dad42856c50137f27e3d1cc35e3babbdebaf0";
+    public void requireK25Fallback(Tbs5530Frontend.Plan plan) throws IOException {
+        if (experiment != Tbs5530FrontendExperiment.B5_K25_MANUAL_PLP0 || plan == null
+                || plan.operation != Tbs5530Frontend.Operation.TUNE
+                || !Tbs5530FrontendExperiment.B5_K25_AUTO.matches(plan.tuneParameters)
+                || !K25_FALLBACK_TUNE_SHA256.equals(canonical(plan)))
+            throw new IOException("Only the reviewed K25 AUTO retune is allowlisted");
     }
     public static boolean nativeUrb(Tbs5530TsSmoke.ReadApi api) {
         return api != null && api.isNativeUrb();
@@ -80,6 +94,13 @@ public final class Tbs5530AutonomousPlans {
     }
     /** Immutable approval programs for offline review; the only transport here is the fake below. */
     public static Map<Tbs5530Frontend.Operation, Tbs5530Frontend.Plan> dryRunPlans(Tbs5530FrontendExperiment experiment) throws IOException {
+        return dryRunPlans(experiment, false);
+    }
+    public static Tbs5530Frontend.Plan dryRunK25FallbackPlan() throws IOException {
+        return dryRunPlans(Tbs5530FrontendExperiment.B5_K25_MANUAL_PLP0, true).get(Tbs5530Frontend.Operation.TUNE);
+    }
+    private static Map<Tbs5530Frontend.Operation, Tbs5530Frontend.Plan> dryRunPlans(
+            Tbs5530FrontendExperiment experiment, boolean fallback) throws IOException {
         if (experiment == null) throw new IOException("Explicit frontend experiment required");
         Tbs5530Session session = new Tbs5530Session();
         long token = session.requestPermission(); session.permissionResult(token, true);
@@ -92,7 +113,7 @@ public final class Tbs5530AutonomousPlans {
             if (request == 0x91) {
                 java.util.Arrays.fill(bytes, (byte) 0);
                 bytes[0] = (byte) (register[0] == 0xfb ? 1 : register[0] == 0xfd ? 0x97
-                        : register[0] == 0x7f ? 0xe1 : register[0] == 0x10 ? 0x26 : 0);
+                        : register[0] == 0x7f ? 0xe1 : register[0] == 0x10 ? (fallback ? 5 : 0x26) : 0);
             }
             return length;
         };
@@ -106,10 +127,16 @@ public final class Tbs5530AutonomousPlans {
             Tbs5530Frontend.Plan probe = frontend.planProbe(); result.put(probe.operation, probe); frontend.execute(probe);
             Tbs5530Frontend.Plan init = frontend.planInitialize(); result.put(init.operation, init); frontend.execute(init);
             frontend.readyForTune();
-            Tbs5530Frontend.Plan tune = frontend.planTune(experiment.parameters(), experiment == Tbs5530FrontendExperiment.BASELINE_AUTO);
+            Tbs5530Frontend.Plan tune = frontend.planTune(experiment.parameters(), experiment.automatic());
             result.put(tune.operation, tune); frontend.execute(tune);
             Tbs5530Frontend.Plan status = frontend.planPollStatus(3); result.put(status.operation, status);
-            if (!frontend.execute(status).status.locked) throw new IOException("Fake golden path did not lock");
+            Tbs5530Frontend.Result polled = frontend.execute(status);
+            if (fallback) {
+                if (polled.status.syncState == 6 && !polled.status.unlockDetected)
+                    throw new IOException("Fallback requires failed manual demod lock");
+                Tbs5530Frontend.Plan automatic = frontend.planTune(Tbs5530FrontendExperiment.B5_K25_AUTO.parameters(), true);
+                result.put(Tbs5530Frontend.Operation.TUNE, automatic);
+            } else if (!polled.status.locked) throw new IOException("Fake golden path did not lock");
             return result;
         } finally { session.close(); }
     }

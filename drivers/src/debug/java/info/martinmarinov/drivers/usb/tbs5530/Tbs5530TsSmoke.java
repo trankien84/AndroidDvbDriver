@@ -31,13 +31,20 @@ public final class Tbs5530TsSmoke {
     public static final class Limits {
         public final int maxBytes, maxReads, durationMillis, readTimeoutMillis, readChunkBytes, queueDepth;
         public final boolean prepareEndpoint, explicitSetInterfaceAlt0, sonyTsOutputReadback;
-        public final boolean b4Capture, tunerRssi;
+        public final boolean b4Capture, tunerRssi, b5Capture;
+        public final String b5Phase;
+        public static Limits b5(String phase) {
+            if (!"ON1".equals(phase) && !"ON2".equals(phase)) throw new IllegalArgumentException("Invalid B5 ON phase");
+            return new Limits(256 * 1024 * 1024, 65536, "ON1".equals(phase) ? 30000 : 10000,
+                    500, 16384, false, ReadApi.NATIVE_USBFS_STREAM, false, false, 16, false, false, phase);
+        }
         public final ReadApi readApi;
         public static Limits b4(int durationMillis, int queueDepth, boolean tunerRssi) {
             return new Limits(256 * 1024 * 1024, 65536, durationMillis, 500, 16384,
                     false, ReadApi.NATIVE_USBFS_STREAM, false, false, queueDepth, true, tunerRssi);
         }
-        public long maximumMillis() { return durationMillis + 2000L + (prepareEndpoint ? 5000L : 0)
+        public long maximumMillis() { if (b5Capture) return 65000L;
+            return durationMillis + 2000L + (prepareEndpoint ? 5000L : 0)
                 + (explicitSetInterfaceAlt0 ? 2000L : 0) + (sonyTsOutputReadback ? Tbs5530SonyTsOutputReadback.MAXIMUM_MILLIS : 0)
                 + (readApi != ReadApi.SYNC_NATIVE_ERRNO ? 1000L : 0); }
         public Limits(int maxBytes, int maxReads, int durationMillis, int readTimeoutMillis) {
@@ -71,6 +78,13 @@ public final class Tbs5530TsSmoke {
         private Limits(int maxBytes, int maxReads, int durationMillis, int readTimeoutMillis, int readChunkBytes,
                        boolean prepareEndpoint, ReadApi readApi, boolean explicitSetInterfaceAlt0, boolean sonyReadback,
                        int queueDepth, boolean b4Capture, boolean tunerRssi) {
+            this(maxBytes, maxReads, durationMillis, readTimeoutMillis, readChunkBytes, prepareEndpoint,
+                    readApi, explicitSetInterfaceAlt0, sonyReadback, queueDepth, b4Capture, tunerRssi, null);
+        }
+        private Limits(int maxBytes, int maxReads, int durationMillis, int readTimeoutMillis, int readChunkBytes,
+                       boolean prepareEndpoint, ReadApi readApi, boolean explicitSetInterfaceAlt0, boolean sonyReadback,
+                       int queueDepth, boolean b4Capture, boolean tunerRssi, String phase) {
+            this.b5Phase = phase; b5Capture = phase != null;
             this.b4Capture = b4Capture; this.tunerRssi = tunerRssi;
             this.readApi = Objects.requireNonNull(readApi);
             this.queueDepth = queueDepth;
@@ -80,8 +94,8 @@ public final class Tbs5530TsSmoke {
                 throw new IllegalArgumentException("Invalid B4 file capture configuration");
             if (readApi == ReadApi.NATIVE_USBFS_STREAM) {
                 if (queueDepth < 8 || queueDepth > 32 || readChunkBytes < 4096 || readChunkBytes > 65536
-                        || readChunkBytes % 512 != 0 || maxBytes < queueDepth * readChunkBytes || maxBytes > (b4Capture ? 256 : 16) * 1024 * 1024
-                        || maxReads < 1 || maxReads > 65536 || durationMillis < 1 || durationMillis > (b4Capture ? 60000 : 10000)
+                        || readChunkBytes % 512 != 0 || maxBytes < queueDepth * readChunkBytes || maxBytes > (b4Capture || b5Capture ? 256 : 16) * 1024 * 1024
+                        || maxReads < 1 || maxReads > 65536 || durationMillis < 1 || durationMillis > (b4Capture || b5Capture ? 60000 : 10000)
                         || readTimeoutMillis < 1 || readTimeoutMillis > 2000 || prepareEndpoint || explicitSetInterfaceAlt0 || sonyReadback)
                     throw new IllegalArgumentException("Invalid bounded native stream configuration");
                 this.maxBytes = maxBytes; this.maxReads = maxReads; this.durationMillis = durationMillis;
@@ -197,6 +211,7 @@ public final class Tbs5530TsSmoke {
     }
     public Result run(Limits limits) throws IOException {
         Objects.requireNonNull(limits);
+        if (limits.b5Capture) throw new IOException("B5 requires the four-phase runner, not legacy TS smoke");
         if (limits.readApi != readApi) throw new IOException("Receive backend and approved transcript differ");
         synchronized (this) {
             if (used) throw new IOException("TS smoke cannot be retried");

@@ -1,5 +1,154 @@
 # Architecture decision record (ADR)
 
+## ADR-062 — B5 OnePlus K25 hoàn tất vận chuyển debug; TS chưa đạt và chưa xác nhận nhiễu USB
+
+**Date:** 2026-11-13, sau ordinal 4 được duyệt riêng theo ADR-061.
+
+**Status:** Accepted theo evidence runtime và phân tích offline. Phiên đã drain, tuner rút, receipt đóng; không cấp lượt 5/6 hoặc mở Phase 4.
+
+### Context / Evidence
+
+Card `0aad1b96…f217c5`, helper live `5bdc3334…159bd2b`, APK `90c7c616…a6bf7e4` chạy OnePlus GM1900/API 30/boot 408, K25 506 MHz/8 MHz/MANUAL PLP0, bố trí khoảng 33 cm/OTG trực tiếp. Bootstrap 132/132, reload sau SET_CONFIGURATION 132/132 COMPLETE, không detach sau reload. Đủ OFF1/ON1/OFF2/ON2; ON1 nhận 34340864 byte, ON2 11141120 byte; first status/errno 0, data errors 0, writer drop 0, outstanding 0/quarantine false và DRAIN_CONFIRMED.
+
+SNR trung vị OFF1/ON1/OFF2/ON2 lần lượt 25,475/18,460/22,087/20,332 dB. RSSI hai OFF đều −64,85 dBm; pre-BCH BER hai OFF bằng 0, ON1 trung vị 1,09086e-4 và ON2 4,98409e-5. Demod lock giữ ở mọi sample hợp lệ; TS bit tắt nhiều trong ON không dừng giả. ON1 sau 5 giây có CC 5467,85/phút và TEI 31,20/phút; ON2 CC 5233,57/phút/TEI 0. Chưa đủ PCR coverage/stability, ON2 thiếu SDT, FULL% thiếu baseline K25 độc lập.
+
+Helper export timeout 10 giây sau drain, receipt HOST_ABORTED_NO_RETRY/closed=true. Partial ON1 25099776 byte giữ riêng; đã thu lại 40 tệp chỉ đọc, 95374481 byte với SHA/size remote trước–sau/host khớp, không firmware/receive mới. Card và sổ cũ không sửa.
+
+### Decision
+
+- Chấp nhận **B5_FOUR_PHASES_COMPLETE và vận chuyển debug thành công trong đúng một lượt OnePlus K25**. Đây là lần đầu OnePlus được kiểm với reload sau SET_CONFIGURATION; không lặp lại `-75`/`-71` trong lượt này. Không suy thành mọi OnePlus/kernel/production đã tương thích hoặc dùng một lượt làm ROOT_CAUSE_CONFIRMED chất lượng TS.
+- `TS_SMOKE_PASS=false`: CC/TEI đã vi phạm tiêu chí zero-error. Nhãn analyzer INSUFFICIENT_EVIDENCE phản ánh thiếu một số bằng chứng, không làm lỗi CC/TEI thành thành công chưa xác định. Phân biệt runtime PASS, TS quality FAIL và completeness UNKNOWN.
+- OFF1−ON1 trung vị 7,015 dB nhưng OFF2−ON2 chỉ 1,755 dB; ngưỡng ≥6 dB không lặp ở cặp hai. Chỉ ghi gợi ý liên hệ giữa lưu lượng/SNR/BER, chưa xác nhận H-USB-EMI. H-ESTIMATOR và H-TBS-RF chưa bị loại; không tuyên bố ferrite/tách xa chắc chắn sửa lỗi.
+- Không thử lại ngay. K36 Android/bố trí hơn 70 cm/phụ kiện NOT RUN; không tự dùng dư trần sáu hoặc một Windows còn lại. Phép lặp sau phải có câu hỏi phân biệt được, card hữu hạn mới, giữ tổng và các chốt firmware/permission/owner/heartbeat.
+- Sửa export hậu kiểm chỉ là candidate host offline: binary copy sau typed drain có deadline hữu hạn theo size, không tăng timeout live/heartbeat/TTL hoặc nới SHA/size guards. Giữ source/manifest helper đã dùng riêng và ghi NOT USED ON HARDWARE cho candidate sau live.
+- Không stage/commit/push; raw/TS/APK/grant/serial ngoài Git, references/toolchain không đổi. Phase 4 chưa mở từ lock hoặc transport PASS.
+
+### Alternatives / Trade-offs
+
+Không gọi root cause từ một phép OFF/ON, không hạ tiêu chí TS vì Windows cũng có lỗi, không xóa prefix/gap giữa raw để tạo PASS. ON2 có một sync seam gần 2048 byte sau OFF2; giữ nguyên và ghi rõ thay vì tự bỏ dữ liệu. Ước lượng PCR Android biến động không được thay bằng bitrate nominal Windows để chứng nhận ổn định.
+
+### Validation / Next step
+
+Evidence tại bundle B5 `android4-k25/`, gồm analysis/compact summary, SVG/CSV 584 điểm SNR và timeline completion, cùng read-only export manifest. Ưu tiên so offline SNR/AGC/BER và Windows/Android init/TS output; chỉ sau đó đề xuất phép lặp K25/K36 và bố trí tách xa có kiểm soát. Chưa cần mua thiết bị hoặc phụ kiện từ kết quả một lượt.
+
+## ADR-061 — Sửa parser foreground OnePlus và duyệt thiết kế đúng một lượt K25 bổ sung, tổng bốn trong trần sáu
+
+**Date:** 2026-11-13, sau ordinal 3 của card migration `b9cbeb87…51ddd3`.
+
+**Status:** Approved design, chưa quyền live. Người dùng xác nhận tuner đã rút và chọn đúng một lượt bổ sung K25 sau khi parser được tái hiện/sửa/kiểm và card mới được duyệt.
+
+### Context / Evidence
+
+Ordinal 3 đã qua permission-only thật: GRANTED/OS_PERMISSION_VERIFIED và challenge OnePlus `live_ready=true`. Host từ chối B5_FOREGROUND_UNVERIFIED trước grant; receipt PRE_GRANT_HOST_REFUSAL, grant_may=false, chưa A0/reload/URB, history 581 byte/hash nguyên. Snapshot sau refusal có hai dòng mResumedActivity và ResumedActivity trỏ cùng ActivityRecord/user/component/task. Guard B3 được B5 dùng lại chỉ chấp nhận đúng một dòng, vì vậy snapshot này bị từ chối; snapshot hậu kiểm không thay cho log foreground tại chính thời điểm guard.
+
+Sổ migration 1943 byte/SHA `d12e2fde0fc364fdad688530294d8e0fccc3f0963e27c0d8947ca03622b9c809` và hai lượt trước được giữ nguyên. Cả ba đã consume nhưng đều trước grant; không gọi đây là reload/USB data failure. Người dùng đã từ bỏ yêu cầu tăng vô hạn và xác nhận giới hạn nhiệm vụ không quá sáu Android, sau đó duyệt thiết kế riêng đúng một lượt bổ sung, tổng bốn.
+
+### Decision
+
+- Parser B5 chỉ gộp tối đa hai dòng ở hai nhãn khác nhau khi toàn bộ ActivityRecord/user/component/task trùng chính xác. Một dòng đúng vẫn giữ hành vi Samsung. Hai bản ghi khác nhau, nhãn lặp, nhiều hơn hai dòng, malformed hoặc suffix không hợp lệ phải từ chối; không nới foreground chỉ vì package name trùng.
+- Không sửa guard legacy B3 ngoài scope; B5 dùng phiên bản parser được pin trong helper/card mới. Cần fixture OnePlus thực đã làm sạch cùng positive/negative Samsung và trường hợp mơ hồ, không chỉ synthetic string.
+- Card kế tiếp chỉ cấp **ordinal 4 K25 MANUAL PLP0** trong tổng max_attempts 4, trần toàn nhiệm vụ vẫn 6. Không cấp lượt 5/6, không thêm K36/tách xa hoặc Windows. AUTO fallback một lần giữ nguyên scope đã phân tích.
+- Kế thừa exact cả ba consume/receipt/review PRE_IO_REFUSED, prior card và hai ledger Android, carry Windows và cùng budget/session. Không sửa/reset/header rewrite các sổ cũ; ledger bổ sung append-only phải bind new card + predecessor hashes + inherited count 3 + next ordinal 4. Replay, count/status/grant evidence khác phải fail trước consume/ADB.
+- Fresh identity/APK/Awake, cold, permission/owner/foreground/heartbeat và firmware pins giữ nguyên. Attach/Open app xử lý trước permission-first; chỉ quyền OS verified thật mới đi tiếp. `-75`/`-71` hoặc detach sau reload đóng cả phiên, không tự thêm lượt.
+- Giữ APK/native/firmware/frontend không đổi vì lỗi nằm ở host parser. Card/helper hash mới cần `OK B5` riêng. Người dùng duyệt thiết kế không đồng nghĩa được chạy bản chưa kiểm. Không stage/commit/push.
+
+### Alternatives / Trade-offs
+
+Dừng với kết quả Android NOT RUN là phương án hợp lệ; người dùng chọn đúng một lượt bổ sung có kế thừa ngân sách để vượt lỗi điều phối/host đã được kiểm. Không ép app foreground bằng auto-tap, bỏ kiểm quyền, dùng PID/Activity không rõ, sửa receipt hoặc chạy lặp cho đến khi hết lỗi.
+
+### Validation / Reopen trigger
+
+Cần actual snapshot parser PASS sau sửa/FAIL trước sửa, negative ambiguity tests, serialized budget extension/replay/tamper tests và regression carry/migration/helper. Validator actual card phải kiểm toàn source/ledger/review trước live; không dùng fixture PASS thay quyền hardware. Nếu ordinal 4 vẫn bị chặn hoặc transport lỗi, dừng và báo evidence; không tự mở ordinal 5.
+
+## ADR-060 — Chuyển target ADB chỉ cho lượt K25 cuối, kế thừa hai lượt trước grant đã consume
+
+**Date:** 2026-11-13, sau Android preparation 1/2 và người dùng ngắt/nối lại ADB.
+
+**Status:** Approved design; người dùng đã duyệt triển khai hẹp, còn phải kiểm helper và duyệt card mới trước live.
+
+### Context / Evidence
+
+Successor card `8b0072a7…ba60e9` đã được duyệt và cài đúng APK một install-r, history 581 byte/SHA `556f248a…98d128` trước-sau nguyên. Hai ordinal đã consume đều PRE_GRANT_HOST_REFUSAL, chưa publish grant, chưa A0/reload/URB: lượt 1 timeout khi tuner còn rút; lượt 2 CANCELLED khi xử lý hộp thoại mở ứng dụng. Đã review PRE_IO_REFUSED cả hai bằng hash chứng cứ thật. Người dùng chọn ordinal 3 K25 cuối và giới hạn tổng nhiệm vụ không quá sáu Android, không tăng vô hạn.
+
+Người dùng sau đó xác nhận lỡ ngắt/nối lại ADB, không đổi Wi-Fi. Alias TCP đã pin trong card mất; alias mới xác minh cùng OnePlus/GM1900/API 30/boot 408 và history nguyên. Không gọi helper với alias cũ vì identity check sau consume có thể làm mất lượt cuối; không thay alias ngầm định vì card/header phải khớp. Ledger Android 3219 byte/SHA `1aaa16803da62493db50661f09cf6ffe472fd8333a7593dfb7dff1854f22b263` giữ nguyên, ordinal 3 chưa consume.
+
+### Decision
+
+- Chỉ hỗ trợ một chuyển target có card mới, giữ cùng budget/session và kế thừa hai ordinal đã dùng. Card mới chỉ cho **ordinal 3 K25 MANUAL PLP0**; AUTO fallback đã duyệt vẫn tối đa một lần sau manual không demod lock. Không thêm K36/tách xa hoặc mở Windows trong card này.
+- Khóa exact prior card, ledger SHA/length, hai consume/receipt/review PRE_IO_REFUSED và carry Windows đã có. Không sửa header/bytes/số lượt cũ; ledger migration mới append-only phải bind successor card, prior ledger và next ordinal 3, không tạo ngân sách từ UUID mới.
+- Target mới phải đúng alias card mới và profile/model/API/boot đã xác minh; prior alias chỉ là provenance. Bất kỳ hash/prefix/count/status khác, pre-I/O không được chứng minh, grant cũ có thể đã publish, receipt đóng hoặc lỗi firmware/transport đều từ chối trước consume/ADB.
+- Trước execution vẫn cần fresh cold, owner/USB permission thật, foreground/heartbeat và firmware/APK/plan pins. Xử lý USB attach/Open app trước khi launch permission-only để tránh chooser làm mất foreground; không coi bấm Open app là bằng chứng permission. Không tự reconnect/pair hoặc đổi mạng/khóa màn hình.
+- `-75`/`-71` hoặc detach sau reload sạch vẫn đóng cả phiên. Không chạy “đến hết lỗi”, không vượt card hoặc trần sáu Android, không reset/rearm. Source Android/APK/native/firmware giữ nguyên; chỉ helper/tests thay đổi. Card mới cần `OK B5` riêng.
+
+### Alternatives / Trade-offs
+
+Có thể dừng và giữ lượt cuối chưa dùng; người dùng chọn chuyển target được kiểm chứng để dùng đúng lượt còn lại. Không dùng forwarding ADB, sửa card cũ, thay serial qua wrapper hoặc bỏ chốt header. Không lấy kiểm read-only của alias mới làm quyền nạp firmware.
+
+### Validation / Reopen trigger
+
+Bắt buộc serialized tests cho kế thừa đúng hai consume, chỉ ordinal 3/K25, hash/length/review/status/alias/model/boot sai, replay và Windows không được cấp quyền. Chạy validator trên actual card mới trước main/ADB/consume; giữ nguyên mọi evidence cũ. Android OFF/ON và reload trên OnePlus vẫn NOT RUN tại thời điểm ghi ADR.
+
+## ADR-059 — Tiếp nối B5 chỉ Android sau Windows K25 chạm giới hạn capture; giữ nguyên sổ và số lượt đã dùng
+
+**Date:** 2026-11-13, sau Windows K25 của card v2 `8f799b34…d6fe6`.
+
+**Status:** Approved design, chưa là quyền thực thi. Người dùng đã chọn tiếp nối có kế thừa số lượt; phải kiểm guard offline và trình card mới trước live. Không sửa/reset receipt đã đóng.
+
+### Context / Evidence
+
+Windows K25 thu TS 159999844 byte, pcap 163272178 byte; TSDuck exit 0/natural, wall 39,721323 giây. Helper yêu cầu wall ít nhất 40 giây nên ghi CAPTURE_INCOMPLETE và receipt `session_closed=true`. Kích thước TS bằng `floor(160000000/188)*188`, phù hợp việc chạm byte cap; manifest không ghi điều kiện nội bộ của plugin, nên đây là suy luận mạnh chứ không phải reason được log trực tiếp. Không có Android attempt hoặc reload OnePlus trong phiên này. Các process capture đã đóng, người dùng đã rút/ngắt nguồn.
+
+Mẫu K25 có PAT/PMT/SDT và 13 dịch vụ VTV, bitrate PCR ước lượng khoảng 35,58 Mbps, nhưng CC 837/TEI 24036; không phải mẫu sạch. SNR mọi raw 19,696/20,347/21,559 dB, RSSI theo AGC −64,85 dBm. Chưa có OFF/ON trên Android để phân biệt giả thuyết. Chốt budget hiện hành vẫn có hiệu lực; số học còn lượt không tự cho quyền tiếp tục.
+
+### Decision
+
+- Giữ nguyên toàn bộ bytes/hash card v1/v2, Windows header/CONSUME/RECEIPT và result manifest. Không đổi `session_closed`, không xóa hoặc reset ledger, không tạo UUID để vượt chốt.
+- Card kế tiếp chỉ cho ba Android đã lên kế hoạch, cùng `budget_id`/`session_id`, kế thừa Windows đã dùng 1/2 và Android đã dùng 0. Một Windows còn lại chỉ là trần số học, **không được card tiếp nối này cấp quyền chạy**; không thu lại Windows K25. Nếu cần Windows khác phải có quyết định riêng giữ tổng nhiệm vụ không quá hai.
+- Ngoại lệ đọc receipt đóng chỉ được chấp nhận khi successor card khóa exact SHA/length/path của ledger Windows và result manifest cũ, prior card SHA, số lượt đã dùng, lý do giới hạn thời lượng/capture và evidence cleanup. Được phép duy nhất trạng thái CAPTURE_INCOMPLETE với TSDuck natural exit 0, các process của lượt đã đóng và không có Android firmware/USB uncertainty. Exit −1 của recorder được dừng có chủ đích sau đóng BDA không bị tráo thành data URB error.
+- Hash/length/prefix/count/status không khớp, ledger thiếu hoặc bị thay, process chưa đóng, xuất hiện `-75`/`-71`, detach sau reload hoặc kết quả không rõ phải từ chối **trước** Android consume/ADB. Không dùng nhãn continuation như quyền bỏ heartbeat, foreground, permission, owner, generation, firmware pins hoặc cold proof.
+- Android ledger mới vẫn append-only và phải bind successor card/carry evidence. Replay, đổi UUID hoặc successor card khác không được tạo ngân sách mới. Từng lượt vẫn cần người dùng cold ít nhất năm giây; stop/drain và đóng cả phiên khi `-75`/`-71` hoặc detach sau reload giữ nguyên.
+- Không đổi APK/native/firmware/frontend để xử lý lỗi giới hạn capture; chỉ sửa helper và test guard liên quan. Card mới cần `OK B5` riêng, không dùng phê duyệt hash cũ. Không stage/commit/push.
+
+### Alternatives / Trade-offs
+
+Không gọi mẫu 39,72 giây là capture đủ 40 giây, không sửa hồi tố receipt hoặc nâng PASS để chạy tiếp. Người dùng chọn dùng mẫu K25 hiện có làm đối chứng chẩn đoán và tiếp tục phần Android sau kiểm guard; không tự tiêu lượt Windows cuối. Điều này giữ bằng chứng lỗi helper/cap tách khỏi phép thử nhiễu, nhưng chưa chứng nhận đủ điều kiện chất lượng hoặc parity.
+
+### Validation / Reopen trigger
+
+Cần fake serialized JSON cho carry hợp lệ, hash/length/prefix/status/count sai, thiếu manifest, process chưa đóng, failure transport và replay; giữ regression helper cũ. Chỉ trình successor card sau khi kiểm exact frozen ledger/result mà không sửa chúng. Hardware tiếp nối NOT RUN ở thời điểm quyết định này.
+
+## ADR-058 — B5: phân biệt demod lock với nhịp TS, đo tín hiệu khi bật/tắt Bulk và thêm K25/OnePlus
+
+**Date:** 2026-11-13, baseline `6adde854e680948ff993bf552543c3e26a266be9`.
+
+**Status:** Implemented và các gate offline liên quan đã PASS; emulator cuối 38/38, card đã khóa hash. Phần cứng **NOT RUN**, chỉ được mở sau câu `OK B5` cho card `0c9de1656690f8a9b736401319e26b0837461715eb6b6f2bde87ad0648acae2d`. Người dùng chọn giữ nguyên ADR-057 lịch sử và dùng số ADR-058 cho B5.
+
+### Context / Evidence
+
+B4 đã dừng theo điều kiện của card cũ dựa trên bit TS lock; điều đó không tự chứng minh bộ giải điều chế mất đồng bộ. `20:10=06` vẫn có SYNC_STAT 6 và không có unlockDetected. Các số đọc Windows/Android và giả thuyết SNR giảm khi có Bulk phải được kiểm lại trên pcap/export gốc; không chuyển nhận xét đầu vào thành kết quả mới mà chưa đối chiếu.
+
+Người dùng đã xác nhận đầu thu Pantesat HD-95 T2 xem tốt K25/K36 bằng cùng một sợi cáp anten với TBS5530, không qua bộ chia. Phần trăm chất lượng của đầu thu không phải thang SNR của TBS. Samsung/cáp chữ Y/pin dự phòng không cho tách xa các phần; OnePlus 7 cấp nguồn trực tiếp qua OTG nên phù hợp phép thử bố trí. OnePlus `GM1900`/API 30 từng có `-75`/`-71` trước reload; reload sau SET_CONFIGURATION trên máy này vẫn chưa được kiểm phần cứng.
+
+### Decision
+
+- B5 dùng demod lock khi SYNC_STAT `(raw & 7) == 6` và `(raw & 0x10) == 0`. Bit `0x20` chỉ thống kê TS lock theo frame, không làm watchdog dừng. Trong pha ON, dừng khi demod unlock đã xác nhận liên tục **hơn** hai giây hoặc không có Bulk completion quá hai giây. Giữ mọi chốt permission, owner, foreground, heartbeat thật và drain.
+- Tính SNR từ raw BE16 ở `20:28` dù TS lock bằng 0, clamp 10876, công thức `10 * log10(r / (12600 - r)) + 32` dB. Raw bằng 0 hoặc đọc/cleanup không hợp lệ giữ UNKNOWN, không gán 0 dB. Monitor khoảng 100 ms có jitter ngẫu nhiên ±20 ms; timestamp dùng CLOCK_MONOTONIC cùng nguồn native. Lỗi monitor được ghi riêng, không phá pha hoặc giả một mẫu lỗi thành demod unlock.
+- Pre-BCH BER và L1 chỉ giải mã khi có valid bit, mẫu số và mapping có nguồn pin SHA/file/hàm/dòng; giữ UNKNOWN cho mã dự phòng, dữ liệu chưa đủ hoặc ánh xạ chéo chip chưa xác nhận. Đối chiếu Linux mainline CXD2880 là nguồn giải thích độc lập, không phải bằng chứng chip TBS đã được chứng nhận tương thích mọi monitor.
+- Chuỗi RSSI đã đối soát: `87=C4 41`, `59=05 01`, đọc `5B`, `59=03 01`, đọc `5B`, `59=04`, `88=00`, `87=C0`, đọc `69`. Các ghi chỉ chọn mạch ADC đo AGC rồi trả trạng thái tuner về `C0/00` Windows dùng; **không cấp quyền ghi khác bằng nhãn “đọc RSSI”**. Pcap B4 cả bảy chuỗi dùng `88=00`, còn nguồn Linux dùng `04`; người dùng đã đính chính đề bài và chọn `00/C0`. Golden Android sau init và sau tune đều kết thúc `87=C0`, `88=00`, nên cleanup này không để lại khác biệt so với baseline frontend. Chỉ đo ba lần trong mỗi pha OFF, không đo trong ON. Đây là chuỗi được phân tích và duyệt cho thiết kế B5, không phải quyền live trước card/`OK B5`.
+- K25 là 506 MHz/8 MHz, K36 giữ 594 MHz/8 MHz; mặc định MANUAL PLP0. K25 chỉ được AUTO đúng một lần sau manual không demod lock. Golden K25 phải chỉ khác trường tần số tuner so với K36; golden AUTO retune phải pin riêng vì chương trình retune không giống AUTO cold. Không mở tần số/PLP tùy ý hoặc scan vòng lặp.
+- Chỉ B5 thêm OnePlus `GM1900`/API 30 vào đường reload/receive đã duyệt, dùng explicit ADB serial và kiểm model thực; không ghi serial vào hồ sơ. Giữ permission-first, hộp thoại 30 giây, handoff-events và cấp quyền operational mới sau re-enumeration. Không đổi chốt Samsung của recovery/init hoặc namespace lịch sử để mở OnePlus một cách ngầm định.
+- Một lượt B5 gồm OFF1 10 giây sau lock và `8A 0A00` nhưng không submit URB; ON1 30 giây native 16 × 16384 và ghi TS; OFF2 10 giây chỉ sau discard/drain sạch; ON2 10 giây stream lại. Gắn 2048 byte đầu ON1 là STALE_PREFIX, giữ nguyên raw. Không giải phóng/quay vòng tài nguyên đang outstanding hoặc chạy tiếp sau quarantine.
+- Phiên mới tối đa sáu lượt Android trên OnePlus và hai capture Windows, kể cả lượt bị từ chối trước I/O. Mỗi lượt Android cần người dùng xác nhận ngắt nguồn ít nhất năm giây/đèn tắt. `-75`, `-71` hoặc detach sau reload sạch đóng **cả phiên**; giữ chứng cứ, không retry. Không mở ngân sách B4 đã đóng hoặc dùng UUID mới để lách chốt cũ.
+- Giữ tuyệt đối ADR-054: ảnh firmware gốc chỉ vào RAM, không EEPROM, LNB/DC, firmware patch, vendor chưa phân tích, đổi driver/ownership/VM/toolchain hoặc tự power-cycle. Không stage/commit/push; raw/TS/APK/firmware/serial chỉ ngoài Git. Chất lượng TS chưa ROOT_CAUSE_CONFIRMED khi chưa có ít nhất hai lượt nhất quán.
+
+### Alternatives / Trade-offs
+
+Bật/tắt URB giữ frontend và stream-select không đổi để kiểm xem SNR có thay đổi cùng lưu lượng Bulk hay không. OFF không có Bulk trên dây không đồng nghĩa RF sạch; FIFO đầy hoặc bộ ước lượng chưa ổn định vẫn là yếu tố cần ghi. SNR OFF cao hơn ON ít nhất 6 dB và lặp lại ở OFF2/ON2 chỉ ủng hộ giả thuyết nhiễu USB; cần so bố trí và các lượt độc lập trước kết luận nguyên nhân. Không yêu cầu người dùng mua phụ kiện hoặc đổi anten từ một lần đo.
+
+### Validation / Reopen trigger
+
+Bắt buộc fake bốn pha, drain giữa pha, TS `26/06` không dừng, demod unlock/Bulk stall đúng ngưỡng, lỗi monitor không phá pha, STALE_PREFIX, golden BER/SNR/RSSI, K25 và model/allowlist. Chạy gates như B4, xem lại lifecycle FAIL do model ngoài allowlist nhưng giữ nguyên mọi FAIL chưa chạy lại. Card chỉ freeze sau khi đối soát source/APK/helper và kết quả; phần cứng chờ `OK B5`. Kết quả theo pha/bố trí và mọi UNKNOWN ghi vào [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md) và [WORKLOG.md](WORKLOG.md).
+
 ## ADR-057 — Giữ B4 cặp 1 là chưa đủ parity; sửa export offline mà không mở lại ngân sách đã đóng
 
 **Date:** 2026-11-13, sau cặp đo Windows1/Android1 được `OK B4`.

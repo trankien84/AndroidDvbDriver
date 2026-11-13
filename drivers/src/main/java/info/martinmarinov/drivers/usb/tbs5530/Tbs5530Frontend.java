@@ -189,6 +189,7 @@ public final class Tbs5530Frontend {
         public final int syncState;
         public final boolean tsLock;
         public final boolean unlockDetected;
+        public final boolean demodLocked;
         public final boolean locked;
         public final Metric signalStrength = Metric.NOT_AVAILABLE;
         public final Metric cnr = Metric.NOT_AVAILABLE;
@@ -200,9 +201,9 @@ public final class Tbs5530Frontend {
             syncState = raw & 7;
             tsLock = (raw & 0x20) != 0;
             unlockDetected = (raw & 0x10) != 0;
-            // cxd2878_read_status:3312-3323; this is not a TS packet/continuity observation.
-            // Reserved sync=7 is not sufficient evidence to authorize streaming.
-            locked = syncState == 6 && tsLock && !unlockDetected;
+            // TS lock can clear between DVB-T2 frames; only demod lock gates receive.
+            demodLocked = syncState == 6 && !unlockDetected;
+            locked = demodLocked;
         }
     }
 
@@ -302,9 +303,10 @@ public final class Tbs5530Frontend {
             throw new UnsupportedOperationException("CXD6802 L1 monitor is not source-verified");
         }
         if (parameters.selection.mode == Tbs5530DvbT2TuneParameters.Mode.AUTO
-                && (!experimentalAuto || chipId != 0x197 || parameters.frequencyHz != 594_000_000L
+                && (!experimentalAuto || chipId != 0x197
+                || (parameters.frequencyHz != 594_000_000L && parameters.frequencyHz != 506_000_000L)
                 || parameters.bandwidthHz != 8_000_000)) {
-            throw new UnsupportedOperationException("Experimental AUTO requires separate consent and exact K36/8MHz/0x197 scope");
+            throw new UnsupportedOperationException("Experimental AUTO requires separate consent and exact K25 or K36/8MHz/0x197 scope");
         }
         Builder b = new Builder();
         Tbs5530Cxd2878Sequences.tune(b, parameters, tuned);

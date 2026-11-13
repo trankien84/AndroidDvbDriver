@@ -54,6 +54,7 @@ static int init(struct tbs_stream *s, struct tbs_stream_ops ops,
             || !ops.discard || !ops.metadata || !ops.nanos || !ops.wait) return -EINVAL;
     memset(s, 0, sizeof(*s));
     atomic_init(&s->stop, TBS_STREAM_RUNNING);
+    atomic_init(&s->completion_nanos, 0);
     atomic_init(&s->ring_head, 0); atomic_init(&s->ring_tail, 0);
     atomic_init(&s->producer_done, 0); atomic_init(&s->writer_active, 0);
     for (int i = 0; i < 14; ++i) atomic_init(&s->published[i], 0);
@@ -227,6 +228,7 @@ static int reap_one(struct tbs_stream *s, int draining, int64_t *reaped_at, stru
         s->uncertain = 1; stop_with(s, TBS_STREAM_IDENTITY); return -2;
     }
     p->pending = 0; --s->outstanding; ++s->completed;
+    if (!draining && after >= 0) atomic_store(&s->completion_nanos, after);
     s->last_status = m->status; s->last_actual = m->actual;
     s->last_slot = slot; s->last_sequence = p->sequence;
     record(s, 2, slot, c, before, after, m);

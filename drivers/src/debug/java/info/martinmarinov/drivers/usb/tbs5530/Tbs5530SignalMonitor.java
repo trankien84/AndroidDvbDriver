@@ -20,13 +20,19 @@ public final class Tbs5530SignalMonitor {
     public static final long LOCK_LOSS_NANOS = 2_000_000_000L;
     private static final long MAX_CONFIRMED_GAP_NANOS = 2 * TICK_NANOS;
     private static final int TIMEOUT_MILLIS = 2000;
-    private static final int[][] INVENTORY = {
+    private static final int[][] LEGACY_INVENTORY = {
             {0x20, 0x10, 1}, {0x20, 0x28, 2}, {0x20, 0x72, 1},
             {0x22, 0x12, 1}, {0x22, 0x5b, 1}, {0x22, 0x5c, 1}, {0x22, 0x5e, 1},
             {0x24, 0x40, 4}
     };
+    private static final int[][] B5_INVENTORY = {
+            {0x20, 0x10, 1}, {0x20, 0x28, 2}, {0x20, 0x72, 1},
+            {0x22, 0x12, 1}, {0x22, 0x54, 1}, {0x22, 0x5b, 1}, {0x22, 0x5c, 1}, {0x22, 0x5e, 1}, {0x22, 0x62, 1},
+            {0x24, 0x40, 4}
+    };
     private final Tbs5530ControlIo io;
     private final Clock clock;
+    private final int[][] inventory;
     private boolean sampled, losingLock;
     private long lastStart, lossSince, lastLossObservation;
 
@@ -36,6 +42,10 @@ public final class Tbs5530SignalMonitor {
 
     /** Tuner ADC/repeater writes are intentionally unsupported, even with an explicit opt-in. */
     public Tbs5530SignalMonitor(Tbs5530ControlIo io, Clock clock, boolean tunerRssi) {
+        this(io, clock, tunerRssi, false);
+    }
+    public Tbs5530SignalMonitor(Tbs5530ControlIo io, Clock clock, boolean tunerRssi, boolean b5) {
+        inventory = b5 ? B5_INVENTORY : LEGACY_INVENTORY;
         if (tunerRssi) throw new IllegalArgumentException(
                 "TUNER_RSSI_UNSUPPORTED: Windows 88=00 differs from official ASCOT3 RSSI cleanup 88=04; no approved exact sequence");
         this.io = Objects.requireNonNull(io);
@@ -103,7 +113,7 @@ public final class Tbs5530SignalMonitor {
         try {
             write(0x00, 0x20); bank = 0x20;
             write(0x01, 1);
-            for (int[] reg : INVENTORY) {
+            for (int[] reg : inventory) {
                 if (bank != reg[0]) {
                     try { write(0x00, reg[0]); bank = reg[0]; }
                     catch (IOException | RuntimeException e) {
@@ -139,7 +149,7 @@ public final class Tbs5530SignalMonitor {
         long observation = end;
         for (RegisterRead r : reads) if (r.bank == 0x20 && r.register == 0x10) observation = r.endNanos;
         if (!cleanup || end - start < 0 || end - observation > MAX_CONFIRMED_GAP_NANOS
-                || metrics.lock != Tbs5530SignalMetrics.Lock.LOST) {
+                || !demodLost(reads)) {
             losingLock = false;
         } else {
             long gap = observation - lastLossObservation;
@@ -151,6 +161,15 @@ public final class Tbs5530SignalMonitor {
         }
         long loss = losingLock ? observation - lossSince : 0;
         return new Sample(start, end, reads, errors, metrics, cleanup, loss);
+    }
+
+    private static boolean demodLost(List<RegisterRead> reads) {
+        for (RegisterRead r : reads) if (r.bank == 0x20 && r.register == 0x10) {
+            int status = r.getBytes()[0] & 255;
+            int sync = status & 7;
+            return sync != 7 && (sync != 6 || (status & 0x10) != 0);
+        }
+        return false;
     }
 
     private void write(int register, int value) throws IOException {

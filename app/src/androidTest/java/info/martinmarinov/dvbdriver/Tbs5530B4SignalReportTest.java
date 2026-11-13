@@ -45,11 +45,24 @@ public class Tbs5530B4SignalReportTest {
                 JSONObject row;
                 try (BufferedReader input = new BufferedReader(new FileReader(audit))) { row = new JSONObject(input.readLine()); }
                 assertEquals("CLOCK_MONOTONIC", row.getString("clock"));
+                assertEquals(880, row.getInt("snr_raw"));
+                assertEquals(20.75555060468097, row.getDouble("snr_db_observed"), 0.000001);
+                assertTrue(row.isNull("ber"));
+                assertEquals(!failCleanup, row.getBoolean("cleanup_succeeded"));
                 if (failCleanup) {
-                    assertEquals("UNKNOWN", row.getString("lock")); assertTrue(row.isNull("snr_db"));
-                    assertFalse(row.getBoolean("cleanup_succeeded")); assertTrue(row.getJSONArray("errors").length() > 0);
+                    assertTrue(row.isNull("snr_db")); assertTrue(row.isNull("snr_db_curve"));
+                    assertEquals("UNKNOWN", row.getString("lock"));
+                    assertEquals("UNKNOWN", row.getString("demod_lock"));
+                    assertEquals(1, row.getJSONArray("errors").length());
+                    assertEquals("UNFREEZE", row.getJSONArray("errors").getJSONObject(0).getString("operation"));
+                    assertEquals("MONITOR_IO_ERROR", row.getJSONArray("errors").getJSONObject(0).getString("code"));
+                    assertFalse(row.getBoolean("stop_for_lock_loss"));
                 } else {
-                    assertEquals("LOCKED", row.getString("lock")); assertEquals(19.4, row.getDouble("snr_db"), 0.001);
+                    assertEquals(20.75555060468097, row.getDouble("snr_db"), 0.000001);
+                    assertEquals(row.getDouble("snr_db"), row.getDouble("snr_db_curve"), 0.0);
+                    assertEquals("LOCKED", row.getString("lock"));
+                    assertEquals("LOCKED", row.getString("demod_lock"));
+                    assertEquals(0, row.getJSONArray("errors").length());
                 }
             } finally { assertTrue(audit.delete()); assertTrue(directory.delete()); }
         }

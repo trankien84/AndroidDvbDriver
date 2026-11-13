@@ -20,20 +20,29 @@ final class Tbs5530SignalSampler implements AutoCloseable {
     private volatile boolean lockLost;
     private volatile String failure;
 
-    Tbs5530SignalSampler(Factory factory) {
+    Tbs5530SignalSampler(Factory factory) { this(factory, false); }
+
+    Tbs5530SignalSampler(Factory factory, boolean b5) {
         thread = new Thread(() -> {
             try {
                 SampleOperation operation = factory.create(Thread.currentThread(), stopping);
                 ready.countDown();
                 while (!stopping.get()) {
                     long started = System.nanoTime();
-                    Tbs5530SignalMonitor.Sample sample = operation.sample();
-                    synchronized (samples) {
-                        if (samples.size() == 512) { failure = "MONITOR_SAMPLE_CAPACITY"; break; }
-                        samples.add(sample);
+                    try {
+                        Tbs5530SignalMonitor.Sample sample = operation.sample();
+                        synchronized (samples) {
+                            if (samples.size() == 512) { failure = "MONITOR_SAMPLE_CAPACITY"; break; }
+                            samples.add(sample);
+                        }
+                        if (sample.stopForLockLoss) { lockLost = true; break; }
+                    } catch (IOException | RuntimeException error) {
+                        if (!b5) throw error;
+                        failure = "MONITOR_SAMPLE_ERROR:" + error.getClass().getSimpleName();
                     }
-                    if (sample.stopForLockLoss) { lockLost = true; break; }
-                    long remaining = Tbs5530SignalMonitor.TICK_NANOS - (System.nanoTime() - started);
+                    long tick = b5 ? java.util.concurrent.ThreadLocalRandom.current().nextLong(
+                            80_000_000L, 120_000_001L) : Tbs5530SignalMonitor.TICK_NANOS;
+                    long remaining = tick - (System.nanoTime() - started);
                     if (remaining > 0 && !stopping.get()) TimeUnit.NANOSECONDS.sleep(remaining);
                 }
             } catch (InterruptedException error) {

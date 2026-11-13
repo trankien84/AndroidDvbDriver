@@ -1,5 +1,27 @@
 # Kiểm kê môi trường
 
+## 2026-11-13, B5 OnePlus K25 thực đã đóng — OTG trực tiếp, không nguồn phụ; candidate export hậu kiểm chưa chạy hardware
+
+OnePlus `GM1900`/API 30/boot 408 dùng APK debug `90c7c616ba34dc8b891051203aa2d00805cd8195d987ccb2c3cd5fc0da6bf7e4`, install-r đúng một lần và history 581 byte/SHA `556f248a…98d128` trước–sau cài nguyên. Lượt nhận thật ordinal 4 sau ba refusal trước grant được duyệt riêng theo card `0aad1b96…f217c5`. Bố trí thực do người dùng báo khoảng 33 cm, cáp 1 m, anten thụ động RF IN/không DC, OTG cấp nguồn trực tiếp, không pin dự phòng hoặc phụ kiện khác. Đây là lần đầu OnePlus chạy reload sau SET_CONFIGURATION: bootstrap/reload đều 132/132, không detach sau reload hoặc `-75`/`-71`, đủ bốn pha và drain sạch.
+
+User đã rút tuner/ngắt nguồn sau DRAIN_CONFIRMED rồi giữ OnePlus sáng để xuất file. 40 tệp/95374481 byte được lấy chỉ đọc, remote hash/size trước–sau-host khớp; không receive/firmware mới. Helper live `5bdc3334…159bd2b` và source manifest 505 tệp giữ riêng; working tree candidate `a3480759…ec24660` chỉ sửa deadline export sau drain, 23/90 focused/regression PASS, NOT USED ON HARDWARE. Không reset lịch sử hoặc ledger khi thu chứng cứ.
+
+OnePlus có hai alias ADB cùng máy; chọn explicit target, không default hoặc tự reconnect. Người dùng lỡ ngắt/nối lại làm alias thay đổi; việc chuyển target được card/ledger kế thừa hash riêng, không ghi serial/IP vào hồ sơ. Fresh read trước lượt thật xác minh đúng model/API/boot/Awake và app UID có OS USB permission. Attach/Open app được xử lý trước permission-first; operational re-enumeration vẫn cần hộp thoại quyền mới, người dùng bấm OK, không Luôn mở.
+
+Emulator riêng đã đóng trước live, các process Windows capture/helper đã thoát và không có helper live do phiên còn chạy. Toolchain/driver/VM/WSL/USB ownership software không đổi; chỉ người dùng rút/cắm vật lý theo chốt. K36 Android, tách xa hơn 70 cm và phụ kiện NOT RUN. Phần trăm 100% trên đầu thu Pantesat không được dùng thay SNR của TBS.
+
+## 2026-11-13, chuẩn bị B5 — Đầu thu đối chứng dùng cùng cáp; chọn OnePlus để tách xa thiết bị
+
+**USER-REPORTED:** Đầu thu Pantesat HD-95 T2 xem VTV1 HD tại K25 (506 MHz, 8 MHz) và kênh “Báo và PTTH Gia Lai” tại K36 (594 MHz, 8 MHz), báo chất lượng 100%, hình không lỗi. Đầu thu và TBS5530 dùng **cùng một sợi cáp anten, không qua bộ chia**; anten thụ động trên nóc nhà, không cấp DC. Đây là quan sát người dùng đã xác nhận, không phải phép đo SNR hoặc RSSI độc lập. Không hỏi lại điều kiện cáp và không dùng phần trăm của đầu thu thay số đo của TBS5530.
+
+Samsung dùng cáp chữ Y, tablet, pin dự phòng và hộp TBS phải nằm sát nhau nên không đủ khoảng cách để thử nhiễu. B5 chọn OnePlus 7 cấp nguồn trực tiếp qua OTG, không nguồn phụ, theo xác nhận người dùng. Hồ sơ trước đây xác minh model `GM1900`, manufacturer `OnePlus`, Android 11/API 30; lượt ngày 07/11 đã bootstrap/handoff và gặp completion `-75` rồi `-71`, actual 0, trước khi có reload sau SET_CONFIGURATION. Đó là lịch sử, không phải kết quả B5 hoặc bằng chứng reload đã được kiểm trên OnePlus. Khi chạy phải chọn explicit ADB serial và xác minh lại model/API; không ghi serial vào hồ sơ.
+
+Người dùng xác nhận trong lúc chuẩn bị B5: không có cáp nối dài, ferrite hoặc cáp chống nhiễu khác để thử; OnePlus có thể kết nối ADB không dây và TBS đang rút. Sau xác nhận đã nối ADB, kiểm chỉ đọc chọn đúng một alias TCP trong hai alias cùng máy và xác minh `OnePlus`/`GM1900`/API 30/boot 408/Awake. `dumpsys usb` có `host_manager={ num_connects=0 }`, không thiết bị host hiện tại; app đã có trên máy. Chưa install/launch hoặc gửi giao dịch tuner. Định danh ADB, đường dẫn APK và raw dumpsys chỉ ngoài Git. Không yêu cầu mua phụ kiện. Người dùng bổ sung: bố trí gọn cách hộp TBS–điện thoại khoảng **33 cm**; cáp hiện có dài **1 m**, kéo xa có thể hơn **70 cm**; dây anten không chạy song song hoặc quấn cạnh USB. Đây là bố trí được báo và dự kiến cho B5, chưa phải quan sát runtime của từng lượt. Không tự ghi khoảng cách khác hoặc đã chạy bố trí tách xa.
+
+Kiểm công cụ Windows chỉ đọc: TSDuck 3.45-4798, TShark 4.6.9, USBPcap 1.5.4.0, driver USBPcap Running. Đọc root property bằng GateBUsb xác minh mới `USBPcap3` là interface duy nhất khớp root SHA `b74573f7e338d03dd82e275d7c259b5ec98176289c54fb7b9f7285fe41c70b64` của cổng B4. Tuner đang rút, nên đây chỉ là kiểm root, chưa chứng minh attachment tuner trên root hoặc capture thành công. Không mở BDA/capture, không nâng quyền hoặc đổi driver.
+
+Baseline đầu phiên B5 đúng nhánh `chore/modernize-android-build`, HEAD `6adde854e680948ff993bf552543c3e26a266be9`, working tree sạch. Chỉ triển khai và kiểm offline trước card/`OK B5`; chưa cài APK hoặc thực hiện thao tác tuner mới. Giữ nguyên toolchain, driver và quyền sở hữu USB. [ADR-058](DECISIONS.md) dành cho B5 theo lựa chọn người dùng, giữ nguyên ADR-057 lịch sử.
+
 ## 2026-11-13, B4 cặp 1 — Samsung đã cài đúng APK và thu ngắn; tuner đã rút
 
 Sau `OK B4`, cài `install -r` đúng APK SHA `9a11db84775743843b3248592e15153e1c1efed90cd58d3938383fa2571ddfb4` một lần; hash APK installed đúng và năm witnesses/history trước-sau nguyên. Preflight đầu nhầm entry USB app filter trong dumpsys là thiết bị đang cắm nên dừng trước install; sau đọc cấu trúc host_manager xác minh inventory hiện tại rỗng, không sửa app/guard phần cứng để qua chốt. Samsung vẫn SM-X926B/API36/boot47, màn hình Awake lúc chạy; không tự đổi khóa/timeout.

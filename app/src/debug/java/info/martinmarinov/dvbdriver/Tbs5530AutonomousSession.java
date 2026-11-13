@@ -26,6 +26,7 @@ final class Tbs5530AutonomousSession {
     Tbs5530ReloadLedger reloadLedger;
     final boolean nativeStream;
     private String historyWarning = "NONE";
+    private JSONObject b5Budget;
     private volatile boolean receiving;
     private long bootstrapIoDeadline = Long.MAX_VALUE, reloadIoDeadline = Long.MAX_VALUE;
     private void requireBootstrapIoBudget() throws IOException {
@@ -36,11 +37,38 @@ final class Tbs5530AutonomousSession {
         if (nativeStream && SystemClock.elapsedRealtime() >= reloadIoDeadline) throw new IOException("B3 reload I/O deadline; no retry");
     }
     int streamQueueDepth = 16, streamUrbBytes = 16384;
-    boolean b4Capture, tunerRssi;
+    boolean b4Capture, b5Capture, tunerRssi;
+    volatile Tbs5530B5Runner b5Runner;
+    Boolean b5ManualDemodLock;
+    boolean b5FallbackUsed;
+    private Tbs5530Frontend.Plan b5FallbackPlan;
+    Tbs5530OperationalApproval fallbackApproval(Tbs5530Frontend.Plan plan) throws IOException {
+        if (!b5Capture || frontendExperiment != Tbs5530FrontendExperiment.B5_K25_MANUAL_PLP0
+                || !Boolean.FALSE.equals(b5ManualDemodLock) || b5FallbackUsed)
+            throw new IOException("B5 K25 AUTO requires one failed same-epoch manual demod poll");
+        golden.requireK25Fallback(plan); b5FallbackUsed = true; b5FallbackPlan = plan;
+        return approval(plan, null);
+    }
+    final java.util.Map<String, info.martinmarinov.usbxfer.NativeUsbfsStream.Result> b5Results = new java.util.LinkedHashMap<>();
+    final java.util.Map<String, Tbs5530AutonomousCapture> b5Captures = new java.util.LinkedHashMap<>();
+    void configureB5() throws IOException {
+        if (!nativeStream || accepted || b4Capture || !frontendExperiment.isB5() || streamQueueDepth != 16 || streamUrbBytes != 16384)
+            throw new IOException("Invalid B5 capture scope");
+        b5Capture = true; streamDurationMillis = 30000; streamMaxBytes = 256 * 1024 * 1024;
+        try {
+            challenge.put("b5_enabled", true).put("b5_layout", Tbs5530B5Runner.LAYOUT)
+                    .put("b5_stale_prefix_bytes", 2048).put("b5_monitor_period_ms", 100)
+                    .put("b5_monitor_jitter_ms", 20).put("b5_rssi_samples_per_off", 3)
+                    .put("b5_rssi_sequence", "WINDOWS_88_00_87_C0")
+                    .put("b5_allow_k25_auto", frontendExperiment == Tbs5530FrontendExperiment.B5_K25_MANUAL_PLP0)
+                    .put("b3_duration_ms", streamDurationMillis).put("b3_max_bytes", streamMaxBytes);
+            Tbs5530DurableFile.write(new File(root, PREFIX + "-challenge.json"), challenge.toString().getBytes(StandardCharsets.UTF_8));
+        } catch (org.json.JSONException error) { throw new IOException(error); }
+    }
     int streamDurationMillis = 2000, streamMaxBytes = 4 * 1024 * 1024;
     void configureB4(int durationMillis, int maxBytes, boolean tunerRssi) throws IOException {
         if (tunerRssi) throw new IOException("TUNER_RSSI_UNSUPPORTED_REQUIRES_REVIEWED_EXACT_SEQUENCE");
-        if (!nativeStream || accepted || (streamQueueDepth != 16 && streamQueueDepth != 32)
+        if (!nativeStream || accepted || b5Capture || frontendExperiment.isB5() || (streamQueueDepth != 16 && streamQueueDepth != 32)
                 || streamUrbBytes != 16384 || durationMillis < 1000 || durationMillis > 60000
                 || maxBytes != 256 * 1024 * 1024)
             throw new IOException("Invalid B4 capture scope");
@@ -64,7 +92,7 @@ final class Tbs5530AutonomousSession {
     }
     volatile Tbs5530AndroidBootstrap.CleanProof bootstrapProof;
     volatile Tbs5530Fx2Reload.Snapshot reloadSnapshot;
-    boolean reloadEnabled() { return frontendExperiment == Tbs5530FrontendExperiment.B2_RELOAD_AFTER_SET_CONFIG; }
+    boolean reloadEnabled() { return frontendExperiment == Tbs5530FrontendExperiment.B2_RELOAD_AFTER_SET_CONFIG || frontendExperiment.isB5(); }
     private final Tbs5530HistoryFence.Store historyStore;
     private final Tbs5530HistoryFence historyFence;
     private Tbs5530ReceiveAudit receiveAudit;
@@ -148,7 +176,9 @@ final class Tbs5530AutonomousSession {
                             Tbs5530HistoryFence.Store injectedHistory) throws IOException {
         nativeStream = "NATIVE_USBFS_STREAM".equals(requestedApi);
         frontendExperiment = Tbs5530FrontendExperiment.parse(experiment);
-        if (nativeStream && frontendExperiment != Tbs5530FrontendExperiment.B2_RELOAD_AFTER_SET_CONFIG)
+        if (frontendExperiment == Tbs5530FrontendExperiment.B5_K25_AUTO)
+            throw new IOException("B5 K25 AUTO is a same-session fallback, not a cold launch");
+        if (nativeStream && frontendExperiment != Tbs5530FrontendExperiment.B2_RELOAD_AFTER_SET_CONFIG && !frontendExperiment.isB5())
             throw new IOException("B3 requires the unchanged B2 firmware and frontend pipeline");
         frontendExperiment.requireOptions(requestedApi, mirror, explicitAlt0, controlOnly, sonyReadback);
         sonyTsOutputReadback=sonyReadback;
@@ -164,7 +194,9 @@ final class Tbs5530AutonomousSession {
         hostProfile = Tbs5530VerifiedHost.profile(model, api);
         historyPrefix = Tbs5530VerifiedHost.historyPrefix(hostProfile);
         contextForLedger = context.getApplicationContext();
-        if (reloadEnabled() && (!"SM-X926B".equals(model) || api != 36)) throw new IOException("B2 first host is Samsung SM-X926B/API36 only");
+        if (reloadEnabled() && !("SM-X926B".equals(model) && api == 36)
+                && !(frontendExperiment.isB5() && "GM1900".equals(model) && api == 30))
+            throw new IOException("Reload host is not allowlisted for this experiment");
         reloadLedger = reloadEnabled() && !nativeStream ? new Tbs5530ReloadLedger(new Tbs5530ReloadStore(contextForLedger)) : null;
         historyStore = nativeStream || frontendExperiment == Tbs5530FrontendExperiment.BASELINE_AUTO ? null
                 : injectedHistory != null ? injectedHistory : () -> Tbs5530HistoryRecoveryStore.readSnapshot(contextForLedger, historyPrefix);
@@ -221,7 +253,8 @@ final class Tbs5530AutonomousSession {
             if (launchToken != null) challenge.put("launch_token", launchToken).put("control_plane_only", controlPlaneOnly);
             challenge.put("attachment_history_sha256", historyFence == null ? JSONObject.NULL : historyFence.sha256());
             if (reloadEnabled()) challenge.put("fx2_reload_option", Tbs5530Fx2Reload.OPTION)
-                    .put("fx2_reload_plan_sha256", Tbs5530Fx2Reload.planSha256())
+                    .put("fx2_reload_plan_sha256", frontendExperiment.isB5()
+                            ? Tbs5530Fx2Reload.b5PlanSha256(frontendExperiment, model, api) : Tbs5530Fx2Reload.planSha256())
                     .put("fx2_reload_store_sha256", reloadLedger.sha256()).put("fx2_reload_anchor_sha256", reloadLedger.anchorSha256())
                     .put("bootstrap_proof", "SAME_SESSION_ORIGINAL132_APP_BOUNDARIES_DRAIN_REQUIRED").put("max_reload_per_physical_epoch", 1);
             challenge.put("sony_ts_output_readback",sonyTsOutputReadback);
@@ -266,6 +299,17 @@ final class Tbs5530AutonomousSession {
             if (nativeStream) {
                 for (String key : new String[]{"b3_queue_depth", "b3_urb_bytes", "b3_max_bytes", "b3_duration_ms"})
                     if (!challenge.get(key).toString().equals(grant.get(key).toString())) throw new IOException("B3 receive scope mismatch: " + key);
+                if (b5Capture) {
+                    for (String key : new String[]{"b5_enabled", "b5_layout", "b5_stale_prefix_bytes", "b5_monitor_period_ms", "b5_monitor_jitter_ms", "b5_rssi_samples_per_off", "b5_allow_k25_auto", "b5_rssi_sequence"})
+                        if (!challenge.get(key).equals(grant.get(key))) throw new IOException("B5 scope mismatch: " + key);
+                    Tbs5530AutonomousLaunch.requireB5Budget(grant.getString("b5_card_sha256"), grant.getString("b5_budget_id"),
+                            grant.getString("b5_session_id"), grant.getInt("b5_attempt_ordinal"), grant.getInt("b5_max_attempts"),
+                            grant.getInt("b5_physical_cold_seconds"));
+                    b5Budget = new JSONObject();
+                    for (String key : new String[]{"b5_card_sha256", "b5_budget_id", "b5_session_id", "b5_attempt_ordinal", "b5_max_attempts", "b5_physical_cold_seconds"})
+                        b5Budget.put(key, grant.get(key));
+                } else if (grant.optBoolean("b5_enabled", false)) throw new IOException("Unexpected B5 grant");
+                if (frontendExperiment.isB5() != b5Capture) throw new IOException("Explicit B5 configuration required");
                 if (b4Capture) {
                     for (String key : new String[]{"b4_enabled", "b4_duration_ms", "b4_max_bytes", "b4_tuner_rssi"})
                         if (!challenge.get(key).equals(grant.get(key))) throw new IOException("B4 receive scope mismatch: " + key);
@@ -343,7 +387,9 @@ final class Tbs5530AutonomousSession {
     }
     Tbs5530OperationalApproval approval(Tbs5530Frontend.Plan plan, Tbs5530TsSmoke.Limits limits) throws IOException {
         requireDeviceIo(); require(); boundary.require();
-        if (plan != null) golden.require(plan); else {
+        if (plan != null) {
+            if (plan == b5FallbackPlan) golden.requireK25Fallback(plan); else golden.require(plan);
+        } else {
             Tbs5530AutonomousPlans.requireTs(limits);
             if (limits.readApi != readApi || limits.explicitSetInterfaceAlt0 != explicitSetInterfaceAlt0
                     || limits.sonyTsOutputReadback != sonyTsOutputReadback
@@ -656,6 +702,49 @@ final class Tbs5530AutonomousSession {
                     .put("b4_parity", b4Capture ? "PENDING_PAIRED_OFFLINE_ANALYSIS" : "NOT_APPLICABLE")
                     .put("signal_monitor_samples", signalSampleCount)
                     .put("signal_monitor_failure", signalMonitorFailure == null ? JSONObject.NULL : signalMonitorFailure);
+            json.put("b5_enabled", b5Capture).put("b5_layout", b5Capture ? Tbs5530B5Runner.LAYOUT : JSONObject.NULL)
+                    .put("b5_clock", b5Capture ? "CLOCK_MONOTONIC" : JSONObject.NULL)
+                    .put("b5_stale_prefix_bytes", b5Capture ? 2048 : JSONObject.NULL)
+                    .put("b5_monitor_period_ms", b5Capture ? 100 : JSONObject.NULL)
+                    .put("b5_monitor_jitter_ms", b5Capture ? 20 : JSONObject.NULL)
+                    .put("b5_rssi_samples_per_off", b5Capture ? 3 : JSONObject.NULL)
+                    .put("b5_rssi_sequence", b5Capture ? "WINDOWS_88_00_87_C0" : JSONObject.NULL);
+            if (b5Capture) {
+                if (b5Budget != null) for (java.util.Iterator<String> keys = b5Budget.keys(); keys.hasNext();) {
+                    String key = keys.next(); json.put(key, b5Budget.get(key));
+                }
+                json.put("b5_allow_k25_auto", frontendExperiment == Tbs5530FrontendExperiment.B5_K25_MANUAL_PLP0);
+                org.json.JSONArray phases = new org.json.JSONArray();
+                long total = 0;
+                if (b5Runner != null) for (Tbs5530B5Runner.Boundary b : b5Runner.boundaries()) {
+                    info.martinmarinov.usbxfer.NativeUsbfsStream.Result stream = b5Results.get(b.phase.name());
+                    Tbs5530B5Runner.Outcome outcome = b.outcome;
+                    Tbs5530AutonomousCapture raw = b5Captures.get(b.phase.name());
+                    if (raw != null) total += raw.bytes();
+                    JSONObject row = new JSONObject().put("phase", b.phase.name()).put("start_ns", b.startNanos)
+                            .put("end_ns", b.endNanos).put("clock", "CLOCK_MONOTONIC")
+                            .put("duration_ms", b.phase.durationMillis).put("bytes", raw == null ? 0 : raw.bytes())
+                            .put("raw_capture", raw == null ? "NOT_STARTED" : raw.durable() ? "SYNCED_CLOSED" : "NOT_CERTIFIED")
+                            .put("raw_file", b.phase.on ? "received-" + b.phase + ".ts" : JSONObject.NULL)
+                            .put("audit_run_id", id + "-" + b.phase).put("stale_prefix_bytes", b.phase.stalePrefixBytes())
+                            .put("prefix_classification", b.phase == Tbs5530B5Runner.Phase.ON1 ? "STALE_PREFIX" : "NONE")
+                            .put("rssi_samples", b.rssiSamples).put("rssi_errors", b.rssiErrors).put("monitor_errors", b.monitorErrors)
+                            .put("drained", b.drained)
+                            .put("quarantined", outcome != null ? outcome.quarantined
+                                    : stream != null ? stream.quarantined : b.phase.on ? JSONObject.NULL : false)
+                            .put("stop_reason", outcome == null ? b.phase.on ? "INCOMPLETE" : "OFF_WINDOW" : outcome.reason);
+                    if (stream != null) row.put("first_status", stream.firstStatus).put("first_errno", stream.firstErrno)
+                            .put("outstanding", stream.outstanding).put("submitted", stream.submitted).put("completed", stream.completed)
+                            .put("writer_written_bytes", stream.writtenBytes).put("writer_drop_bytes", stream.dropBytes)
+                            .put("writer_failure", stream.writerFailure == null ? JSONObject.NULL : stream.writerFailure);
+                    phases.put(row);
+                }
+                json.put("b5_phases", phases).put("b5_manual_demod_lock", b5ManualDemodLock == null ? JSONObject.NULL : b5ManualDemodLock)
+                        .put("b5_k25_auto_fallback_used", b5FallbackUsed)
+                        .put("b5_actual_frontend_experiment", b5FallbackUsed ? "B5_K25_AUTO" : frontendExperiment.name())
+                        .put("native_stream", JSONObject.NULL).put("raw_received_bytes", total)
+                        .put("b5_quality", "PENDING_PAIRED_OFFLINE_ANALYSIS");
+            }
             if (tsResult != null && tsResult.nativeStream != null) {
                 Tbs5530TsSmoke.StreamMetrics stream = tsResult.nativeStream;
                 json.put("native_stream", new JSONObject().put("bytes", stream.bytes)

@@ -82,10 +82,79 @@ public class Tbs5530FrontendExperimentTest {
         assertEquals(Tbs5530AutonomousPlans.dryRun().get(Tbs5530Frontend.Operation.POLL_STATUS),
                 Tbs5530AutonomousPlans.dryRun(Tbs5530FrontendExperiment.MANUAL_PLP0_K36).get(Tbs5530Frontend.Operation.POLL_STATUS));
     }
+    @Test public void k25GoldenDiffContainsOnlyFrequencyParameters() throws Exception {
+        Map<Tbs5530Frontend.Operation,Tbs5530Frontend.Plan> k36 = plans(Tbs5530FrontendExperiment.B5_K36_MANUAL_PLP0);
+        Map<Tbs5530Frontend.Operation,Tbs5530Frontend.Plan> k25 = plans(Tbs5530FrontendExperiment.B5_K25_MANUAL_PLP0);
+        for (Tbs5530Frontend.Operation operation : k36.keySet()) {
+            Tbs5530Frontend.Plan a = k36.get(operation), b = k25.get(operation);
+            if (operation != Tbs5530Frontend.Operation.TUNE) {
+                assertEquals(a.getApprovalTranscript(), b.getApprovalTranscript()); continue;
+            }
+            assertEquals(a.usbOutCount, b.usbOutCount); assertEquals(a.usbInCount, b.usbInCount);
+            assertEquals(a.delayMillis, b.delayMillis); assertEquals(a.maximumMillis, b.maximumMillis);
+            List<Tbs5530Frontend.RegisterTransaction> aa = a.getTransactions(), bb = b.getTransactions();
+            assertEquals(aa.size(), bb.size()); int differences = 0;
+            for (int i = 0; i < aa.size(); i++) {
+                Tbs5530Frontend.RegisterTransaction x = aa.get(i), y = bb.get(i);
+                assertEquals(x.kind, y.kind); assertEquals(x.address, y.address); assertEquals(x.bank, y.bank);
+                assertEquals(x.register, y.register); assertEquals(x.readLength, y.readLength);
+                assertEquals(x.delayMillis, y.delayMillis); assertEquals(x.sourceMask, y.sourceMask);
+                assertEquals(x.shift, y.shift); assertEquals(x.value, y.value);
+                assertEquals(x.sourceStep, y.sourceStep); assertEquals(x.secondSourceStep, y.secondSourceStep);
+                byte[] xd = x.getData(), yd = y.getData();
+                if (!Arrays.equals(xd, yd)) {
+                    assertEquals(Tbs5530Frontend.Kind.WRITE, x.kind); assertEquals(0x60, x.address);
+                    assertEquals(0x68, x.register); assertEquals(17, xd.length); assertEquals(xd.length, yd.length);
+                    byte[] normalized = yd.clone();
+                    // ASCOT3 frequency in kHz is the little-endian field at registers 0x70..0x72.
+                    assertArrayEquals(new byte[]{0x50, 0x10, 0x09}, Arrays.copyOfRange(xd, 8, 11));
+                    assertArrayEquals(new byte[]{(byte)0x90, (byte)0xb8, 0x07}, Arrays.copyOfRange(yd, 8, 11));
+                    System.arraycopy(xd, 8, normalized, 8, 3); assertArrayEquals(xd, normalized); differences++;
+                }
+            }
+            assertEquals(1, differences);
+        }
+        for (Tbs5530FrontendExperiment e : new Tbs5530FrontendExperiment[]{Tbs5530FrontendExperiment.B5_K25_MANUAL_PLP0,
+                Tbs5530FrontendExperiment.B5_K25_AUTO, Tbs5530FrontendExperiment.B5_K36_MANUAL_PLP0})
+            System.out.println(e + "_TUNE=" + Tbs5530AutonomousPlans.canonical(plans(e).get(Tbs5530Frontend.Operation.TUNE)));
+    }
+    @Test public void fallbackIsRetuneNotColdAutoProgram() throws Exception {
+        Tbs5530Frontend.Plan fallback = Tbs5530AutonomousPlans.dryRunK25FallbackPlan();
+        Tbs5530Frontend.Plan cold = plans(Tbs5530FrontendExperiment.B5_K25_AUTO).get(Tbs5530Frontend.Operation.TUNE);
+        assertTrue(Tbs5530FrontendExperiment.B5_K25_AUTO.matches(fallback.tuneParameters));
+        assertNotEquals(Tbs5530AutonomousPlans.canonical(cold), Tbs5530AutonomousPlans.canonical(fallback));
+        assertTrue(fallback.usbOutCount < cold.usbOutCount);
+        Tbs5530AutonomousPlans manual = new Tbs5530AutonomousPlans(Tbs5530FrontendExperiment.B5_K25_MANUAL_PLP0);
+        manual.requireK25Fallback(fallback);
+        assertThrows(IOException.class, () -> manual.requireK25Fallback(cold));
+        assertThrows(IOException.class, () -> new Tbs5530AutonomousPlans(Tbs5530FrontendExperiment.B5_K36_MANUAL_PLP0)
+                .requireK25Fallback(fallback));
+        System.out.println("B5_K25_AUTO_FALLBACK=" + Tbs5530AutonomousPlans.canonical(fallback));
+    }
+    @Test public void b5RejectsUnreviewedFrequencyPlpAndTransport() throws Exception {
+        for (Tbs5530FrontendExperiment e : new Tbs5530FrontendExperiment[]{Tbs5530FrontendExperiment.B5_K25_MANUAL_PLP0,
+                Tbs5530FrontendExperiment.B5_K25_AUTO, Tbs5530FrontendExperiment.B5_K36_MANUAL_PLP0}) {
+            assertTrue(e.matches(e.parameters()));
+            Tbs5530AutonomousPlans allowlist = new Tbs5530AutonomousPlans(e);
+            for (Tbs5530Frontend.Plan p : plans(e).values()) allowlist.require(p);
+            Tbs5530FrontendExperiment other = e == Tbs5530FrontendExperiment.B5_K25_MANUAL_PLP0
+                    ? Tbs5530FrontendExperiment.B5_K36_MANUAL_PLP0 : Tbs5530FrontendExperiment.B5_K25_MANUAL_PLP0;
+            assertThrows(IOException.class, () -> allowlist.require(plans(other).get(Tbs5530Frontend.Operation.TUNE)));
+            e.requireOptions("NATIVE_USBFS_STREAM", true, false, false, false);
+            assertThrows(IOException.class, () -> e.requireOptions("NATIVE_USBFS_URB_8X4096", true, false, false, false));
+            assertFalse(e.matches(new Tbs5530DvbT2TuneParameters(514000000L, 8000000, 0)));
+            assertFalse(e.matches(new Tbs5530DvbT2TuneParameters(e.frequencyHz(), 8000000, 1)));
+        }
+    }
     @Test public void exportDeterministicPlansWhenRequested() throws Exception {
         String destination = System.getenv("TBS5530_PLAN_OUTPUT");
         if (destination == null) return;
         Path root = Paths.get(destination); Files.createDirectories(root);
+        Tbs5530Frontend.Plan fallback = Tbs5530AutonomousPlans.dryRunK25FallbackPlan();
+        new Tbs5530AutonomousPlans(Tbs5530FrontendExperiment.B5_K25_MANUAL_PLP0).requireK25Fallback(fallback);
+        Files.write(root.resolve("B5_K25_AUTO_FALLBACK-TUNE.txt"), fallback.getApprovalTranscript().getBytes(StandardCharsets.UTF_8));
+        Files.write(root.resolve("B5_K25_AUTO_FALLBACK-TUNE.sha256"),
+                (fallback.getSha256() + "\ncanonical=" + Tbs5530AutonomousPlans.canonical(fallback) + "\n").getBytes(StandardCharsets.UTF_8));
         for (Tbs5530FrontendExperiment e : Tbs5530FrontendExperiment.values()) {
             Files.write(root.resolve(e.name() + "-golden.sha256"),
                     (new Tbs5530AutonomousPlans(e).fingerprint() + "\n").getBytes(StandardCharsets.UTF_8));

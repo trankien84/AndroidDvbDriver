@@ -1,5 +1,63 @@
 # Port TBS5530 sang Android — trạng thái hiện tại
 
+## 2026-11-13, B5 chốt — OnePlus K25 hoàn tất bốn pha/drain; TS còn lỗi, chưa xác nhận nhiễu USB
+
+**Đã chạy đủ OFF1/ON1/OFF2/ON2 trên OnePlus; `TS_SMOKE_PASS=false`.** Ordinal 4 được OK B5 riêng sau kế thừa ba refusal trước grant. Bootstrap/reload đều 132/132, không detach sau reload/`-75`/`-71`; ON1 nhận 34340864 byte, ON2 11141120 byte, data errors 0/writer drop 0/outstanding 0/quarantine false, DRAIN_CONFIRMED. Đây là kết quả debug đúng một lượt K25, chưa production hoặc Phase 4.
+
+SNR trung vị OFF1/ON1/OFF2/ON2 = **25,475 / 18,460 / 22,087 / 20,332 dB**, RSSI hai OFF −64,85 dBm, BER OFF 0 và ON tăng. Chênh OFF−ON là **7,015 rồi 1,755 dB**: ngưỡng ≥6 dB không lặp ở cặp hai, chỉ gợi ý liên hệ, chưa ROOT_CAUSE_CONFIRMED. Sau 5 giây, ON1 CC/TEI 5467,85/31,20 mỗi phút, ON2 5233,57/0; có VTV/PAT/PMT/SDT ở ON1 nhưng ON2 thiếu SDT và PCR chưa ổn định. FULL% UNKNOWN vì chưa baseline K25 độc lập. Xem [RESEARCH.md](RESEARCH.md), [ADR-062](DECISIONS.md).
+
+Helper live `5bdc3334…159bd2b` lỗi export timeout sau drain; budget đã đóng HOST_ABORTED_NO_RETRY. Đã thu lại **40 tệp/95374481 byte chỉ đọc**, SHA/size trước–sau và host khớp, không receive/firmware mới. Tuner đã rút sau drain, không helper/capture/emulator do phiên còn chạy. Candidate helper hậu kiểm `a3480759…ec24660` chỉ sửa deadline binary export sau drain, 23 focused + 90 regression PASS, **NOT USED ON HARDWARE**; APK/native/firmware không đổi.
+
+Đã dùng bốn Android gồm ba preparation refusal/một nhận thật, một Windows capture K25. K36 Android/tách xa hơn 70 cm/phụ kiện NOT RUN; không tự mở ordinal 5/6 hoặc Windows còn lại. Raw/evidence/báo cáo/SVG SNR ở bundle `phase31-b5-20261113-124425-302b54cb` ngoài Git. Bước tiếp chỉ đề xuất phân tích offline và phép lặp hữu hạn mới nếu cần. Giữ các FAIL lịch sử chưa chạy lại; GitNexus index cũ, kết luận dựa source/diff/tests/evidence. Không stage/commit/push.
+
+## 2026-11-13, ordinal 3 qua quyền USB nhưng host từ chối foreground; đang kiểm đúng một K25 bổ sung đã duyệt thiết kế
+
+**OnePlus vẫn chưa nạp firmware/reload hoặc nhận TS B5.** Ordinal 3 đã có quyền OS GRANTED và challenge live_ready=true, nhưng host dừng B5_FOREGROUND_UNVERIFIED trước grant. History 581 byte/hash nguyên. Parser cũ từ chối hai dòng resumed activity trùng hoàn toàn; candidate đã tái hiện FAIL trước/PASS sau trên snapshot OnePlus thực và 13 tests, chưa là quyền live.
+
+Cả ba ordinal đều PRE_GRANT_HOST_REFUSAL và đã được giữ/review, không xóa hoặc replay. Người dùng xác nhận tuner đã rút và duyệt thiết kế riêng [ADR-061](DECISIONS.md): đúng một K25 bổ sung, tổng bốn trong trần sáu, kế thừa sổ cũ/cùng budget/session và cần card/OK mới. Không tự chạy ordinal 5/6. Đang kiểm helper extension và actual card guard; APK/native/firmware không đổi. Windows K25 có lỗi CC/TEI, K36 Android/tách xa vẫn NOT RUN. Không stage/commit/push.
+
+## 2026-11-13, Android đã dùng hai lượt chuẩn bị; lượt K25 cuối đang chờ chuyển target ADB có kiểm chứng
+
+**Chưa có firmware/reload hoặc TS B5 trên OnePlus.** Đã cài đúng candidate một install-r, history 581 byte/hash trước-sau nguyên. Hai lượt đều dừng trước grant: lượt 1 timeout khi tuner còn rút; lượt 2 CANCELLED trong lúc xử lý hộp thoại mở ứng dụng. Đã lưu receipt và review PRE_IO_REFUSED, không xóa hoặc replay lượt. APK/JNI/emulator đã kiểm bên dưới giữ nguyên phạm vi.
+
+Người dùng xác nhận chỉ tiếp tục ordinal 3 K25 cuối, không tăng vô hạn hoặc vượt trần sáu Android. Đã xử lý attach/Open app trước helper, nhưng người dùng lỡ ngắt/nối lại ADB làm alias đã pin mất. Lượt 3 **chưa consume**. Alias mới được kiểm chỉ đọc, cùng model/API/boot/history; không thay vào card ngầm định. Người dùng đã duyệt thiết kế [ADR-060](DECISIONS.md): chuyển target có pin exact sổ cũ/hai lượt đã dùng, chỉ K25 cuối, cần kiểm helper và card/OK mới trước live.
+
+Windows K25 vẫn có mẫu 159999844 byte với CC/TEI; kết quả và chốt receipt giữ nguyên. K36 Android và phép tách xa chưa chạy. Không ROOT_CAUSE_CONFIRMED chất lượng TS hoặc TS_SMOKE_PASS, không stage/commit/push.
+
+## 2026-11-13, Windows K25 đã thu — Chất lượng còn lỗi; tiếp nối Android đang kiểm guard
+
+**Windows K25 có TS và dịch vụ VTV nhưng chưa sạch; Android B5 vẫn NOT RUN.** Helper v2 đã sửa kiểu số JSON, kiểm 150/150 và được duyệt card v2 riêng. Capture có TS 159999844 byte/pcap 163272178 byte, TSDuck exit 0/wall 39,721323 giây. Vì chưa đủ wall 40 giây, receipt đóng CAPTURE_INCOMPLETE; kích thước khớp byte cap là suy luận có căn cứ, không bằng chứng lỗi USB transport.
+
+Phân tích: CC 837/TEI 24036, PAT/PMT/SDT và 13 dịch vụ VTV; PCR ước lượng khoảng 35,58 Mbps nhưng chưa ổn định PASS. SNR mọi raw 19,696/20,347/21,559 dB, RSSI theo AGC −64,85 dBm; L1 64-QAM/5/6/64K khác K36. FULL% UNKNOWN vì chưa có baseline K25 độc lập. Không có phép OFF/ON OnePlus để kết luận nhiễu. Các process capture đã đóng và người dùng đã rút/ngắt nguồn.
+
+Người dùng đã chọn thiết kế tiếp nối chỉ Android, giữ nguyên receipt/card/ledger cũ và kế thừa một Windows đã dùng, không thu lại K25. [ADR-059](DECISIONS.md) yêu cầu carry exact hash/length/status và chứng cứ cleanup, cùng budget/session; đang kiểm helper offline rồi mới trình card/OK mới. Một Windows còn lại chỉ là trần số học, chưa quyền chạy. Không reset/rearm hoặc UUID mới để vượt chốt. App/JNI/emulator 38/38 đã kiểm giữ nguyên; không stage/commit/push.
+
+## 2026-11-13, sau OK B5 — Windows bị chặn trước ARMED do kiểu số JSON; tuner vẫn rút
+
+**Chưa có capture hoặc phép thử tuner B5.** Người dùng đã duyệt card `0c9de165…acae2d`, xác nhận cold và UAC. Helper Windows PID 25592 thoát 1 trước ready/result/budget directory; chưa yêu cầu cắm tuner, không retry. Đối chiếu offline xác định `ConvertFrom-Json` trả Int64 còn guard chỉ nhận Int32, ném `B5_WINDOWS_CARD_SCOPE_INVALID` trước tạo budget. Đây là reproduction có nguồn, không phải stderr của process thật vốn chưa thu được.
+
+Đang sửa helper hẹp để nhận Int32/Int64 đúng giá trị, vẫn chặn chuỗi/bool/số lẻ; giữ nguyên frozen helper/card cũ. Người dùng chọn tiếp tục sau kiểm bản sửa và card mới, **không kế thừa OK cũ cho hash mới**. Các gate app/JNI/emulator bên dưới vẫn đúng phạm vi; chưa TS_SMOKE_PASS hoặc kết luận nhiễu USB. Không stage/commit/push. Xem [WORKLOG.md](WORKLOG.md).
+
+## 2026-11-13, B5 đã kiểm offline và khóa card — Chờ OK B5, chưa chạy tuner
+
+**Phần mềm B5 đã qua các gate liên quan; phần cứng NOT RUN.** Đã sửa tiêu chí demod lock/SNR, thêm BER/L1/RSSI Windows `88=00 → 87=C0`, K25 MANUAL0 với một AUTO fallback, OnePlus-only B5 và bốn pha OFF1/ON1/OFF2/ON2. Bootstrap/reload/drive/stream-select giữ nguyên. SNR raw vẫn lưu khi monitor lỗi nhưng số đo qualified không được công bố nếu cleanup thất bại.
+
+Gate cuối: JVM app 112 PASS, driver 528 PASS + 5 SKIP, usbxfer 62, service 13; native host 87; Python 93; helper Android 90/Windows 33; debug/release/AndroidTest/app lint, 12 ELF/bốn ABI/16 KiB tĩnh/release isolation PASS. Emulator đúng APK candidate **38/38 PASS**, gồm năm lifecycle đã xem lại sau fixture model và CLEAR_TOP; giữ log FAIL trước sửa, driver lint/fake heartbeat lịch sử chưa chạy lại. Emulator đã đóng, process exit 0/cổng 5580–5581 không listener.
+
+Card SHA `0c9de1656690f8a9b736401319e26b0837461715eb6b6f2bde87ad0648acae2d`, APK `90c7c616ba34dc8b891051203aa2d00805cd8195d987ccb2c3cd5fc0da6bf7e4`, manifest 502 source đã đối soát; source HEAD vẫn `6adde85`. Bản card thật giữ private vì explicit ADB target, bản lọc và báo cáo trong bundle `phase31-b5-20261113-124425-302b54cb` ngoài Git. Kế hoạch ba lượt Android trong trần sáu, tối đa hai Windows, bố trí gọn khoảng 33 cm/tách xa hơn 70 cm theo người dùng; không phụ kiện thêm.
+
+**Chờ đúng `OK B5` cho card này.** Chưa install/launch candidate trên OnePlus hoặc BDA/capture mới. Trước từng lượt cần xác nhận cold ít nhất năm giây/đèn tắt và owner độc quyền; `-75`/`-71` hoặc detach sau reload đóng cả phiên. B4 vẫn đóng, Phase 4 chưa mở, chưa TS_SMOKE_PASS hoặc ROOT_CAUSE_CONFIRMED chất lượng TS. Không stage/commit/push. Xem [ADR-058](DECISIONS.md), [TEST-MATRIX.md](TEST-MATRIX.md) và [WORKLOG.md](WORKLOG.md).
+
+## 2026-11-13, B5 đang triển khai offline — B4 không mất demod lock; chưa có phép thử OnePlus mới
+
+**Đã kiểm lại dữ liệu B4: watchdog TS lock gây dừng giả nếu diễn giải là mất khóa demod.** Cả 10 mẫu Android đều sync 6/không unlock; chín mẫu `06` rơi giữa các burst. SNR tính lại từ mọi raw là 15,721/17,510/30,109 dB; Windows 14,009/15,706/19,735 dB. Đây là tính lại dữ liệu cũ, không phải phép đo B5 hoặc bằng chứng nguyên nhân nhiễu đã xác nhận. Xem [RESEARCH.md](RESEARCH.md), mục Đính chính.
+
+Baseline đúng HEAD `6adde854e680948ff993bf552543c3e26a266be9`/nhánh `chore/modernize-android-build`, tree sạch. Đang tích hợp demod lock, SNR/BER/L1/RSSI, bốn pha OFF/ON, K25 và OnePlus `GM1900`/API 30. Golden K25 chỉ khác ba byte tần số so với K36; AUTO fallback có golden retune riêng, 41 kiểm frontend JUnit PASS. Chưa hoàn tất gates tích hợp, chưa freeze card/APK hoặc `OK B5`.
+
+**Đã chốt đính chính RSSI với người dùng:** Windows B4 dùng `88=00`, không phải `04` trong đề bài; B5 chọn cleanup `88=00`, `87=C0`. Golden Android sau init/tune đều kết thúc `C0/00`, đã đối chiếu offline trước card. RSSI chỉ trong OFF; chưa chạy chuỗi này trên tuner. Đầu thu Pantesat và TBS dùng cùng cáp anten/không chia đã ghi ở [ENVIRONMENT.md](ENVIRONMENT.md), không hỏi lại.
+
+Giữ ADR-057 lịch sử, tạo [ADR-058](DECISIONS.md) theo lựa chọn người dùng. Phần cứng **NOT RUN**, Phase 4 chưa mở; ngân sách B4 vẫn đóng. Card B5 phải giữ tối đa sáu Android/hai Windows và dừng cả phiên nếu OnePlus còn `-75`/`-71` hoặc detach sau reload sạch. Không stage/commit/push, raw/định danh ngoài Git; toolchain/driver/ownership không đổi.
+
 ## 2026-11-13, B4 cặp 1 — Windows đã thu 40 giây; Android dừng đúng mất TS lock sau 2,28 giây
 
 **Chưa đủ bằng chứng parity; không mở Phase 4.** Người dùng duyệt `OK B4` đúng card `742010f6…`; Windows thu 61698968 byte qua TSDuck/BDA, USBPcap 63706295 byte, các process đã đóng. Giữ nguyên anten thụ động ngoài trời trên nóc nhà, dùng cùng cổng cold2. Người dùng ngắt cả nguồn ≥5 giây rồi chuyển sang Samsung/cáp chữ Y/pin dự phòng theo hướng dẫn.

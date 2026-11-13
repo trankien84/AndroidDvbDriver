@@ -14,6 +14,8 @@ import java.lang.reflect.Field;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import org.json.JSONObject;
+import org.junit.After;
+import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import static org.junit.Assert.*;
@@ -23,6 +25,13 @@ import static org.junit.Assert.*;
 public class Tbs5530AutonomousLaunchLifecycleTest {
     private final Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
     private final Context context = instrumentation.getTargetContext();
+    @Before public void injectControlPlaneOnlyIdentity() {
+        Tbs5530AutonomousDiagnosticActivity.controlPlaneTestIdentity =
+                new Tbs5530AutonomousDiagnosticActivity.ControlPlaneTestIdentity("SM-X926B", 36, 46);
+    }
+    @After public void clearControlPlaneOnlyIdentity() {
+        Tbs5530AutonomousDiagnosticActivity.controlPlaneTestIdentity = null;
+    }
     private Intent request(String token) {
         return new Intent(context, Tbs5530AutonomousDiagnosticActivity.class)
                 .putExtra("read_api", "NATIVE_USBFS_URB_8X4096")
@@ -54,6 +63,9 @@ public class Tbs5530AutonomousLaunchLifecycleTest {
         Tbs5530AutonomousSession value = session(activity);
         assertNull(value.capture); assertNull(value.nativeReceiveSnapshot); assertNull(value.bootstrapSnapshot);
         assertFalse(value.initialRawObserved); assertTrue(value.controlPlaneOnly);
+        assertThrows(IOException.class, value::requireDeviceIo);
+        assertEquals("SM-X926B", challenge().getString("model"));
+        assertEquals(36, challenge().getInt("api"));
     }
     @Test public void newIntentClosesUngrantSessionAndPublishesCorrelatedFreshChallenge() throws Exception {
         String first = UUID.randomUUID().toString(), second = UUID.randomUUID().toString();
@@ -82,11 +94,21 @@ public class Tbs5530AutonomousLaunchLifecycleTest {
                     new Intent(context,Tbs5530PermissionPreflightActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
             instrumentation.waitForIdleSync();
             assertTrue(old.cleanupConfirmed); assertEquals("NO_RESOURCES_ACQUIRED",old.cleanupPath);
-            context.startActivity(request(second).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP));
+            Tbs5530PermissionPreflightActivity foregroundScreen = permissionScreen;
+            main(() -> foregroundScreen.startActivity(request(second).addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP)));
             long deadline = SystemClock.elapsedRealtime()+5000;
-            while (!second.equals(challenge().optString("launch_token")) && SystemClock.elapsedRealtime()<deadline) Thread.sleep(20);
-            instrumentation.waitForIdleSync();
-            assertEquals(second,challenge().getString("launch_token")); assertNotEquals(old.id,challenge().getString("session"));
+            JSONObject freshChallenge;
+            do {
+                instrumentation.waitForIdleSync();
+                freshChallenge = challenge();
+                if (second.equals(freshChallenge.optString("launch_token"))
+                        && !old.id.equals(freshChallenge.optString("session"))) break;
+                if (SystemClock.elapsedRealtime() >= deadline) break;
+                Thread.sleep(20);
+            } while (true);
+            assertEquals("Fresh CLEAR_TOP launch did not publish its correlated challenge", second, freshChallenge.getString("launch_token"));
+            assertNotEquals(old.id, freshChallenge.getString("session"));
             noResources(activity); assertFalse(session(activity).accepted());
         } finally {
             Tbs5530PermissionPreflightActivity screen = permissionScreen;
