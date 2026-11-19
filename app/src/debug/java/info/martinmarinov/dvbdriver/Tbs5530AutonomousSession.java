@@ -741,6 +741,11 @@ final class Tbs5530AutonomousSession {
                                     : stream != null ? stream.quarantined : b.phase.on ? JSONObject.NULL : false)
                             .put("stop_reason", outcome == null ? b.phase.on ? "INCOMPLETE" : "OFF_WINDOW" : outcome.reason);
                     if (stream != null) row.put("first_status", stream.firstStatus).put("first_errno", stream.firstErrno)
+                            .put("last_status", stream.lastStatus == Integer.MIN_VALUE ? JSONObject.NULL : stream.lastStatus)
+                            .put("last_errno", stream.lastErrno)
+                            .put("cleanup_last_status", stream.cleanupLastStatus == Integer.MIN_VALUE ? JSONObject.NULL : stream.cleanupLastStatus)
+                            .put("cleanup_last_errno", stream.cleanupLastErrno)
+                            .put("cleanup_cancellation", stream.cleanupCancellation).put("cleanup_error", stream.cleanupError)
                             .put("outstanding", stream.outstanding).put("submitted", stream.submitted).put("completed", stream.completed)
                             .put("writer_written_bytes", stream.writtenBytes).put("writer_drop_bytes", stream.dropBytes)
                             .put("writer_failure", stream.writerFailure == null ? JSONObject.NULL : stream.writerFailure);
@@ -760,6 +765,11 @@ final class Tbs5530AutonomousSession {
                         .put("max_reap_resubmit_ns", stream.maxResubmitNanos).put("median_reap_resubmit_ns", stream.medianResubmitNanos)
                         .put("elapsed_ns", stream.elapsedNanos).put("throughput_bytes_per_second", stream.bytesPerSecond())
                         .put("first_status", stream.firstStatus).put("first_errno", stream.firstErrno)
+                        .put("last_status", stream.lastStatus == Integer.MIN_VALUE ? JSONObject.NULL : stream.lastStatus)
+                        .put("last_errno", stream.lastErrno)
+                        .put("cleanup_last_status", stream.cleanupLastStatus == Integer.MIN_VALUE ? JSONObject.NULL : stream.cleanupLastStatus)
+                        .put("cleanup_last_errno", stream.cleanupLastErrno)
+                        .put("cleanup_cancellation", stream.cleanupCancellation).put("cleanup_error", stream.cleanupError)
                         .put("outstanding", stream.outstanding).put("quarantined", stream.quarantined)
                         .put("stop_reason", stream.stopReason).put("stale_prefix_bytes", 2048)
                         .put("writer_written_bytes", stream.writerWrittenBytes).put("writer_drop_bytes", stream.writerDropBytes)
@@ -810,10 +820,17 @@ final class Tbs5530AutonomousSession {
                     .put("actual_length", urb.actualLength).put("slot", urb.slot).put("quarantined", urb.quarantined));
             boolean nativeKnown = urbKnown || ts != null && Tbs5530AutonomousPolicy.nativeReturnKnown(synchronous,
                     ts.reads, ts.lastReadResult, ts.lastReadErrno);
-            boolean completedError = ts != null && ts.nativeStream != null
-                    ? completedStreamError(ts.nativeStream)
+            boolean b5ReceiveError = false;
+            boolean cleanupCancellation = ts != null && ts.nativeStream != null && ts.nativeStream.cleanupCancellation;
+            for (info.martinmarinov.usbxfer.NativeUsbfsStream.Result stream : b5Results.values()) {
+                b5ReceiveError |= stream.firstStatus != 0 || stream.firstErrno != 0;
+                cleanupCancellation |= stream.cleanupCancellation;
+            }
+            boolean completedError = b5Capture ? b5ReceiveError
+                    : ts != null && ts.nativeStream != null ? completedStreamError(ts.nativeStream)
                     : urbKnown && urb.urbStatus < 0 || ts != null && ts.status == Tbs5530TsSmoke.Status.NO_DATA_OR_USB_FAILURE
                     && Tbs5530AutonomousPolicy.completedReceiveError(synchronous, ts.reads, ts.lastReadResult, ts.lastReadErrno);
+            json.put("cleanup_cancellation", cleanupCancellation);
             json.put("native_return_known", nativeKnown);
             json.put("receive_error", !completedError ? "NOT_CLASSIFIED_AS_COMPLETED_ERROR"
                     : policy.state() == Tbs5530AutonomousPolicy.State.ERROR_UNCERTAIN ? "COMPLETED_USB_ERROR_WITH_UNCERTAIN_SESSION_OR_CLEANUP"

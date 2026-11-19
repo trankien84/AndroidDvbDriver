@@ -23,7 +23,7 @@ public class NativeUsbfsStreamTest {
         private void requireLive() {
             if (frees != 0) { afterFree.incrementAndGet(); fail("Native port accessed after destroy"); }
         }
-        long[] result = {16,16,200000000,0,5000,4000,15,0,0,0,0,3,0,0};
+        long[] result = {16,16,200000000,0,5000,4000,15,0,0,0,0,3,0,0,0,0,Integer.MIN_VALUE,0,0,0};
         public void run() throws IOException {
             requireLive(); ++runs; entered.countDown();
             if (block) {
@@ -102,6 +102,18 @@ public class NativeUsbfsStreamTest {
             assertTrue(audit.toString().contains("\"queue_horizon_assumed_bytes_per_second\":null"));
             assertFalse(audit.toString().contains("3437500"));
         } finally { receiver.close(); }
+    }
+    @Test public void cancellationAppearsOnlyInCleanupMetricsAndAudit() throws Exception {
+        Port port = new Port(); port.result[16] = -2; port.result[18] = 1;
+        StringWriter audit = new StringWriter();
+        try (NativeUsbfsStream receiver = stream(port, () -> { }, audit)) {
+            NativeUsbfsStream.Result capture = receiver.receive();
+            assertEquals(0, capture.lastStatus);
+            assertEquals(-2, capture.cleanupLastStatus);
+            assertTrue(capture.cleanupCancellation);
+            assertFalse(capture.cleanupError);
+            assertTrue(audit.toString().contains("\"last_status\":0,\"last_errno\":0,\"cleanup_last_status\":-2"));
+        }
     }
     @Test public void completionErrorPreservesDataAndDoesNotThrow() throws Exception {
         Port port = new Port(); port.result[7] = -75; port.result[11] = 4;

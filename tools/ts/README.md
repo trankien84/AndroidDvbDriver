@@ -130,7 +130,7 @@ Carry giữ bằng chứng process đã dừng. Nếu PID cũ bị tái sử d�
 
 `tools\Test-TBS5530-B5CarryForward.ps1` chạy các JSON fixture đã serialize, tamper bytes trong RAM và ledger successor giả trong output mới; không chạy helper main hoặc ADB. Input `-PriorCardPath` phải trỏ bản private predecessor đã giữ nguyên; không đưa serial vào output. Bộ test kiểm carry hợp lệ, hash/length/prefix/status/errno/PID/count giả, replay và Windows handoff bị từ chối.
 
-`analyze_b5_capture.py` gọi trực tiếp analyzer B4 không thay đổi cho từng ON, giữ SHA và offsets raw gốc. CLI nhận terminal report, cặp raw/native audit cho mỗi ON, `--monitor` lặp lại cho cả monitor và RSSI JSONL, cùng baseline byte/cadence độc lập nếu có. Có thể thêm `--windows-report` để so từng ON với reference report B4 có sẵn; không mở capture mới. Output JSON/Markdown phải là file mới. Mỗi pha có SNR/BER/demod lock/TS lock/RSSI min–median–max; thiếu số đo giữ `null`. Có timeline burst/gap và tương quan SNR với thời gian từ completion có dữ liệu gần nhất trong cả chương trình bốn pha; các khoảng OFF có chủ ý được đánh dấu, không gọi là lỗi mất dữ liệu. Thống kê đối chứng chỉ tính dữ liệu trong cùng pha vẫn được giữ riêng. Tương quan không phải bằng chứng nguyên nhân. JSON giữ FULL/PARTIAL/MISSING, CC/TEI mỗi phút, PAT/PMT/SDT/services và PCR; bảng PSI/PCR sau 5 giây được dựng lại riêng từ dữ liệu sau mốc first successful captured completion +5 giây.
+`analyze_b5_capture.py` dùng analyzer TS chung cho từng ON, giữ SHA và offsets raw gốc. CLI nhận terminal report, cặp raw/native audit cho mỗi ON, `--monitor` lặp lại cho cả monitor và RSSI JSONL, cùng baseline byte/cadence độc lập nếu có. Có thể thêm `--windows-report` để so từng ON với reference report B4 có sẵn; không mở capture mới. Output JSON/Markdown phải là file mới. Mỗi pha có SNR/BER/demod lock/TS lock/RSSI min–median–max; thiếu số đo giữ `null`. Có timeline burst/gap và tương quan SNR với thời gian từ completion có dữ liệu gần nhất trong cả chương trình bốn pha; các khoảng OFF có chủ ý được đánh dấu, không gọi là lỗi mất dữ liệu. Thống kê đối chứng chỉ tính dữ liệu trong cùng pha vẫn được giữ riêng. Tương quan không phải bằng chứng nguyên nhân. JSON giữ FULL/PARTIAL/MISSING, CC/TEI mỗi phút, PAT/PMT/SDT/services và PCR; bảng PSI/PCR sau 5 giây được dựng lại riêng từ dữ liệu sau mốc first successful captured completion +5 giây.
 
 ```powershell
 & C:\Python312\python.exe -B tools\ts\analyze_b5_capture.py D:\TSDuck\reports\new-b5\terminal-report.json --on1-ts D:\TSDuck\captures\new-b5\received-ON1.ts --on1-audit D:\TSDuck\reports\new-b5\native-ON1.jsonl --on2-ts D:\TSDuck\captures\new-b5\received-ON2.ts --on2-audit D:\TSDuck\reports\new-b5\native-ON2.jsonl --monitor D:\TSDuck\reports\new-b5\monitor-OFF1.jsonl --monitor D:\TSDuck\reports\new-b5\monitor-ON1.jsonl --monitor D:\TSDuck\reports\new-b5\monitor-OFF2.jsonl --monitor D:\TSDuck\reports\new-b5\monitor-ON2.jsonl --monitor D:\TSDuck\reports\new-b5\rssi-OFF1.jsonl --monitor D:\TSDuck\reports\new-b5\rssi-OFF2.jsonl --json D:\TSDuck\reports\new-b5\analysis.json
@@ -139,6 +139,38 @@ Carry giữ bằng chứng process đã dừng. Nếu PID cũ bị tái sử d�
 Điều kiện TS smoke người dùng đã duyệt được áp dụng mặc định: sau 5 giây phải zero CC/TEI, đủ PAT/PMT/SDT, có dịch vụ VTV và PCR ổn định. Không yêu cầu một quyết định phê duyệt mới cho các điều kiện này. Hai ON phải có dữ liệu sau mốc first data+5s; bốn pha đủ thời lượng, drain/writer/native sạch. Cụm “PCR ổn định” chưa có ngưỡng số thì tiêu chí đó giữ `UNKNOWN` và kết luận `INSUFFICIENT_EVIDENCE`, tuyệt đối không tự coi có PCR median là PASS. Khi có ngưỡng đã thống nhất, tùy chọn `--smoke-policy` nhận schema `B5-SMOKE-POLICY/v1`, `approved_by_user=true`, `card_sha256`, giới hạn CC/TEI và `pcr_stability_max_relative_spread` (độ dao động bitrate tương đối giữa ít nhất hai cửa sổ PCR hợp lệ cho mỗi PID dịch vụ); input policy ngoài cần pin SHA-256 để giữ provenance. `min_full_percent` chỉ là điều kiện bổ sung tùy chọn, không tự áp vào prompt. Output luôn giữ FULL/PARTIAL/MISSING dù không dùng ngưỡng FULL để quyết định smoke. Không đủ bằng chứng là `INSUFFICIENT_EVIDENCE`. Phân tích này không cấp quyền chạy hardware; `root_cause` luôn `UNKNOWN`, một lượt không đủ kết luận RF, nguồn điện, cáp hay host.
 
 Tests: `Test-TBS5530-B5Session.ps1` dùng fake transport và output directories mới dưới `D:\TSDuck`; không gọi ADB thật. `test_analyze_b5_capture.py` dùng fixtures B4 có sẵn. Không chạy Gradle hoặc hardware để kiểm những tools này.
+
+## So sánh P4c ngoại tuyến
+
+Dùng `analyze_phase4_comparison.py` để đánh giá các lượt đã lưu, không mở tuner. `--b5` nhận thư mục báo cáo B5 cũ; `--b5-export` có thể chỉ thư mục chứa raw và log nếu không nằm ở đường dẫn mặc định. Mỗi `--debug-export ID LOG_DIR TS_DIR` nhận một lượt khác, gồm terminal report, monitor, RSSI, audit native và hai raw ON. Output phải là tên mới. Ví dụ đọc lại B5 và P4b bước 1:
+
+```powershell
+$name = 'phase4-p4b-session-20261119-1325'
+$report = "D:\TSDuck\reports\$name"
+$log = (Get-ChildItem "D:\TSDuck\logs\$name" -Directory -Filter 'b5-budget-*').FullName + '\attempt-1'
+$raw = "D:\TSDuck\captures\$name\attempt-1"
+$b5 = 'D:\TSDuck\reports\phase31-b5-20261113-124425-302b54cb'
+$id = 'p4c-offline-' + [guid]::NewGuid().ToString('N').Substring(0,8)
+& C:\Python312\python.exe -B -X utf8 tools\ts\analyze_phase4_comparison.py --b5 $b5 --debug-export P4b-step1 $log $raw --json "$report\$id.json" --markdown "$report\$id.md"
+& C:\Python312\python.exe -B -X utf8 -m unittest discover -s tools\ts -q
+```
+
+- **Cửa sổ xét TS:** debug bỏ prefix được ghi trong báo cáo, kiểm lưới sync cũ quanh ranh giới 2.048 byte, rồi bắt đầu không trước completion có dữ liệu đầu tiên cộng 5 giây. Tìm ít nhất năm gói 188 byte liên tiếp có byte sync và header hợp lệ tại điểm bắt đầu. Dùng trạng thái CC/PSI/PCR mới; giữ vị trí gốc, báo phần byte không đọc được và không xóa lỗi giữa mẫu. Kết quả dò đầu luồng chỉ là vị trí ứng viên, không chứng minh byte nào thuộc FIFO cũ. Với Dump đã lưu, dùng marker ghi file đầu tiên không sớm hơn 5 giây; thiếu mapping thì chất lượng không xác định. `--capture` cũ vẫn nhận chỉ số tổng, nhưng không suy phân loại PID hoặc PCR từ tổng đó.
+- **Gói cắt qua mốc 5 giây:** chỉ gói nằm trọn trong phần payload được chọn mới tính vào `quality_after5s`. Báo cáo vẫn giữ số đếm lịch sử gán theo byte cuối dưới `native_alignment.legacy_completion_counts`; nếu nó vượt payload, Markdown nêu cả hai số. Không giảm số bằng cách chặn cứng theo độ dài. Số đếm được chuẩn hóa vượt payload vẫn bị từ chối.
+- **CC và bảng chương trình:** CC nội dung là tổng của các PID video/audio nhận diện từ PMT (kể cả một số kiểu audio có mô tả riêng) và PID được PMT khai báo mang PCR. Các PID `0x00`–`0x1F` và PID PMT được ưu tiên vào nhóm SI, nhãn “nguồn phát” chỉ dùng để báo cáo chứ không khẳng định nguyên nhân. Nhóm khác vẫn được đếm. Mỗi ON đạt nếu CC nội dung ≤1 lỗi/phút, TEI bằng 0, và có PAT/PMT/SDT actual hiện hành, đầy đủ, CRC hợp lệ. Thiếu ánh xạ PMT hoặc thiếu phép so sánh nội dung không được coi là 0 lỗi đã xác minh.
+- **Khoảng PCR:** lấy trung vị các tốc độ suy từ từng khoảng PCR hợp lệ của mọi PID mang PCR. So số byte quan sát với số byte kỳ vọng từ đồng hồ PCR và tốc độ trung vị. Thiếu từ 94 byte làm trượt; thừa từ 94 byte chỉ được báo. JSON giữ số khoảng và sai lệch nhỏ/lớn nhất theo PID. Không nối qua mất sync, PCR lỗi hoặc cờ discontinuity; khoảng không đủ chứng cứ nêu `UNKNOWN`. Không bỏ khoảng chỉ vì CC lỗi. Bitrate PCR là ước lượng tốc độ luồng, không phải tốc độ USB, và không chứng minh tuyệt đối không mất dữ liệu.
+- **Nhiễu RF:** xét riêng mỗi pha ON trong cùng lượt: ít nhất 90% mẫu BER bằng 0, mức giảm trung vị SNR so với pha OFF liền trước không quá 2 dB và tổng thời gian có dữ liệu trong các ô 240 ms đầy đủ ít nhất 90%. Bảng chính hiện `TS P4c` và `RF P4c`; JSON ghi `p4c_criteria.ts` và `p4c_criteria.rf`. Mức lệch OFF với B5 chỉ nằm trong phần tham khảo (`b5_off_reference`), không ảnh hưởng kết quả. `EMI_MITIGATED` chỉ là nhãn quan sát khi cả hai pha ON đạt ngưỡng RF; không chứng minh nguyên nhân, cải thiện so với B5 hoặc quyền chạy phần cứng.
+
+Đối chiếu P4b bước 1: mẫu đầu từ ZIP 15 giây được đọc sau vị trí ứng viên `2237`/`2227`; mẫu sau 5 giây lấy trên toàn bộ raw. Vì vậy hai cửa sổ ON1 chồng nhau một phần nhưng không cùng thời lượng. Trong cả bốn cửa sổ, CC nội dung và TEI bằng 0; PAT/PMT/SDT hợp lệ, 13 dịch vụ.
+
+| Cửa sổ | Gói TS | CC SI: `0x10` / `0x12` / `0x14` | Khoảng PCR (13 PID) | Thiếu / thừa từ 94 byte |
+| --- | ---: | ---: | ---: | ---: |
+| ON1 mẫu đầu | 354858 | 7 / 15 / 0 | 5634 | 0 / 26 |
+| ON2 mẫu đầu | 236510 | 4 / 10 / 1 | 3749 | 0 / 13 |
+| ON1 sau 5 giây | 591304 | 11 / 24 / 2 | 9401 | 0 / 26 |
+| ON2 sau 5 giây | 118173 | 2 / 4 / 1 | 1865 | 0 / 0 |
+
+So với số người dùng nêu cho mẫu đầu, bộ đọc này đếm thêm 1 lỗi `0x12` ở ON1 và 1 lỗi `0x14` ở ON2. Nếu không bỏ prefix, bộ phân tích đếm 8/9 lỗi CC nội dung ở biên đầu thay vì 6/9; không dùng số đó để đánh giá cửa sổ P4c. Báo cáo TSDuck có sẵn trên mẫu sau 5 giây ghi 34/6 discontinuities và 3/1 duplicates. Đối chiếu byte xác nhận các gói tương ứng cùng CC nhưng nội dung khác, nên được tính vào 37/7 lỗi SI của bộ phân tích này. Sau 5 giây, ON2 có `22216524` byte gói trọn vẹn trên `22216704` byte payload; số cũ `22216712` byte gồm gói cắt qua mốc. B5 cũ không đạt tiêu chí TS và RF; P4b bước 1 đạt hai nhóm tiêu chí ngoại tuyến, không phải chứng nhận phần cứng hay kết luận nguyên nhân.
 
 ## Kiểm thử và đối chứng B3
 

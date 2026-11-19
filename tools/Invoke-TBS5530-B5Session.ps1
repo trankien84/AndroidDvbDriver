@@ -43,8 +43,10 @@ UI_ABORT_BEFORE_RELOAD/ATTACH_PERMISSION_UI_TIMEOUT hoặc PERMISSION_BEFORE_REL
 PERMISSION_DENIED được chuẩn hóa; host refusal không có drain thì đóng session.
 Không retry partial/uncertain firmware, USB error, detach hoặc thiếu drain.
 HEADER/CONSUME/RECEIPT giữ card_id/schema/hash, schedule_sha256, debug_step, ui_retry;
-receipt còn giữ frontend/plan, retry_reason và terminal_report_sha256. Hash chain Flush(true)
-được kiểm lại trước consume. Không sửa/rearm ledger hoặc chuyển sang card khác.
+receipt còn giữ frontend/plan, retry_reason, terminal_report_sha256 và mã phiên audit.
+Với báo cáo cũ, đối chiếu từng SUBMIT/DISCARD/REAP từ bản xuất đã ràng hash trước khi
+chấp nhận hủy trong lúc dọn. Hash chain Flush(true) được kiểm lại trước consume.
+Không sửa/rearm ledger hoặc chuyển sang card khác.
 Review SESSION dùng TBS5530-SESSION-OFFLINE-VALIDATION/v1 và toàn bộ trường B5 cũ,
 thêm các binding trên, frontend/plan, terminal_report_sha256, retry_reason và receipt_sha256
 (SHA256 UTF8 JSON -Compress -Depth8 của receipt đã có previous_sha256, thêm LF).
@@ -222,6 +224,12 @@ function Assert-P4Envelope([object]$Card) {
 }
 
 function Test-B5SessionCard([object]$Card) { return $Card.schema -ceq 'TBS5530-SESSION-CARD/v1' }
+function Assert-B5SessionExecutionAuthorized([object]$Card) {
+    if ((Test-B5SessionCard $Card) -and $Card.card_id -ceq 'P4c') {
+        $p=$Card.PSObject.Properties['execution_authorized']
+        if ($null -eq $p -or $p.Value -isnot [bool] -or -not $p.Value) { throw 'SESSION_P4C_EXECUTION_NOT_AUTHORIZED' }
+    }
+}
 function Get-B5ScheduleHash([object]$Card) {
     return Get-B5Hash ([Text.Encoding]::UTF8.GetBytes(($Card.debug_steps|ConvertTo-Json -Depth 12 -Compress)))
 }
@@ -280,29 +288,175 @@ function Assert-B5SessionBinding([object]$Value,[object]$Card,[string]$CardHash,
             ((Test-B5Integer $p.Value) -and -not (Test-B5Integer $Value.($p.Name)))) { throw 'SESSION_DURABLE_BINDING_MISMATCH' }
     }
 }
-function Test-B5SessionTransportSafe([object]$Report) {
-    if ($null -eq $Report -or -not (Test-B5Drained $Report) -or (Test-B5SessionClosed $Report)) { return $false }
-    foreach ($key in @('firmware','fx2_reload','native_stream','native_urb','b5_phases')) { if ($null -eq $Report.PSObject.Properties[$key]) { return $false } }
-    if ($null -ne $Report.firmware) {
-        $f=$Report.firmware
-        foreach ($key in @('attempted','completed','state','cleanup_failure','stop_cause')) { if ($null -eq $f.PSObject.Properties[$key]) { return $false } }
-        if ($f.state -cne 'OPERATIONAL_CANDIDATE' -or -not (Test-B5Integer $f.attempted) -or $f.attempted -ne 132 -or
-            -not (Test-B5Integer $f.completed) -or $f.completed -ne 132 -or $f.cleanup_failure -cne 'NONE' -or $f.stop_cause -cne 'NONE') { return $false }
+function Test-B5CleanBootstrap([object]$Firmware) {
+    foreach ($key in @('attempted','completed','full_length_completed')) {
+        $p=$Firmware.PSObject.Properties[$key]
+        if ($null -eq $p -or -not (Test-B5Integer $p.Value) -or $p.Value -ne 132) { return $false }
     }
-    if ($null -ne $Report.fx2_reload) {
-        $r=$Report.fx2_reload
-        foreach ($key in @('state','attempted','completed','detach_ns')) { if ($null -eq $r.PSObject.Properties[$key]) { return $false } }
-        if ($r.state -cne 'COMPLETE' -or -not (Test-B5Integer $r.attempted) -or $r.attempted -ne 132 -or
-            -not (Test-B5Integer $r.completed) -or $r.completed -ne 132 -or -not (Test-B5Integer $r.detach_ns) -or $r.detach_ns -ge 0) { return $false }
+    foreach ($key in @('state','cleanup_failure','stop_cause')) {
+        $p=$Firmware.PSObject.Properties[$key]
+        if ($null -eq $p -or $p.Value -isnot [string]) { return $false }
     }
-    foreach ($item in @($Report,$Report.native_stream,$Report.native_urb)+@($Report.b5_phases)) {
-        if ($null -eq $item) { continue }
-        foreach ($key in @('first_status','first_errno','last_errno','urb_status','syscall_errno')) {
-            if ($null -ne $item.PSObject.Properties[$key] -and $null -ne $item.$key -and
-                (-not (Test-B5Integer $item.$key) -or $item.$key -ne 0)) { return $false }
-        }
+    $chain=$Firmware.PSObject.Properties['failure_chain']
+    return $Firmware.state -cin @('OPERATIONAL_CANDIDATE','TRANSITIONING') -and $Firmware.stop_cause -ceq 'NONE' -and
+        $Firmware.cleanup_failure -ceq 'NONE' -and $null -ne $chain -and $chain.Value -is [array] -and $chain.Value.Count -eq 0
+}
+function Test-B5NativeDrainCounts([object]$Value) {
+    foreach ($key in @('submitted','completed','outstanding')) {
+        $p=$Value.PSObject.Properties[$key]
+        if ($null -eq $p -or -not (Test-B5Integer $p.Value) -or $p.Value -lt 0) { return $false }
+    }
+    return $null -ne $Value.PSObject.Properties['quarantined'] -and $Value.quarantined -is [bool] -and
+        -not $Value.quarantined -and $Value.outstanding -eq 0 -and $Value.submitted -eq $Value.completed
+}
+function Test-B5ZeroReceiveFields([object]$Value,[string[]]$Keys) {
+    foreach ($key in $Keys) {
+        $p=$Value.PSObject.Properties[$key]
+        if ($null -ne $p -and $null -ne $p.Value -and (-not (Test-B5Integer $p.Value) -or $p.Value -ne 0)) { return $false }
     }
     return $true
+}
+function Read-B5LegacyPhaseAudit([object]$Phase,[object[]]$Exports,[string]$Directory) {
+    $remote='files/phase31-native-stream-'+$Phase.audit_run_id+'.jsonl'
+    $match=@($Exports|Where-Object {$_.path -ceq $remote})
+    if ($match.Count -ne 1) { throw 'SESSION_NATIVE_AUDIT_NOT_BOUND' }
+    $entry=$match[0]
+    if ($entry.present -isnot [bool] -or -not $entry.present -or $entry.sha256 -cnotmatch '^[a-f0-9]{64}$' -or
+        -not (Test-B5Integer $entry.bytes) -or $entry.bytes -le 0 -or $entry.bytes -gt (Get-B5ExportLimit $remote) -or
+        $entry.file -cnotmatch ('^[0-9]{2}-'+[regex]::Escape([IO.Path]::GetFileName($remote))+'$') -or
+        $entry.local_path -cne (Join-Path $Directory $entry.file)) { throw 'SESSION_NATIVE_AUDIT_NOT_BOUND' }
+    if ((Get-Item -LiteralPath $entry.local_path).Length -ne $entry.bytes) { throw 'SESSION_NATIVE_AUDIT_CHANGED' }
+    $bytes=[IO.File]::ReadAllBytes($entry.local_path)
+    if ($bytes.Length -ne $entry.bytes -or (Get-B5Hash $bytes) -cne $entry.sha256) { throw 'SESSION_NATIVE_AUDIT_CHANGED' }
+    $text=[Text.UTF8Encoding]::new($false,$true).GetString($bytes)
+    if (-not $text.EndsWith("`n") -or $text.Contains("`r")) { throw 'SESSION_NATIVE_AUDIT_INCOMPLETE' }
+    $lines=[IO.StringReader]::new($text)
+    # A discard (including EINVAL) never retires a slot; only its matching REAP can do that.
+    $pending=[long[]]::new(16);$discarded=[bool[]]::new(16)
+    $submitted=0;$completed=0;$outstanding=0;$event=0;$received=0;$draining=$false;$last=$null;$summary=$null
+    try {
+        while ($null -ne ($line=$lines.ReadLine())) {
+            $row=ConvertFrom-Json -InputObject $line
+            if ($null -ne $summary -or $row.run_id -cne $Phase.audit_run_id) { throw 'SESSION_NATIVE_AUDIT_SEQUENCE_INVALID' }
+            if ($null -ne $row.PSObject.Properties['summary']) {
+                if ($row.summary -isnot [bool] -or -not $row.summary -or -not (Test-B5NativeDrainCounts $row) -or
+                    $null -ne $row.PSObject.Properties['event'] -or $null -ne $row.PSObject.Properties['mapping'] -or
+                    $row.submitted -ne $submitted -or $row.completed -ne $completed -or $row.stop_reason -cne $Phase.stop_reason) { throw 'SESSION_NATIVE_AUDIT_SUMMARY_INVALID' }
+                $summary=$row
+                continue
+            }
+            if ($null -ne $row.PSObject.Properties['mapping']) {
+                if ($row.mapping -isnot [bool] -or -not $row.mapping -or $row.dropped -isnot [bool] -or $row.dropped -or
+                    $null -ne $row.PSObject.Properties['event'] -or $null -ne $row.PSObject.Properties['kind']) { throw 'SESSION_NATIVE_AUDIT_MAPPING_INVALID' }
+                continue
+            }
+            foreach ($key in @('event','kind','slot','sequence','syscall_return','syscall_errno','software_outstanding')) {
+                if (-not (Test-B5Integer $row.$key)) { throw 'SESSION_NATIVE_AUDIT_EVENT_INVALID' }
+            }
+            if ($row.event -ne (++$event) -or $row.slot -lt 0 -or $row.slot -ge $pending.Length -or $row.sequence -lt 1 -or
+                $row.read_api -cne 'NATIVE_USBFS_STREAM') { throw 'SESSION_NATIVE_AUDIT_SEQUENCE_INVALID' }
+            $i=$row.slot
+            $ok=$row.syscall_return -eq 0 -and $row.syscall_errno -eq 0
+            switch ($row.kind) {
+                1 {
+                    if (-not $ok -or $draining -or $pending[$i] -ne 0 -or $null -ne $row.urb_status -or $row.sequence -ne (++$submitted)) { throw 'SESSION_NATIVE_AUDIT_SUBMIT_INVALID' }
+                    $pending[$i]=$row.sequence;$outstanding++
+                }
+                2 {
+                    if (-not $ok -or $pending[$i] -ne $row.sequence -or -not (Test-B5Integer $row.urb_status) -or
+                        ($draining -and (-not $discarded[$i] -or $row.urb_status -notin @(0,-2,-104))) -or
+                        (-not $draining -and ($row.urb_status -ne 0 -or $row.sequence -ne (++$received)))) { throw 'SESSION_NATIVE_AUDIT_REAP_INVALID' }
+                    $last=$row;$pending[$i]=0;$outstanding--;$completed++
+                }
+                3 {
+                    if ((-not $ok -and ($row.syscall_return -ne -1 -or $row.syscall_errno -ne 22)) -or
+                        $pending[$i] -ne $row.sequence -or $discarded[$i] -or $null -ne $row.urb_status) { throw 'SESSION_NATIVE_AUDIT_DISCARD_INVALID' }
+                    $draining=$true;$discarded[$i]=$true
+                }
+                default { throw 'SESSION_NATIVE_AUDIT_EVENT_INVALID' }
+            }
+            if ($row.software_outstanding -ne $outstanding) { throw 'SESSION_NATIVE_AUDIT_COUNT_MISMATCH' }
+        }
+    } finally { $lines.Dispose() }
+    if ($null -eq $summary -or $received -eq 0 -or $outstanding -ne 0 -or $submitted -ne $Phase.submitted -or $completed -ne $Phase.completed) {
+        throw 'SESSION_NATIVE_AUDIT_INCOMPLETE'
+    }
+    return $last
+}
+function Test-B5SessionTransportSafe([object]$Report,[string]$EvidenceDirectory,[string]$ManifestHash,[string]$AuditSession) {
+    try {
+        if ($null -eq $Report -or -not (Test-B5Drained $Report) -or (Test-B5SessionClosed $Report)) { return $false }
+        foreach ($key in @('firmware','fx2_reload','native_stream','native_urb','b5_phases')) { if ($null -eq $Report.PSObject.Properties[$key]) { return $false } }
+        Assert-B5PhaseReport $Report
+        $phases=@($Report.b5_phases|Where-Object {$_.phase -cin @('ON1','ON2')})
+        $f=$Report.firmware;$r=$Report.fx2_reload
+        if ($null -ne $f -and -not (Test-B5CleanBootstrap $f)) { return $false }
+        if ($null -ne $r) {
+            foreach ($key in @('state','attempted','completed','detach_ns')) { if ($null -eq $r.PSObject.Properties[$key]) { return $false } }
+            $profile=$Report.operational_usb_observation.profile
+            if ($null -eq $f -or $r.state -isnot [string] -or $r.state -cne 'COMPLETE' -or -not (Test-B5Integer $r.attempted) -or $r.attempted -ne 132 -or
+                -not (Test-B5Integer $r.completed) -or $r.completed -ne 132 -or -not (Test-B5Integer $r.detach_ns) -or $r.detach_ns -ne -1 -or
+                $profile -isnot [string] -or $profile -cne 'OPERATIONAL_CANDIDATE') { return $false }
+        } elseif ($phases.Count -ne 0 -or ($null -ne $f -and $f.state -cne 'OPERATIONAL_CANDIDATE')) { return $false }
+        $receiveKeys=@('first_status','first_errno','last_status','last_errno','urb_status','syscall_errno','syscall_return')
+        if (-not (Test-B5ZeroReceiveFields $Report $receiveKeys) -or $null -ne $Report.native_stream) { return $false }
+        if ($phases.Count -eq 0) {
+            $c=$Report.PSObject.Properties['cleanup_cancellation'];$e=$Report.PSObject.Properties['receive_error']
+            return $null -eq $Report.native_urb -and ($null -eq $c -or ($c.Value -is [bool] -and -not $c.Value)) -and
+                ($null -eq $e -or $e.Value -ceq 'NOT_CLASSIFIED_AS_COMPLETED_ERROR')
+        }
+        if ($Report.cleanup_path -cne 'RUNTIME_DRAIN_CONFIRMED') { return $false }
+        foreach ($phase in $Report.b5_phases) {
+            if (-not (Test-B5ZeroReceiveFields $phase $receiveKeys)) { return $false }
+        }
+        $urb=$Report.native_urb
+        $legacy=$null -eq $Report.PSObject.Properties['cleanup_cancellation']
+        if ($legacy) {
+            Assert-B5Guid $AuditSession
+            if ($ManifestHash -cnotmatch '^[a-f0-9]{64}$') { return $false }
+            $manifestPath=Join-Path $EvidenceDirectory 'export-manifest.json'
+            if ((Get-Item -LiteralPath $manifestPath).Length -gt 65536) { return $false }
+            $manifestBytes=[IO.File]::ReadAllBytes($manifestPath)
+            if ((Get-B5Hash $manifestBytes) -cne $ManifestHash) { return $false }
+            $exports=@([Text.UTF8Encoding]::new($false,$true).GetString($manifestBytes)|ConvertFrom-Json)
+        } elseif ($Report.cleanup_cancellation -isnot [bool] -or
+            $Report.receive_error -cne 'NOT_CLASSIFIED_AS_COMPLETED_ERROR' -or
+            ($null -ne $urb -and (-not (Test-B5NativeDrainCounts $urb) -or -not (Test-B5ZeroReceiveFields $urb $receiveKeys)))) { return $false }
+        $sawCancellation=$false
+        $splitKeys=@('last_status','last_errno','cleanup_last_status','cleanup_last_errno','cleanup_cancellation','cleanup_error')
+        foreach ($phase in $phases) {
+            if ($phase.stop_reason -cnotin @('DEADLINE','DURATION','BYTE_LIMIT') -or -not (Test-B5NativeDrainCounts $phase)) { return $false }
+            foreach ($key in @('first_status','first_errno')) { if ($null -eq $phase.PSObject.Properties[$key]) { return $false } }
+            if (-not (Test-B5Integer $phase.first_errno) -or $phase.first_errno -ne 0) { return $false }
+            if ($legacy) {
+                foreach ($key in $splitKeys) { if ($null -ne $phase.PSObject.Properties[$key]) { return $false } }
+                if ($phase.audit_run_id -cne ($AuditSession+'-'+$phase.phase) -or $phase.first_status -ne 0 -or $phase.first_errno -ne 0) { return $false }
+                $last=Read-B5LegacyPhaseAudit $phase $exports $EvidenceDirectory
+            } else {
+                foreach ($key in $splitKeys) { if ($null -eq $phase.PSObject.Properties[$key]) { return $false } }
+                if ($phase.cleanup_cancellation -isnot [bool] -or $phase.cleanup_error -isnot [bool] -or $phase.cleanup_error -or
+                    ($null -ne $phase.cleanup_last_status -and (-not (Test-B5Integer $phase.cleanup_last_status) -or $phase.cleanup_last_status -notin @(0,-2,-104))) -or
+                    -not (Test-B5Integer $phase.last_errno) -or $phase.last_errno -ne 0 -or
+                    -not (Test-B5Integer $phase.cleanup_last_errno) -or $phase.cleanup_last_errno -ne 0 -or
+                    ($phase.cleanup_last_status -in @(-2,-104) -and -not $phase.cleanup_cancellation) -or
+                    ($phase.cleanup_cancellation -and $null -eq $phase.cleanup_last_status) -or
+                    ($null -eq $phase.first_status -and $null -ne $phase.last_status) -or
+                    ($phase.completed -eq 0 -and ($null -ne $phase.last_status -or $null -ne $phase.cleanup_last_status)) -or
+                    ($phase.bytes -gt 0 -and ($phase.first_status -ne 0 -or $phase.last_status -ne 0 -or $phase.completed -eq 0))) { return $false }
+                $sawCancellation=$sawCancellation -or $phase.cleanup_cancellation
+            }
+        }
+        if (-not $legacy) { return $Report.cleanup_cancellation -eq $sawCancellation }
+        # Only the old, audited final completion may carry a negative cleanup status.
+        if (-not (Test-B5NativeDrainCounts $urb) -or $urb.completion_known -isnot [bool] -or -not $urb.completion_known -or
+            $urb.submitted -ne $phases[-1].submitted -or $urb.completed -ne $phases[-1].completed -or
+            $Report.receive_error -cnotin @('NOT_CLASSIFIED_AS_COMPLETED_ERROR','KNOWN_COMPLETED_USB_ERROR')) { return $false }
+        foreach ($pin in @{urb_status=$last.urb_status;syscall_errno=$last.syscall_errno;syscall_return=$last.syscall_return;
+            slot=$last.slot;completion_sequence=$last.sequence}.GetEnumerator()) {
+            if (-not (Test-B5Integer $urb.($pin.Key)) -or $urb.($pin.Key) -ne $pin.Value) { return $false }
+        }
+        return $Report.receive_error -cne 'KNOWN_COMPLETED_USB_ERROR' -or $last.urb_status -in @(-2,-104)
+    } catch { return $false }
 }
 function Get-B5UiRetryReason([object]$Report) {
     if (-not (Test-B5SessionTransportSafe $Report) -or
@@ -324,10 +478,13 @@ function Get-B5UiRetryReason([object]$Report) {
 function Read-B5SessionTerminal([object]$Card,[object]$Receipt,[int]$Ordinal) {
     $path=Join-Path $Card.budget_directory ('attempt-'+$Ordinal+'\terminal-report.json')
     if ($Receipt.terminal_report_sha256 -cnotmatch '^[a-f0-9]{64}$' -or
-        (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $Receipt.terminal_report_sha256) { throw 'SESSION_TERMINAL_EVIDENCE_CHANGED' }
-    $r=[IO.File]::ReadAllText($path)|ConvertFrom-Json
-    if (-not (Test-B5SessionTransportSafe $r) -or $r.result -cne $Receipt.result -or
-        (Get-B5UiRetryReason $r) -cne $Receipt.retry_reason) { throw 'SESSION_TERMINAL_NOT_SAFE' }
+        (Get-Item -LiteralPath $path).Length -gt 1048576) { throw 'SESSION_TERMINAL_EVIDENCE_CHANGED' }
+    $bytes=[IO.File]::ReadAllBytes($path)
+    if ((Get-B5Hash $bytes) -cne $Receipt.terminal_report_sha256) { throw 'SESSION_TERMINAL_EVIDENCE_CHANGED' }
+    $r=[Text.UTF8Encoding]::new($false,$true).GetString($bytes).TrimStart([char]0xFEFF)|ConvertFrom-Json
+    $auditSession=if ($null -ne $Receipt.PSObject.Properties['audit_session']) { $Receipt.audit_session } else { $null }
+    if (-not (Test-B5SessionTransportSafe $r (Split-Path -Parent $path) $Receipt.export_manifest_sha256 $auditSession) -or
+        $r.result -cne $Receipt.result -or (Get-B5UiRetryReason $r) -cne $Receipt.retry_reason) { throw 'SESSION_TERMINAL_NOT_SAFE' }
     $a=Get-B5SessionAttempt $Card $Ordinal $Receipt.debug_step
     Assert-B5DriveBinding $r 'b5_ts_drive' $a.ts_drive
     Assert-B5DriveBinding $Receipt 'ts_drive' $a.ts_drive
@@ -1115,6 +1272,7 @@ if ($cardBytes.Length -gt 65536 -or (Get-B5Hash $cardBytes) -cne $ExpectedB5Card
 $card=[Text.UTF8Encoding]::new($false,$true).GetString($cardBytes).TrimStart([char]0xFEFF)|ConvertFrom-Json
 $sessionPath=[IO.Path]::GetFullPath($B5SessionDirectory)
 Assert-B5Approval $card $Approval
+Assert-B5SessionExecutionAuthorized $card
 $pins=@{approval=$Approval;model=$ExpectedModel;api=$ExpectedApi;boot_count=$ExpectedBootCount;session_directory=$sessionPath
     app_apk_sha256=$ExpectedAppApkSha256;autonomous_helper_sha256=$ExpectedHelperSha256;b3_helper_sha256=$ExpectedB3HelperSha256;b5_helper_sha256=$ExpectedB5HelperSha256
     firmware_sha256=$firmwareSha
@@ -1151,7 +1309,7 @@ if($null -eq $carryProof -and (Test-Path -LiteralPath $windowsLedger)){
 $manifestName=if($null -ne $extensionProof){'b5-one-extra-manifest.jsonl'}elseif($null -ne $migrationProof){'b5-target-migration-manifest.jsonl'}elseif($null -ne $carryProof){'b5-android-carry-manifest.jsonl'}else{'b5-session-manifest.jsonl'}
 $manifestPath=Join-Path $sessionPath $manifestName
 $manifestStream=[IO.FileStream]::new($manifestPath,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
-$consumed=$false; $granted=$false; $terminalReport=$null; $exitCode=1; $failure='HOST_ABORTED_NO_RETRY'; $challenge=$null; $classification=$null
+$consumed=$false; $granted=$false; $terminalReport=$null; $exitCode=1; $failure='HOST_ABORTED_NO_RETRY'; $challenge=$null; $classification=$null; $sessionTransportSafe=$false
 $captureRawSha=$null; $exportManifestSha=$null; $preGrantEvidenceSha=$null; $hostError='HOST_PRE_GRANT_EXCEPTION'
 try {
     $prefix=Read-B5Manifest $manifestStream
@@ -1269,6 +1427,10 @@ try {
     $exportManifestSha=(Get-FileHash -LiteralPath (Join-Path $attemptPath 'export-manifest.json') -Algorithm SHA256).Hash.ToLowerInvariant()
     $raw=@($exports|Where-Object {$_.path -clike '*/received-ON1.ts' -and $_.present}); if ($raw.Count -eq 1) { $captureRawSha=$raw[0].sha256 }
     $classification=Get-B5CaptureClassification $terminalReport $exports
+    if ($isSession) {
+        $sessionTransportSafe=Test-B5SessionTransportSafe $terminalReport $attemptPath $exportManifestSha $challenge.session
+        if (-not $sessionTransportSafe) { $classification.capture_complete=$false }
+    }
     $classification|Add-Member ts_drive $B5TsDrive
     Write-B5NewJson (Join-Path $attemptPath 'host-classification.json') $classification
     $classification|ConvertTo-Json -Compress
@@ -1295,8 +1457,9 @@ try {
                 $receipt=Add-B5SessionBinding $receipt $card $ExpectedB5CardSha256 $DebugStep $UiRetry
                 foreach ($p in @{frontend_experiment=$FrontendExperiment;golden_sha256=$ExpectedFrontendGoldenSha256;reload_plan_sha256=$ExpectedReloadPlanSha256;
                     retry_reason=(Get-B5UiRetryReason $terminalReport);terminal_report_sha256=$(if(Test-Path -LiteralPath (Join-Path $attemptPath 'terminal-report.json')){(Get-FileHash -LiteralPath (Join-Path $attemptPath 'terminal-report.json') -Algorithm SHA256).Hash.ToLowerInvariant()}else{$null})}.GetEnumerator()) { $receipt|Add-Member $p.Key $p.Value }
+                if ($null -ne $classification) { $receipt|Add-Member audit_session $challenge.session }
                 # A host refusal is not proof of Android drain and cannot authorize any successor.
-                if (-not (Test-B5SessionTransportSafe $terminalReport) -or $failure -ceq 'HOST_ABORTED_NO_RETRY' -or
+                if ($null -eq $classification -or -not $sessionTransportSafe -or $failure -ceq 'HOST_ABORTED_NO_RETRY' -or
                     (-not $receipt.capture_complete -and $null -eq $receipt.retry_reason)) { $receipt.session_closed=$true }
             }
             $prefix=Add-B5ManifestRecord $manifestStream $prefix $receipt

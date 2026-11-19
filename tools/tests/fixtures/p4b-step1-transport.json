@@ -1,0 +1,134 @@
+{
+  "source": "P4b step 1 terminal report and ON1/ON2 native audits; both source file lengths and SHA-256 hashes verified against the read-only export manifest.",
+  "encoding": "gzip/base64; each 11-byte event: uint8 kind, uint8 slot, int16LE sequence delta from the previous event (starts at 0), int16LE syscall_return, int16LE syscall_errno, int16LE urb_status (32767 = null), uint8 software_outstanding. Event ordinals start at 1. Mapping rows, paths, IDs and timestamps omitted.",
+  "report": {
+    "cleanup": "DRAIN_CONFIRMED",
+    "cleanup_path": "RUNTIME_DRAIN_CONFIRMED",
+    "state": "REPORT",
+    "result": "B5_FOUR_PHASES_COMPLETE",
+    "terminal": true,
+    "native_stream": null,
+    "receive_error": "KNOWN_COMPLETED_USB_ERROR",
+    "last_errno": null,
+    "ts_bytes": 177881088,
+    "stop_reason": "NONE",
+    "firmware": {
+      "state": "TRANSITIONING",
+      "attempted": 132,
+      "completed": 132,
+      "full_length_completed": 132,
+      "cleanup_failure": "NONE",
+      "stop_cause": "NONE",
+      "failure_chain": []
+    },
+    "fx2_reload": {
+      "state": "COMPLETE",
+      "attempted": 132,
+      "completed": 132,
+      "detach_ns": -1
+    },
+    "operational_usb_observation": {
+      "profile": "OPERATIONAL_CANDIDATE"
+    },
+    "native_urb": {
+      "submitted": 2730,
+      "completed": 2730,
+      "outstanding": 0,
+      "quarantined": false,
+      "completion_known": true,
+      "syscall_return": 0,
+      "syscall_errno": 0,
+      "urb_status": -2,
+      "slot": 15,
+      "completion_sequence": 2720
+    },
+    "b5_phases": [
+      {
+        "phase": "OFF1",
+        "bytes": 0,
+        "drained": true,
+        "quarantined": false,
+        "stop_reason": "OFF_WINDOW"
+      },
+      {
+        "phase": "ON1",
+        "bytes": 133414912,
+        "drained": true,
+        "quarantined": false,
+        "stop_reason": "DEADLINE",
+        "first_status": 0,
+        "first_errno": 0,
+        "outstanding": 0,
+        "submitted": 8159,
+        "completed": 8159
+      },
+      {
+        "phase": "OFF2",
+        "bytes": 0,
+        "drained": true,
+        "quarantined": false,
+        "stop_reason": "OFF_WINDOW"
+      },
+      {
+        "phase": "ON2",
+        "bytes": 44466176,
+        "drained": true,
+        "quarantined": false,
+        "stop_reason": "DEADLINE",
+        "first_status": 0,
+        "first_errno": 0,
+        "outstanding": 0,
+        "submitted": 2730,
+        "completed": 2730
+      }
+    ]
+  },
+  "audits": {
+    "ON1": {
+      "summary": {
+        "summary": true,
+        "stop_reason": "DEADLINE",
+        "submitted": 8159,
+        "completed": 8159,
+        "outstanding": 0,
+        "quarantined": false
+      },
+      "gzip_base64": [
+        "H4sIAAAAAAACCu3SyW0kQQxFwWLWvvdp3B2bJQNUghaKTgRPDx95CmR00X3d8z8iMlu0zD76zCGGzDHGzCmmzDnmzCWWzDXWzC22",
+        "zD32zCOOzDPOzCuuzDvuzFfr3p7v7u7oXn9r1Bq1tlpbrX2tfa1DrUOtY61jrVOtU61zrXOtS61LrWuta61brVute617rUetR61n",
+        "rWetV61XrXet94svX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cv",
+        "X758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758",
+        "+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLl",
+        "y5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cv",
+        "X758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758",
+        "+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLl",
+        "y5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cv",
+        "X758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758",
+        "+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLl",
+        "y5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cv",
+        "X758+fLly5cvX758+fLly5cvX758+fLly5cvX758+fLly5cvX758+ebad+9PZsTf2ir7yqFyrJwq58qlcq3cKvfKo/KsvCrvt+d5",
+        "/v38h+737tb9PPh4rhaZZ2uZR+sz9zZkbm3MXNuUubQ5c25L5tTWzLFtmUPbM/t2ZLZ2Zka7MrtPqjIjBNq9AgA="
+      ]
+    },
+    "ON2": {
+      "summary": {
+        "summary": true,
+        "stop_reason": "DEADLINE",
+        "submitted": 2730,
+        "completed": 2730,
+        "outstanding": 0,
+        "quarantined": false
+      },
+      "gzip_base64": [
+        "H4sIAAAAAAACCu3RO3IVQRBFwame//9ZbJc1Cww8hkBSqSztINs6caOs7Oii+/+enxGR2aJl9tFnDjFkjjFmTjFlzjFnLrFkrrFm",
+        "brFl7rFnHnFknnFmXnFl3nFnvlr39rx3d0f3+lqj1qi11dpq7Wvtax1qHWodax1rnWqdap1rnWtdal1qXWtda91q3Wrda91rPWo9",
+        "aj1rPWu9ar1qvWu9X3z58uXLly9fvnz58uXLly9fvnz58uXLly9fvnz58uXLly9fvnz58uXLly9fvnz58uXLly9fvnz58uXLly9f",
+        "vnz58uXLly9fvnz58uXLly9fvnz58uXLly9fvnz58uXLly9fvnz58uXLly9fvnz58uXLly9fvnz58uXLly9fvnz58uXLly9fvnz5",
+        "8uXLly9fvnz58uXLly9fvnz58uXLly9fvnz58uXLly9fvnz58uXLly9fvnz58uXLly9fvnz58uXLly9fvnz58uXLly9fvnz58uXL",
+        "ly9fvnz58uXLly9fvnz58uXLly9fvnz58uXLly9fvnz58uXLly9fvnz58uXLl+93vn3358mM+FpbZV85VI6VU+VcuVSuldvb8zw/",
+        "3nOv9ag8K6/KO+ovPvLvc7fIvFrLPFufebQhc29j5tamzLXNmUvbfn/qzG25PteprXkwtv3X85FDO3Lt25nZ2pUZ7c7s/gHOiFA3",
+        "TOsAAA=="
+      ]
+    }
+  }
+}

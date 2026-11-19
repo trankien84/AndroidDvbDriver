@@ -144,7 +144,8 @@ public class Tbs5530TsSmokeTest {
             java.lang.reflect.Constructor<info.martinmarinov.usbxfer.NativeUsbfsStream.Result> constructor =
                     info.martinmarinov.usbxfer.NativeUsbfsStream.Result.class.getDeclaredConstructor(byte[].class, long[].class, String.class);
             constructor.setAccessible(true);
-            return constructor.newInstance(raw, new long[]{32, 16, 1000000000L, risks, 5000, 5000, 15, status, 0, 0, 0, 3, 0, 0}, reason);
+            return constructor.newInstance(raw, new long[]{32, 16, 1000000000L, risks, 5000, 5000, 15, status, 0,
+                    0, 0, 3, 0, 0, status, 0, Integer.MIN_VALUE, 0, 0, 0}, reason);
         } catch (ReflectiveOperationException error) { throw new IOException(error); }
     }
     @Test public void b4ParsesFileAfterDrainAndNeverCertifiesWriterDrops() throws Exception {
@@ -162,7 +163,8 @@ public class Tbs5530TsSmokeTest {
             constructor.setAccessible(true);
             info.martinmarinov.usbxfer.NativeUsbfsStream.Result stream = constructor.newInstance(new byte[0], file,
                     raw.length + 16384, (long)raw.length, 16384L, null,
-                    new long[]{32, 32, 30000000000L, 0, 1000, 1000, 15, 0, 0, 0, 0, 2, 0, 0}, "DEADLINE");
+                    new long[]{32, 32, 30000000000L, 0, 1000, 1000, 15, 0, 0, 0, 0, 2, 0, 0,
+                            0, 0, Integer.MIN_VALUE, 0, 0, 0}, "DEADLINE");
             f.smoke.streamReceiver(limits -> stream);
             Tbs5530TsSmoke.Result result = f.smoke.run(Tbs5530TsSmoke.Limits.b4(30000, 16, false));
             assertEquals(raw.length, copied[0]); assertEquals(raw.length, result.bytes);

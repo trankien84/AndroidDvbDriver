@@ -29,7 +29,8 @@ public class NativeUsbfsStreamWriterTest {
         public void stop() { stopped.countDown(); }
         public int copy(byte[] bytes) { ++copies; throw new AssertionError("File receive cannot copy full data"); }
         public long[] snapshot() { return new long[]{16,16,16,quarantine ? 1 : 0,totalChunks * 188 + drops,0,quarantine ? 1 : 0,0,0,0,188,0,1,0}; }
-        public long[] metrics() { return new long[]{16,16,60000000000L,0,4000,3000,15,0,0,quarantine ? 1 : 0,quarantine ? 1 : 0,2,0,0}; }
+        public long[] metrics() { return new long[]{16,16,60000000000L,0,4000,3000,15,0,0,quarantine ? 1 : 0,
+                quarantine ? 1 : 0,2,0,0,0,0,Integer.MIN_VALUE,0,0,0}; }
         public long[] events(int offset) { assertFalse(attached.get()); return new long[0]; }
         public boolean destroy() { assertFalse(attached.get()); assertFalse(quarantine); ++frees; return true; }
         public void writerAttach() { assertTrue(attached.compareAndSet(false, true)); }

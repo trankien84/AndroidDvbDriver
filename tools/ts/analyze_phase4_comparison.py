@@ -1,9 +1,10 @@
 """So sánh OFF/ON ngoại tuyến; không mở thiết bị và không tự kết luận EMI.
 
 API: load_b5(bundle, export=None), load_capture(path), load_dump(sidecar, ts=None),
-summarize(capture), compare_runs(baseline, candidate), markdown(summaries). Chỉ dùng stdlib và analyzer
-B5 hiện có (không sửa analyzer). CLI: --b5 BUNDLE [--b5-export EXPORT]
-[--b5-provenance JSON] [--capture JSON ...] [--json NEW] [--markdown NEW].
+summarize(capture), compare_runs(baseline, candidate), markdown(summaries). Chỉ dùng thư viện chuẩn
+và các analyzer cùng thư mục. CLI: --b5 BUNDLE [--b5-export EXPORT]
+[--b5-provenance JSON] [--capture JSON ...] [--debug-export ID LOG_DIR TS_DIR ...]
+[--json NEW] [--markdown NEW].
 Không có --markdown thì in bảng Markdown ra stdout; output phải là tệp mới.
 
 Đầu vào production: JSON schema PHASE4-CAPTURE/v1, id, provenance (object có
@@ -238,12 +239,13 @@ def _timing(phase):
                 or quality['end_ns'] != window[1] or window[1] <= threshold):
             raise ValueError('Quality window must be first-data+5s to audited end')
         duration = (window[1] - threshold) / 1e9
-        rates = {'duration_s': duration}
+        rates = {'duration_s': duration, 'start_ns': threshold, 'end_ns': window[1]}
         for field, out, factor in (('ts_bytes', 'ts_mbps', 8 / 1e6),
                                    ('cc_errors', 'cc_per_min', 60), ('tei_packets', 'tei_per_min', 60)):
             count = quality.get(field)
             if count is not None and not integer(count):
                 raise ValueError('Invalid after5s count: ' + field)
+            rates[field] = count
             rates[out] = count * factor / duration if count is not None else None
         ts_bytes = quality.get('ts_bytes')
         if ts_bytes is not None:
@@ -324,7 +326,7 @@ def _consumer_crop(sidecar, raw):
                   threshold_lateness_ns=crop_time - (start + WARMUP_NS),
                   interpolation=False, cc_state='FRESH_AT_CROP')
     import analyze_ts_capture as ts
-    analysis = ts.analyze(raw, skip_prefix=crop_offset)
+    analysis = ts.analyze(raw, skip_prefix=crop_offset, phase4=True)
     sync = analysis['sync']
     result.update(sync_packets=sync['packets'], unparsed_bytes=sync['unparsed_bytes'],
                   leading_bytes=sync['leading_bytes'], sync_breaks=sync['break_count'],
@@ -335,6 +337,7 @@ def _consumer_crop(sidecar, raw):
     packets = sync['packets']
     cc = analysis['cc']['within_errors'] + analysis['cc']['between_errors']
     tei = analysis['totals']['tei']
+    result['phase4_ts'] = analysis['phase4_ts']
     result['quality'] = {'duration_s': duration, 'start_ns': crop_time, 'end_ns': end,
                          'ts_bytes': packets * 188, 'cc_errors': cc, 'tei_packets': tei,
                          'ts_mbps': packets * 188 * 8 / duration / 1e6,
@@ -409,25 +412,30 @@ def load_dump(sidecar_path, ts_path=None, *, run_id=None):
                         + ([] if crop['quality'] is not None else ['Dump: ' + crop['status']])}
 
 
-def _one(folder, pattern):
-    matches = list(folder.glob(pattern))
+def _one(folder, *patterns):
+    matches = [path for pattern in patterns for path in folder.glob(pattern)]
     if len(matches) != 1:
-        raise ValueError('Expected exactly one B5 input: ' + pattern)
+        raise ValueError('Expected exactly one debug input: ' + ' or '.join(patterns))
     return matches[0]
 
 
 def load_b5(bundle, export=None):
-    import analyze_b5_capture as b5
     bundle = Path(bundle)
     export = Path(export) if export else bundle.parent.parent / 'logs' / bundle.name / 'android4-readonly-export'
-    report_path = export / 'session-report.json'
+    return load_debug(export, export, 'B5')
+
+
+def load_debug(export, raw_dir, run_id):
+    import analyze_b5_capture as b5
+    export, raw_dir = Path(export), Path(raw_dir)
+    report_path = _one(export, 'session-report.json', 'terminal-report.json')
     report = read_json(report_path)
     b5.validate_phases(report)
-    monitor_paths = [_one(export, 'phase31-signal-monitor-*-' + name + '.jsonl') for name in PHASES]
-    monitor_paths += [_one(export, 'phase31-signal-rssi-*-' + name + '.jsonl') for name in ('OFF1', 'OFF2')]
+    monitor_paths = [_one(export, '*phase31-signal-monitor-*-' + name + '.jsonl') for name in PHASES]
+    monitor_paths += [_one(export, '*phase31-signal-rssi-*-' + name + '.jsonl') for name in ('OFF1', 'OFF2')]
     monitor = b'\n'.join(path.read_bytes() for path in monitor_paths)
-    inputs = {name: (_one(export, 'phase31-native-stream-*-' + name + '.ts').read_bytes(),
-                     _one(export, 'phase31-native-stream-*-' + name + '.jsonl').read_bytes()) for name in ('ON1', 'ON2')}
+    inputs = {name: (_one(raw_dir, '*phase31-native-stream-*-' + name + '.ts').read_bytes(),
+                     _one(export, '*phase31-native-stream-*-' + name + '.jsonl').read_bytes()) for name in ('ON1', 'ON2')}
     analysis = b5.analyze(report, inputs, monitor)
     phases = []
     monitor_rows = b5.jsonl(monitor)
@@ -439,17 +447,26 @@ def load_b5(bundle, export=None):
             spans, _, metadata = b5.ts.native_completions(audit, len(raw))
             on = analysis['on_analyses'][name]
             after = on['completion_frames'].get('after_5s', {})
+            post = on.get('post5s_tables', {})
             phase.update(start_ns=metadata['submit_begin_ns'], end_ns=metadata['end_ns'],
                          completions=[{'timestamp_ns': span['timestamp_ns'], 'actual_length': span['end'] - span['start'],
                                        'status': 0, 'stage': 'data', 'clock': CLOCK} for span in spans],
                          completions_complete=True, urb_errors=metadata['native_data_errors'], urb_errors_complete=True)
             if after.get('status') == 'OBSERVED':
-                phase['quality_after5s'] = {**after['metrics'], 'clock': CLOCK,
+                phase['native_alignment'] = {'prefix_probe': on['offline_prefix_probe'],
+                                             'writer_mapping': metadata['writer_mapping'],
+                                             'writer_drop_bytes': metadata['writer']['writer_drop_bytes'],
+                                             'legacy_completion_counts': after['metrics'],
+                                             **{key: post.get(key) for key in ('analysis_range', 'first_sync_offset',
+                                                                             'unparsed_bytes', 'post5s_payload_bytes')}}
+            if post.get('metrics') is not None:
+                phase['quality_after5s'] = {**post['metrics'], 'clock': CLOCK,
                                            'start_ns': metadata['origin_ns'] + WARMUP_NS, 'end_ns': metadata['end_ns']}
+                phase['phase4_ts'] = post['phase4_ts']
             # Monitor precedes first submit and may end after drain: retain its phase window.
             phase['sample_window'] = [original['start_ns'], original['end_ns']]
         phases.append(phase)
-    return {'schema': SCHEMA, 'id': 'B5', 'phases': phases, 'provenance': {},
+    return {'schema': SCHEMA, 'id': run_id, 'phases': phases, 'provenance': {},
             'frontend': analysis['frontend'], 'report_sha256': hashlib.sha256(report_path.read_bytes()).hexdigest(),
             'monitor_sha256': analysis['monitor_sha256'],
             'raw_sha256': {name: on['input']['sha256'] for name, on in analysis['on_analyses'].items()}}
@@ -486,8 +503,12 @@ def summarize(capture):
                                   'demod_lock_losses': losses if known and len(warnings) == warnings_before else None,
                                   'urb_errors': errors if phase.get('urb_errors_complete') is True else None,
                                   **_timing(phase)}
+        if 'native_alignment' in phase:
+            phases[phase['phase']]['native_alignment'] = phase['native_alignment']
+            phases[phase['phase']]['phase4_ts'] = phase.get('phase4_ts')
         if 'dump_alignment' in phase:
             phases[phase['phase']].update(quality_after5s=phase['consumer_quality'],
+                                          phase4_ts=phase['dump_alignment'].get('phase4_ts'),
                                           dump_alignment=phase['dump_alignment'],
                                           timing_basis='CONSUMER_MARKER' if 'timing_start_ns' in phase else 'RECORDING_START_PLUS_5S',
                                           timing_start_ns=phase.get('timing_start_ns', phase['start_ns'] + WARMUP_NS),
@@ -500,9 +521,44 @@ def summarize(capture):
         on = phases.get('ON' + str(index), {}).get('snr_db', {}).get('median')
         drops[str(index)] = off - on if off is not None and on is not None else None
     return {'id': capture['id'], 'provenance': capture.get('provenance', {}), 'phases': phases,
-            'groups': groups, 'snr_drop_db': drops, 'warnings': sorted(set(warnings)),
-            'emi': 'UNKNOWN_NOT_AUTOMATICALLY_ASSESSED',
+            'groups': groups, 'snr_drop_db': drops, 'p4c_criteria': p4c_criteria(phases, drops),
+            'warnings': sorted(set(warnings)),
             'hashes': {key: value for key, value in capture.items() if key.endswith('sha256')}}
+
+
+def p4c_criteria(phases, drops):
+    def grade(value, meets):
+        return 'UNKNOWN' if value is None else 'PASS' if meets(value) else 'FAIL'
+
+    def overall(values):
+        return 'FAIL' if 'FAIL' in values else 'UNKNOWN' if 'UNKNOWN' in values else 'PASS'
+
+    criteria = {}
+    for index, name in enumerate(('ON1', 'ON2'), 1):
+        phase = phases.get(name, {})
+        quality, details = phase.get('quality_after5s') or {}, phase.get('phase4_ts') or {}
+        groups = details.get('cc', {})
+        duration = quality.get('duration_s')
+        rates = {key: group['errors'] * 60 / duration if duration else None for key, group in groups.items()}
+        content = groups.get('content', {})
+        classified = (details.get('content_mapping_complete') and content.get('comparisons', 0) > 0
+                      and all(row['comparisons'] > 0 for row in content.get('pids', [])))
+        content_rate = rates.get('content')
+        ts_checks = {'content_cc': grade(content_rate if classified else None, lambda value: value <= 1),
+                     'tei': grade(quality.get('tei_packets'), lambda value: value == 0),
+                     'pcr_missing_bytes': details.get('pcr', {}).get('status', 'UNKNOWN'),
+                     **{key + '_crc': details.get('crc', {}).get(key, {}).get('status', 'UNKNOWN')
+                        for key in ('pat', 'pmt', 'sdt')}}
+        rf_checks = {'ber_zero_fraction': grade(phase.get('ber', {}).get('zero_fraction'), lambda value: value >= 0.9),
+                     'snr_drop_db': grade(drops[str(index)], lambda value: value <= 2),
+                     'data_duty_percent': grade(phase.get('duty_total_percent'), lambda value: value >= 90)}
+        criteria[name] = {'ts': overall(ts_checks.values()), 'rf': overall(rf_checks.values()),
+                          'ts_checks': ts_checks, 'rf_checks': rf_checks, 'cc_per_min_by_group': rates}
+    rf = overall([phase['rf'] for phase in criteria.values()])
+    return {'schema': 'PHASE4-P4C-CRITERIA/v1', 'phases': criteria,
+            'ts': overall([phase['ts'] for phase in criteria.values()]), 'rf': rf,
+            'rf_observation': 'EMI_MITIGATED' if rf == 'PASS' else None,
+            'scope': 'EMI_MITIGATED labels a measured intra-run RF pass only; it does not identify a cause or prove improvement against B5.'}
 
 
 def compare_runs(baseline, candidate):
@@ -514,16 +570,27 @@ def compare_runs(baseline, candidate):
             new = candidate['phases'].get(name, {}).get(field, {}).get('median')
             deltas[name][field] = abs(new - old) if new is not None and old is not None else None
     values = [value for metrics in deltas.values() for value in metrics.values()]
-    drift = 'INCONCLUSIVE' if any(value is not None and value > 2 for value in values) else (
-        'WITHIN_2_DB' if all(value is not None for value in values) else 'UNKNOWN')
+    drift = 'SOME_OVER_2_DB' if any(value is not None and value > 2 for value in values) else (
+        'ALL_WITHIN_2_DB' if all(value is not None for value in values) else 'MISSING_MEASUREMENTS')
     provenance = [run.get('provenance', {}) for run in (baseline, candidate)]
     known = all(all(p.get(key) not in (None, '', 'UNKNOWN', {}) for key in ('source', 'drive', 'layout', 'frontend'))
                 for p in provenance)
     same_frontend = known and provenance[0]['frontend'] == provenance[1]['frontend']
-    return {'off_deltas_db': deltas, 'off_baseline': drift,
-            'comparison': 'DESCRIPTIVE_ONLY' if drift == 'WITHIN_2_DB' and same_frontend else 'INCONCLUSIVE',
-            'provenance_complete': known, 'same_frontend': bool(same_frontend),
-            'emi': 'UNKNOWN_NOT_AUTOMATICALLY_ASSESSED'}
+    return {'role': 'INFORMATIONAL_ONLY', 'off_deltas_db': deltas, 'off_delta_summary': drift,
+            'provenance_complete': known, 'same_frontend': bool(same_frontend) if known else None}
+
+
+def compare_captures(baseline, candidates):
+    results = [summarize(baseline)]
+    ids = {results[0]['id']}
+    for candidate in candidates:
+        result = summarize(candidate)
+        if result['id'] in ids:
+            raise ValueError('Run ids must be unique')
+        ids.add(result['id'])
+        result['b5_off_reference'] = compare_runs(results[0], result)
+        results.append(result)
+    return results
 
 
 def _fmt(value):
@@ -537,8 +604,8 @@ def _ber(metric):
 
 def markdown(results):
     lines = ['# So sánh OFF/ON Phase 4 (ngoại tuyến)', '',
-             'B5 đứng đầu; UNKNOWN là thiếu bằng chứng, không phải zero. Không tự PASS hoặc kết luận EMI.', '',
-             '| Lượt | BER OFF zero/n (fraction); median | BER ON zero/n (fraction); median | SNR OFF med/p10 dB | SNR ON med/p10 dB | Drop cặp 1/2 dB | RSSI OFF/ON med dBm | TS sau 5s Mbps ON1/2 | Duty med (tổng) % ON1/2 | Burst median ms ON1/2 | CC/min ON1/2 | TEI/min ON1/2 | Demod loss OFF1/ON1/OFF2/ON2 | URB lỗi ON1/2 | OFF so B5 | EMI |',
+             'B5 đứng đầu; UNKNOWN là thiếu bằng chứng, không phải zero. Kết quả P4c không xác định nguồn nhiễu.', '',
+             '| Lượt | BER OFF zero/n (fraction); median | BER ON zero/n (fraction); median | SNR OFF med/p10 dB | SNR ON med/p10 dB | Drop cặp 1/2 dB | RSSI OFF/ON med dBm | TS sau 5s Mbps ON1/2 | Duty med (tổng) % ON1/2 | Burst median ms ON1/2 | CC tổng/phút ON1/2 | TEI/min ON1/2 | Demod loss OFF1/ON1/OFF2/ON2 | URB lỗi ON1/2 | TS P4c | RF P4c (cùng lượt) |',
              '| ' + ' | '.join(['---'] * 16) + ' |']
     for result in results:
         phases, groups = result['phases'], result['groups']
@@ -555,20 +622,43 @@ def markdown(results):
                 ons('burst_median_ms'),
                 ons('cc_per_min', True), ons('tei_per_min', True),
                 ' / '.join(_fmt(phases.get(name, {}).get('demod_lock_losses')) for name in PHASES),
-                ons('urb_errors'), result.get('comparison', {}).get('off_baseline', 'BASELINE'), result['emi']]
+                ons('urb_errors'), result['p4c_criteria']['ts'], result['p4c_criteria']['rf']]
         lines.append('| ' + ' | '.join(_fmt(value) for value in row) + ' |')
     lines += ['', '## Cách đọc và giới hạn', '',
               '- BER gộp mẫu hợp lệ theo OFF/ON (không lấy trung bình các median); JSON giữ từng pha và nonzero fraction.',
               '- SNR drop giữ riêng hai cặp, tránh che mức giảm không lặp. p10 nội suy tuyến tính.',
               '- Duty theo completion, bin 240 ms đầy đủ, burst gap >15 ms; JSON giữ thời gian có dữ liệu từng bin, cả bin im lặng. B5/normalized dùng first-data+5s. Dump dùng marker consumer đầu >=recording-start+5s; thiếu mapping chỉ tính duty từ recording-start+5s. Tổng là trung bình theo thời gian, không phải thời gian chiếm bus.',
               '- TS Mbps dùng ts_bytes / thời gian quan sát gồm cả im lặng. Dump crop theo offset marker, giữ thời gian thực và độ trễ so với mốc 5s, không nội suy. CC/TEI fresh state tại crop; thiếu mapping thì cả ba UNKNOWN. Không dùng PCR bitrate.',
-              '- So sánh từng OFF1/OFF2 với B5: SNR và RSSI median lệch tuyệt đối >2 dB => INCONCLUSIVE; thiếu => UNKNOWN.',
-              '- Nguồn, drive, layout, frontend phải được người thu ghi rõ; không suy bố trí từ dữ liệu. Ngay cả đủ provenance và lệch <=2 dB chỉ cho so sánh mô tả.',
-              '- Không có bộ tiêu chí EMI đã duyệt/đủ bằng chứng mọi tiêu chí; mọi kết luận EMI vẫn UNKNOWN. Công cụ không xác nhận đầu vào production đã được đo trên hardware.']
+              '- Mức lệch từng OFF1/OFF2 so với B5 chỉ để tham khảo, không ảnh hưởng tiêu chí trong cùng lượt.',
+              '- Tiêu chí RF P4c dùng BER ON, SNR theo cặp cùng lượt và duty toàn cửa sổ. `EMI_MITIGATED` chỉ ghi nhận đạt các ngưỡng này; không xác định nguồn nhiễu hay chứng minh đã cải thiện so với B5.',
+              '- Nguồn, drive, layout, frontend phải được người thu ghi rõ; công cụ không suy bố trí hoặc xác nhận thông tin phần cứng.']
     for result in results:
         lines += ['', '### ' + _fmt(result['id']), '',
-                  '- Provenance: `' + json.dumps(result['provenance'], ensure_ascii=False).replace('`', "'") + '`.',
-                  '- So sánh: `' + json.dumps(result.get('comparison', {}), ensure_ascii=False) + '`.']
+                  '- Provenance: `' + json.dumps(result['provenance'], ensure_ascii=False).replace('`', "'") + '`.']
+        verdict = result['p4c_criteria']
+        lines.append('- Tiêu chí P4c: TS `%s`, RF `%s`.' % (verdict['ts'], verdict['rf']))
+        if verdict['rf_observation']:
+            lines.append('- Nhãn quan sát RF trong lượt: `%s`.' % verdict['rf_observation'])
+        if 'b5_off_reference' in result:
+            reference = result['b5_off_reference']['off_deltas_db']
+            lines.append('- Chênh lệch OFF so với B5 (chỉ tham khảo): SNR %s / %s dB, RSSI %s / %s dB (OFF1 / OFF2).' % tuple(
+                _fmt(reference[name][metric]) for metric in ('snr_db', 'rssi_dbm') for name in ('OFF1', 'OFF2')))
+        for name, checks in verdict['phases'].items():
+            phase = result['phases'].get(name, {})
+            details = phase.get('phase4_ts') or {}
+            pcr = details.get('pcr', {})
+            rates = checks['cc_per_min_by_group']
+            lines.append('- %s: CC nội dung/phút %s; CC SI/phút %s (nguồn phát, chỉ báo cáo); PCR median %s b/s; khoảng thiếu/thừa ≥94 byte %s / %s.' % (
+                name, _fmt(rates.get('content')), _fmt(rates.get('si')), _fmt(pcr.get('median_bitrate_bps')),
+                _fmt(sum(row['missing_ge_94_bytes'] for row in pcr['by_pid']) if pcr.get('by_pid') else None),
+                _fmt(sum(row['excess_ge_94_bytes'] for row in pcr['by_pid']) if pcr.get('by_pid') else None)))
+            lines.append('  - TS: `%s`; RF: `%s`.' % (json.dumps(checks['ts_checks']), json.dumps(checks['rf_checks'])))
+            if 'native_alignment' in phase:
+                mapping = phase['native_alignment']
+                counts = mapping.get('legacy_completion_counts') or {}
+                legacy, payload = counts.get('ts_bytes'), mapping.get('post5s_payload_bytes')
+                if legacy is not None and payload is not None and legacy > payload:
+                    lines.append('  - Số đếm cũ theo byte cuối vượt payload: %s > %s byte; số mới chỉ lấy gói nằm trọn trong cửa sổ.' % (legacy, payload))
         for name in PHASES:
             if name in result['phases']:
                 metric = result['phases'][name]['ber']
@@ -588,6 +678,8 @@ def main(argv=None):
     parser.add_argument('--b5-export', type=Path)
     parser.add_argument('--b5-provenance', type=Path)
     parser.add_argument('--capture', action='append', default=[], type=Path)
+    parser.add_argument('--debug-export', nargs=3, action='append', default=[], metavar=('ID', 'LOG_DIR', 'TS_DIR'),
+                        help='Reanalyze an existing offline four-phase debug export; repeat for each capture')
     parser.add_argument('--dump-sidecar', action='append', default=[], type=Path,
                         help='Post-close TBS5530-DUMP-DIAGNOSTICS/v1; infer safe same-directory ts_file')
     parser.add_argument('--dump-ts', action='append', default=[], type=Path,
@@ -607,18 +699,11 @@ def main(argv=None):
             if not isinstance(provenance, dict):
                 raise ValueError('B5 provenance must be an object')
             baseline['provenance'] = provenance
-        results = [summarize(baseline)]
-        ids = {'B5'}
         candidates = [load_capture(path) for path in args.capture]
+        candidates += [load_debug(export, raw, run_id) for run_id, export, raw in args.debug_export]
         candidates += [load_dump(path, args.dump_ts[index] if args.dump_ts else None)
                        for index, path in enumerate(args.dump_sidecar)]
-        for candidate in candidates:
-            result = summarize(candidate)
-            if result['id'] in ids:
-                raise ValueError('Run ids must be unique')
-            ids.add(result['id'])
-            result['comparison'] = compare_runs(results[0], result)
-            results.append(result)
+        results = compare_captures(baseline, candidates)
         text = markdown(results)
         if args.json:
             with args.json.open('x', encoding='utf-8', newline='\n') as output:

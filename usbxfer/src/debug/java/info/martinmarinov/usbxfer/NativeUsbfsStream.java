@@ -46,7 +46,8 @@ public final class NativeUsbfsStream implements AutoCloseable {
         public final long submitted, completed, elapsedNanos, starvationCount;
         public final long maxResubmitNanos, medianResubmitNanos;
         public final int minOutstanding, firstStatus, firstErrno, outstanding;
-        public final boolean quarantined;
+        public final int lastStatus, lastErrno, cleanupLastStatus, cleanupLastErrno;
+        public final boolean quarantined, cleanupCancellation, cleanupError;
         public final String stopReason;
         private Result(byte[] data, long[] metrics, String reason) {
             this(data, null, data.length, data.length, 0, null, metrics, reason);
@@ -60,6 +61,9 @@ public final class NativeUsbfsStream implements AutoCloseable {
             starvationCount = m[3]; maxResubmitNanos = m[4]; medianResubmitNanos = m[5];
             minOutstanding = (int) m[6]; firstStatus = (int) m[7]; firstErrno = (int) m[8];
             outstanding = (int) m[9]; quarantined = m[10] != 0; stopReason = reason;
+            lastStatus = (int) m[14]; lastErrno = (int) m[15];
+            cleanupLastStatus = (int) m[16]; cleanupLastErrno = (int) m[17];
+            cleanupCancellation = m[18] != 0; cleanupError = m[19] != 0;
         }
         public double bytesPerSecond() { return elapsedNanos <= 0 ? 0 : byteCount * 1_000_000_000.0 / elapsedNanos; }
         /** Open only after receive returns; file-backed captures must be parsed in bounded chunks. */
@@ -182,7 +186,7 @@ public final class NativeUsbfsStream implements AutoCloseable {
             }
             long[] state = requireWidth(port.snapshot(), 14);
             finalSnapshot = state.clone(); quarantined |= state[6] != 0 || state[3] != 0;
-            long[] metrics = requireWidth(port.metrics(), 14);
+            long[] metrics = requireWidth(port.metrics(), 20);
             int count;
             long written, dropped = 0;
             String writerFailure = null;
@@ -279,6 +283,11 @@ public final class NativeUsbfsStream implements AutoCloseable {
                 + ",\"raw_mapping_valid\":" + (result.writerFailure == null && result.dropBytes == 0)
                 + ",\"raw_offset_scope\":\"queued_bytes_require_writer_success\""
                 + ",\"outstanding\":" + result.outstanding + ",\"quarantined\":" + result.quarantined
+                + ",\"last_status\":" + (result.lastStatus == Integer.MIN_VALUE ? "null" : result.lastStatus)
+                + ",\"last_errno\":" + result.lastErrno
+                + ",\"cleanup_last_status\":" + (result.cleanupLastStatus == Integer.MIN_VALUE ? "null" : result.cleanupLastStatus)
+                + ",\"cleanup_last_errno\":" + result.cleanupLastErrno
+                + ",\"cleanup_cancellation\":" + result.cleanupCancellation + ",\"cleanup_error\":" + result.cleanupError
                 + ",\"zero_software_outstanding_count\":" + metrics[12]
                 + ",\"queue_horizon_risk_count\":null,\"queue_horizon_assumed_bytes_per_second\":null"
                 + ",\"starvation_scope\":\"software_zero_only_not_hardware_proof\"}\n");

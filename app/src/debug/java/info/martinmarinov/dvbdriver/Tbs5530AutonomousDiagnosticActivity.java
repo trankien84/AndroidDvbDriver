@@ -644,7 +644,8 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
                     }
                     boolean clean = stream.firstStatus == 0 && stream.firstErrno == 0
                             && stream.writerFailure == null && stream.dropBytes == 0;
-                    if (!clean && "DEADLINE".equals(reason)) reason = "USB_OR_WRITER_FAILURE";
+                    if (stream.cleanupError) reason = "USB_CLEANUP_FAILURE";
+                    else if (!clean && "DEADLINE".equals(reason)) reason = "USB_OR_WRITER_FAILURE";
                     return new Tbs5530B5Runner.Outcome(stream.writtenBytes, stream.outstanding == 0,
                             stream.quarantined, reason);
                 }

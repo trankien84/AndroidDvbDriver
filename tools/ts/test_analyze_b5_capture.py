@@ -110,6 +110,44 @@ class B5Tests(unittest.TestCase):
         self.assertEqual(on2['post5s_tables']['analysis_range']['start'], 1880)
         self.assertIsNotNone(on2['after5s_quality']['cc_per_minute'])
 
+    def test_boundary_crossing_packet_adds_eight_legacy_bytes_but_not_qualified(self):
+        from analyze_phase4_comparison import CLOCK, _timing
+        value = report()
+        on2 = value['b5_phases'][-1]
+        raw = continuous(7)
+        # Eight bytes of the first packet are in the pre-warmup completion.
+        rows = native_audit(lengths=(8, len(raw) - 8), mappings=True)
+        times = iter((1, 2, 3, 5_000_000_003, 8_000_000_000, 8_000_000_001))
+        origin = on2['start_ns']
+        reap = None
+        for row in rows:
+            row['run_id'] = on2['audit_run_id']
+            if 'kind' in row:
+                row['before_ns'] = row['after_ns'] = origin + next(times)
+                if row['kind'] == 2:
+                    reap = row['after_ns']
+            elif row.get('mapping'):
+                row['reap_ns'] = reap
+        on2['bytes'] = len(raw)
+        capture = b5.analyze(value, {'ON2': (raw, encode_audit(rows))}, monitor())['on_analyses']['ON2']
+        legacy = capture['completion_frames']['after_5s']['metrics']
+        post = capture['post5s_tables']
+        self.assertEqual(legacy['ts_bytes'] - post['post5s_payload_bytes'], 8)
+        self.assertEqual(post['first_sync_offset'], 188)
+        self.assertEqual(post['metrics'], {'ts_bytes': 1128, 'cc_errors': 0, 'tei_packets': 0})
+        end = capture['input']['native_audit']['end_ns']
+        phase = {'phase': 'ON2', 'clock': CLOCK, 'start_ns': origin + 1, 'end_ns': end,
+                 'completions_complete': True,
+                 'completions': [{'timestamp_ns': stamp, 'actual_length': length, 'status': 0,
+                                  'stage': 'data', 'clock': CLOCK}
+                                 for stamp, length in ((origin + 3, 8), (origin + 5_000_000_003, len(raw) - 8))],
+                 'quality_after5s': {**post['metrics'], 'clock': CLOCK,
+                                     'start_ns': origin + 5_000_000_003, 'end_ns': end}}
+        self.assertEqual(_timing(phase)['quality_after5s']['ts_bytes'], 1128)
+        phase['quality_after5s']['ts_bytes'] = legacy['ts_bytes']
+        with self.assertRaisesRegex(ValueError, 'TS bytes exceed captured'):
+            _timing(phase)
+
     def test_actual_auto_fallback_is_separate_from_requested_manual(self):
         value = report()
         value.update(b5_actual_frontend_experiment='B5_K25_AUTO', b5_k25_auto_fallback_used=True,

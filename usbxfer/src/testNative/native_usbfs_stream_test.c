@@ -16,7 +16,7 @@ struct model {
     struct request *requests[32];
     int allocations, frees, fail_alloc_at, duplicate_alloc, submissions, discards, reaps;
     int fail_submit_at, fail_reap_at, fail_wait, status_at, status, bad_at, bad_kind;
-    int stop_at, stuck_drain, discard_error, idle, draining, foreign;
+    int stop_at, stuck_drain, discard_error, idle, draining, foreign, first_drain_status;
     int scripted, short_bytes, consume_every, writer_map_index;
     int64_t cadence, writer_bytes, writer_chunks;
     int64_t now, produced, dropped, latency, jitter, prior_available, syscall_cost, stop_time;
@@ -170,7 +170,9 @@ static struct tbs_stream_call discard(void *opaque, void *request) {
     struct model *f = opaque; struct request *r = request;
     f->draining = 1; ++f->discards;
     r->active = 0; r->ready = 1; r->cancelled = 1;
-    r->available = f->now; r->meta.status = -ECONNRESET; r->meta.actual = r->filled;
+    r->available = f->now;
+    r->meta.status = f->discards == 1 && f->first_drain_status ? f->first_drain_status : -ECONNRESET;
+    r->meta.actual = r->filled;
     return (struct tbs_stream_call){f->discard_error ? -1 : 0, f->discard_error};
 }
 static void metadata(void *request, struct tbs_stream_meta *m) { *m = ((struct request *)request)->meta; }
@@ -302,8 +304,26 @@ static void test_stops_deadline_and_drain(void) {
     int errors[] = {0, EINVAL, ENODEV, EIO};
     for (size_t i = 0; i < sizeof(errors) / sizeof(errors[0]); ++i) {
         f = fixture(8, 4096, 10000, 1000); f->discard_error = errors[i]; run(f);
-        assert(!f->stream.uncertain && !f->stream.outstanding); cleanup(f);
+        assert(!f->stream.uncertain && !f->stream.outstanding);
+        assert(f->stream.first_status == 0 && f->stream.last_status == 0);
+        assert(f->stream.cleanup_cancellation && f->stream.cleanup_last_status == -ECONNRESET);
+        assert(f->stream.cleanup_error == (errors[i] != 0 && errors[i] != EINVAL));
+        cleanup(f);
     }
+    f = fixture(8, 4096, 10000, 25); f->idle = 1; f->stuck_drain = 1; f->discard_error = EINVAL; run(f);
+    assert(f->stream.cleanup_error && f->stream.outstanding == 8);
+    fake_kernel_shutdown(f);
+    f = fixture(8, 4096, 10000, 1000); f->first_drain_status = -ENOENT; run(f);
+    assert(f->stream.last_status == 0 && f->stream.cleanup_cancellation && !f->stream.cleanup_error);
+    cleanup(f);
+    f = fixture(8, 4096, 10000, 1000); f->first_drain_status = -75; run(f);
+    assert(f->stream.last_status == 0 && f->stream.cleanup_last_status == -ECONNRESET);
+    assert(f->stream.cleanup_error && !f->stream.outstanding);
+    cleanup(f);
+    f = fixture(8, 4096, 10000, 1000); f->status_at = 1; f->status = -ENOENT; run(f);
+    assert(f->stream.first_status == -ENOENT && f->stream.last_status == -ENOENT);
+    assert(atomic_load(&f->stream.stop) == TBS_STREAM_STATUS && !f->stream.cleanup_error);
+    cleanup(f);
 }
 static void test_syscalls_and_limits(void) {
     for (int at = 1; at <= 10; at += 9) {

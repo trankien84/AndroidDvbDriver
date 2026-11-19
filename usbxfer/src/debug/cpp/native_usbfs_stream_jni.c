@@ -129,9 +129,11 @@ JNIEXPORT jlongArray JNICALL JNI(metrics)(JNIEnv *env, jclass cls, jlong h) {
     jlong values[] = {s->submitted, s->completed, s->elapsed, s->starvation_count,
         s->max_resubmit, s->median_resubmit, s->min_outstanding, s->first_status,
         s->first_errno, s->outstanding, s->uncertain, atomic_load(&s->stop),
-        s->zero_outstanding_count, s->horizon_count};
-    jlongArray a = (*env)->NewLongArray(env, 14);
-    if (a) (*env)->SetLongArrayRegion(env, a, 0, 14, values);
+        s->zero_outstanding_count, s->horizon_count, s->last_status, s->last_errno,
+        s->cleanup_last_status, s->cleanup_last_errno, s->cleanup_cancellation, s->cleanup_error};
+    jsize count = (jsize)(sizeof(values) / sizeof(values[0]));
+    jlongArray a = (*env)->NewLongArray(env, count);
+    if (a) (*env)->SetLongArrayRegion(env, a, 0, count, values);
     return a;
 }
 JNIEXPORT jlongArray JNICALL JNI(eventBatch)(JNIEnv *env, jclass cls, jlong h, jint offset) {

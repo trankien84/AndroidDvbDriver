@@ -131,8 +131,9 @@ public final class Tbs5530TsSmoke {
     }
     public static final class StreamMetrics {
         public final int bytes, minOutstanding, firstStatus, firstErrno, outstanding;
+        public final int lastStatus, lastErrno, cleanupLastStatus, cleanupLastErrno;
         public final long submitted, completed, elapsedNanos, starvationCount, maxResubmitNanos, medianResubmitNanos;
-        public final boolean quarantined;
+        public final boolean quarantined, cleanupCancellation, cleanupError;
         public final long writerWrittenBytes, writerDropBytes;
         public final String writerFailure;
         public final String stopReason;
@@ -143,6 +144,9 @@ public final class Tbs5530TsSmoke {
             completed = stream.completed; elapsedNanos = stream.elapsedNanos; starvationCount = stream.starvationCount;
             maxResubmitNanos = stream.maxResubmitNanos; medianResubmitNanos = stream.medianResubmitNanos;
             quarantined = stream.quarantined; stopReason = stream.stopReason;
+            lastStatus = stream.lastStatus; lastErrno = stream.lastErrno;
+            cleanupLastStatus = stream.cleanupLastStatus; cleanupLastErrno = stream.cleanupLastErrno;
+            cleanupCancellation = stream.cleanupCancellation; cleanupError = stream.cleanupError;
         }
         public double bytesPerSecond() { return elapsedNanos > 0 ? bytes * 1_000_000_000.0 / elapsedNanos : 0; }
     }
@@ -293,7 +297,7 @@ public final class Tbs5530TsSmoke {
                     if (saved != stream.writtenBytes) throw new IOException("B4 raw writer accounting mismatch");
                 }
                 Tbs5530TsParser.Snapshot parsed = parser.snapshot();
-                boolean clean = stream.firstStatus == 0 && stream.firstErrno == 0
+                boolean clean = stream.firstStatus == 0 && stream.firstErrno == 0 && !stream.cleanupError
                         && ("BYTE_LIMIT".equals(stream.stopReason) || "DEADLINE".equals(stream.stopReason));
                 boolean writerClean = stream.dropBytes == 0 && stream.writerFailure == null && saved == stream.byteCount;
                 Status result = !clean ? Status.NO_DATA_OR_USB_FAILURE

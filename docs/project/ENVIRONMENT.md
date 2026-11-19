@@ -1,5 +1,13 @@
 # Kiểm kê môi trường
 
+## 2026-11-19 — P4c kiểm ngoại tuyến, không đổi công cụ hoặc thiết bị
+
+Baseline nhánh `chore/modernize-android-build`, HEAD `7a6e24b`, cây Git sạch trước khi sửa. Dùng Windows PowerShell, JDK `25.0.5.0.3`, Gradle Wrapper `9.8.2` và AGP `9.5.0`. SDK cài sẵn có platform `37.2` revision 2, Build-Tools `37.0.0`, NDK `30.0.16248370`, CMake `4.1.2` và Platform-Tools `37.0.1`. Cấu hình vẫn dùng minSdk 21, targetSdk 37 và Java 8. AVD hiện hữu dùng Google APIs/API 37 x86_64; không khởi động hoặc đổi AVD.
+
+TSDuck `3.45-4798` được xác nhận có sẵn. Không mở tuner qua BDA, không đổi driver, chủ USB, VM, WSL, package SDK hay cấu hình bền. Không truy cập điện thoại hoặc nhập firmware trong P4c. Pin thiết bị lịch sử trong card không phải phép đọc thiết bị hiện tại.
+
+GitNexus `1.6.12` báo đúng checkout và commit được lập chỉ mục `7a6e24b`, nhưng chỉ mục không chứa đầy đủ các sửa đổi đang làm. Kết luận dựa trên mã nguồn, diff và phép kiểm độc lập, không dựa trên graph.
+
 ## 2026-11-19 — P4b bước 1 thực: OnePlus giữ bố trí đã xác nhận, tuner đã rút
 
 Người dùng xác nhận lại bố trí card, tuner rút ít nhất năm giây và sẵn sàng. OnePlus GM1900/API30/boot408 dùng target tường minh đã kiểm, không sạc. Cài debug mới bằng install-r đúng một lần, installed SHA `5c13d652…3ca19f`, history trước/sau nguyên. Người dùng báo một hộp USB trước helper và một sau bootstrap, tổng hai; không tích Luôn mở, không lỗi UI khác được báo. Đây là số hộp quan sát trên OnePlus, không suy số hộp release.

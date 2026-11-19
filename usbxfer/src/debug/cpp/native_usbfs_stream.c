@@ -67,7 +67,7 @@ static int init(struct tbs_stream *s, struct tbs_stream_ops ops,
     s->event_capacity = 2 * (file_backed ? TBS_STREAM_FILE_COMPLETIONS : max_bytes / 512)
         + 6 * depth + 64;
     s->next_sequence = s->expected = 1;
-    s->first_status = 0; s->last_status = TBS_STREAM_UNKNOWN;
+    s->first_status = 0; s->last_status = s->cleanup_last_status = TBS_STREAM_UNKNOWN;
     s->last_slot = -1; s->min_outstanding = depth;
     if (file_backed) {
         s->ring_capacity = TBS_STREAM_RING_BYTES / chunk;
@@ -198,8 +198,13 @@ static int submit_slot(struct tbs_stream *s, int slot) {
 static void wait_ready(struct tbs_stream *s, int draining) {
     struct tbs_stream_call c = s->ops.wait(s->ops.opaque, 2);
     if (c.result < 0) {
-        s->last_errno = c.error; s->last_return = c.result;
-        if (!draining) error_with(s, TBS_STREAM_SYSCALL, c.error);
+        if (draining) {
+            s->cleanup_last_errno = c.error;
+            s->cleanup_error = 1;
+        } else {
+            s->last_errno = c.error; s->last_return = c.result;
+            error_with(s, TBS_STREAM_SYSCALL, c.error);
+        }
     }
 }
 /* Returns slot, -1 for EAGAIN, -2 for an untrusted completion/syscall failure. */
@@ -208,8 +213,13 @@ static int reap_one(struct tbs_stream *s, int draining, int64_t *reaped_at, stru
     int64_t before = now(s);
     struct tbs_stream_call c = s->ops.reap(s->ops.opaque, &request);
     int64_t after = now(s);
-    s->last_errno = c.error; s->last_return = c.result;
     if (c.result < 0 && c.error == EAGAIN) return -1;
+    if (draining) {
+        s->cleanup_last_errno = c.error;
+        if (c.result != 0 || c.error != 0) s->cleanup_error = 1;
+    } else {
+        s->last_errno = c.error; s->last_return = c.result;
+    }
     if (c.result != 0) {
         record(s, 2, -1, c, before, after, NULL);
         if (!draining) error_with(s, TBS_STREAM_SYSCALL, c.error);
@@ -228,9 +238,15 @@ static int reap_one(struct tbs_stream *s, int draining, int64_t *reaped_at, stru
         s->uncertain = 1; stop_with(s, TBS_STREAM_IDENTITY); return -2;
     }
     p->pending = 0; --s->outstanding; ++s->completed;
-    if (!draining && after >= 0) atomic_store(&s->completion_nanos, after);
-    s->last_status = m->status; s->last_actual = m->actual;
-    s->last_slot = slot; s->last_sequence = p->sequence;
+    if (draining) {
+        s->cleanup_last_status = m->status;
+        if (m->status == -ENOENT || m->status == -ECONNRESET) s->cleanup_cancellation = 1;
+        else if (m->status != 0) s->cleanup_error = 1;
+    } else {
+        if (after >= 0) atomic_store(&s->completion_nanos, after);
+        s->last_status = m->status; s->last_actual = m->actual;
+        s->last_slot = slot; s->last_sequence = p->sequence;
+    }
     record(s, 2, slot, c, before, after, m);
     *reaped_at = after;
     if (!draining && p->sequence != s->expected++) {
@@ -240,25 +256,37 @@ static int reap_one(struct tbs_stream *s, int draining, int64_t *reaped_at, stru
 }
 static void drain(struct tbs_stream *s) {
     int64_t begin = now(s);
+    uint32_t needs_reap = 0;
+    int discard_started = 0;
     for (int i = 0; i < s->depth; ++i) if (s->slots[i].pending) {
         int64_t before = now(s);
-        if (begin < 0 || before < begin || before - begin >= 1000000000LL) break;
+        if (begin < 0 || before < begin || before - begin >= 1000000000LL) {
+            s->cleanup_error = 1;
+            break;
+        }
+        discard_started = 1;
         struct tbs_stream_call c = s->ops.discard(s->ops.opaque, s->slots[i].request);
+        s->cleanup_last_errno = c.error;
+        if (c.result == -1 && c.error == EINVAL) needs_reap |= UINT32_C(1) << i;
+        else if (c.result != 0 || c.error != 0) s->cleanup_error = 1;
         record(s, 3, i, c, before, now(s), NULL);
     }
     /* Iteration cap also bounds a faulty/stalled host clock; no forced free. */
-    for (int tries = 0; s->outstanding && tries < 65536; ++tries) {
+    for (int tries = 0; discard_started && s->outstanding && tries < 65536; ++tries) {
         int64_t t = now(s);
         if (begin < 0 || t < begin || t - begin >= 1000000000LL) break;
         struct tbs_stream_meta m; int64_t reaped_at;
         int slot = reap_one(s, 1, &reaped_at, &m);
-        if (slot >= 0 && m.actual > 0 && m.actual <= s->chunk) s->cleanup += m.actual;
-        else if (slot < 0) {
-            if (slot == -2) break;
+        if (slot >= 0) {
+            needs_reap &= ~(UINT32_C(1) << slot);
+            if (m.actual > 0 && m.actual <= s->chunk) s->cleanup += m.actual;
+        } else {
+            if (slot == -2) { s->cleanup_error = 1; break; }
             wait_ready(s, 1);
         }
     }
-    if (s->outstanding) s->uncertain = 1;
+    if (needs_reap) s->cleanup_error = 1;
+    if (s->outstanding) s->uncertain = s->cleanup_error = 1;
     publish(s);
 }
 static int compare_latency(const void *a, const void *b) {

@@ -32,7 +32,11 @@ Các lệnh trên chỉ build/kiểm thử phần mềm, không tải firmware, 
 
 ## TBS5530 production — Phase 4
 
-Xem [hướng dẫn tiếng Việt](docs/user/tbs5530.md) để nhập firmware gốc bằng hộp chọn tệp Android, xử lý hai quyền USB, chọn tần số DVB-T2, ghi TS và dùng app client. Firmware không nằm trong Git hoặc APK; production không cần grant, ledger hay helper PC. Các quy trình debug bên dưới vẫn được giữ để chẩn đoán, không phải hướng dẫn dùng release. Hiệu quả bố trí RG6/ferrite/đi lại cáp mới còn chờ phép đo Phần D, không được coi là đã khắc phục nhiễu.
+Xem [hướng dẫn tiếng Việt](docs/user/tbs5530.md) để nhập firmware gốc bằng hộp chọn tệp Android, xử lý hai quyền USB, chọn tần số DVB-T2, ghi TS và dùng app client. Firmware không nằm trong Git hoặc APK; production không cần grant, ledger hay helper PC. Các quy trình debug bên dưới vẫn được giữ để chẩn đoán, không phải hướng dẫn dùng release. Lượt debug K25 với bố trí RG6/ferrite mới và drive `0x55` không còn biểu hiện nhiễu khi đọc USB như lượt B5 cũ; chưa có đối chứng để tách tác dụng bố trí khỏi drive.
+
+## Đóng góp trên Windows
+
+Tệp `.ps1` mới hoặc được sửa dùng kết thúc dòng LF. Không đổi hàng loạt các tệp PowerShell lịch sử ngoài phạm vi sửa.
 
 ## Chẩn đoán Android: chọn lại interface 0/alt 0
 

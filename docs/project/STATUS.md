@@ -1,5 +1,13 @@
 # Port TBS5530 sang Android — trạng thái hiện tại
 
+## 2026-11-19 — P4c sửa ngoại tuyến; dừng trước tuner vì ranh đồng bộ vượt 2048 byte
+
+**Bộ lọc production chưa được triển khai.** Raw B3/B4/B5/P4b cho thấy điểm phát hiện đứt nhịp cũ ở offset 2051–2228, ngoài 2048 byte. P4b ON1 còn có năm sync hợp lệ bắt đầu từ 2049, trước mốc luồng mới 2237 một gói. Giữ nguyên production và raw debug, không chạy bước 2–11, không dùng card hoặc receipt cũ để tiếp tục.
+
+P4b bước 1 đạt `EMI_MITIGATED` và `TS_CLEAN_DEBUG_PATH` theo tiêu chí mới: 406/406 mẫu BER ON bằng 0, SNR 27,59 → 27,60 dB, dữ liệu 100% hai pha ON; sau 5 giây không có lỗi CC nội dung, TEI hoặc khoảng PCR thiếu từ 94 byte. Độ lệch SNR khi OFF so với B5 chỉ là ghi chú. Chưa tách được ảnh hưởng của bố trí với drive `0x55`; `ROOT_CAUSE_CONFIRMED` chưa đạt. Hai hộp USB là số đã quan sát ở P4b, không phải P4c hay release. `PHASE4_FUNCTIONAL_PASS` chưa đạt; `TS_SMOKE_PASS=false` do chưa kiểm Dump release.
+
+Xem [RESEARCH.md](RESEARCH.md), [DECISIONS.md](DECISIONS.md) (ADR-069) và [TEST-MATRIX.md](TEST-MATRIX.md). Không stage, commit, push, mở lại ngân sách P4b hoặc thay đổi host/driver/công cụ.
+
 ## 2026-11-19 — P4b bước 1 nhận đủ TS; phiên đã đóng an toàn, tuner đã rút
 
 **Đã chạy đúng một lượt debug bước 1/K25/drive `0x55`, nhận 177881088 byte và đủ bốn pha; chưa hoàn tất Phase 4.** Bootstrap/reload 132/132, MANUAL PLP0 lock, không AUTO fallback, writer drop/outstanding 0, không quarantine, DRAIN_CONFIRMED. Helper exit 1 và receipt đã đóng phiên: guard SESSION bác snapshot bootstrap `TRANSITIONING` dù đủ 132/132/reload COMPLETE; completion cuối `-2` lúc drain còn là căn cứ bác độc lập. Audit offline không có data error/failed reap, 16 completion drain mỗi ON, nhưng mỗi ON có một DISCARD errno 22 trong cleanup. Hai tình huống runtime này chưa có trong fake success fixture, không coi helper đã tương thích đầy đủ hardware chỉ từ 324 PASS. Không sửa hoặc mở lại receipt, không chạy bước 2 hoặc release. Người dùng xác nhận đã rút tuner sau drain.

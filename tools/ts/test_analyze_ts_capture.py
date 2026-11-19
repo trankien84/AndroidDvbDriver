@@ -146,6 +146,22 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(r['cc']['between_comparisons'], 1)
 
 
+    def test_offline_prefix_rejects_false_anchor_on_old_grid_edge(self):
+        raw = bytearray(b'\0' * 171 + continuous(10) + b'\0' * 186 + continuous(8))
+        raw[2049:2053] = packet(pid=1201, cc=9)[:4]
+        self.assertEqual(ts.sync_segments(raw, start_offset=2048)[0]['start'], 2049)
+        probe = ts.debug_prefix_sync(raw, 2048)
+        self.assertEqual(probe['old_grid_first_missing_sync'], 2051)
+        self.assertEqual(probe['candidate_offset'], 2237)
+
+    def test_phase4_anchor_needs_five_valid_headers(self):
+        raw = b'\x47\0\0\0' + b'\0' * 184 + continuous(6)
+        self.assertEqual(ts.analyze(raw)['sync']['segments'][0]['start'], 0)
+        report = ts.analyze(raw, phase4=True)
+        self.assertEqual(report['sync']['segments'][0]['start'], 188)
+        self.assertEqual(report['sync']['packets'], 6)
+
+
 class CCTests(unittest.TestCase):
     def check(self, packets):
         c = ts.Continuity()
@@ -320,6 +336,45 @@ class PCRTests(unittest.TestCase):
         r = ts.analyze(self.stream(discontinuity=2000))
         self.assertEqual(len(r['pcr']['windows']), 2)
         self.assertTrue(all(w['samples'] == 20 for w in r['pcr']['windows']))
+
+
+class Phase4QualityTests(unittest.TestCase):
+    def test_content_si_pmt_and_other_cc_stay_separate(self):
+        def es(kind, pid, ds=b''):
+            return struct.pack('>BHH', kind, 0xE000 | pid, 0xF000 | len(ds)) + ds
+
+        mapping = section(2, 1, struct.pack('>HH', 0xE000 | 101, 0xF000)
+                          + es(0x1B, 100) + es(6, 102, b'\x6a\x00') + es(6, 103, b'\x59\x00'))
+        broken_sdt = bytearray(sdt())
+        broken_sdt[-1] ^= 1
+        raw = (psi_packet(0, pat()) + psi_packet(200, mapping) + psi_packet(17, sdt())
+               + b''.join(packet(pid, cc) for pid in (0x10, 0x12, 100, 101, 102, 103, 777) for cc in (0, 2))
+               + psi_packet(200, mapping, 2) + psi_packet(17, broken_sdt, 1))
+        q = ts.analyze(raw, phase4=True)['phase4_ts']
+        self.assertTrue(q['content_mapping_complete'])
+        self.assertEqual({k: v['errors'] for k, v in q['cc'].items()}, {'content': 3, 'si': 3, 'other': 2})
+        self.assertEqual([r['pid'] for r in q['cc']['content']['pids']], [100, 101, 102])
+        self.assertEqual({k: v['status'] for k, v in q['crc'].items()}, {'pat': 'PASS', 'pmt': 'PASS', 'sdt': 'FAIL'})
+        self.assertEqual(q['pcr']['status'], 'UNKNOWN')
+
+    def test_pcr_half_packet_deficit_is_inclusive_excess_informational_and_wrap(self):
+        def fixture(deficit):
+            ticks = ts.PCR_WRAP - 100
+            raw = psi_packet(0, pat()) + psi_packet(200, pmt()) + psi_packet(17, sdt())
+            raw += packet(100, 0, adaptation=b'\x10' + pcr_bytes(ticks))
+            for n, delta in enumerate((376, 376 - 94, 376 + deficit, 376, 376), 1):
+                ticks += delta
+                raw += packet(0x1FFF) + packet(100, n, adaptation=b'\x10' + pcr_bytes(ticks))
+            return ts.analyze(raw, phase4=True)['phase4_ts']['pcr']
+
+        for deficit in (93, 94):
+            with self.subTest(deficit=deficit):
+                pcr = fixture(deficit)
+                self.assertEqual(pcr['median_bitrate_bps'], 8 * ts.PCR_CLOCK)
+                self.assertEqual(pcr['status'], 'FAIL' if deficit == 94 else 'PASS')
+                self.assertEqual(pcr['by_pid'][0]['intervals'], 5)
+                self.assertEqual(pcr['by_pid'][0]['missing_ge_94_bytes'], int(deficit == 94))
+                self.assertEqual(pcr['by_pid'][0]['excess_ge_94_bytes'], 1)
 
 
 class PcapTests(unittest.TestCase):

@@ -16,6 +16,11 @@ PACKET = 188
 PCR_CLOCK = 27_000_000
 PCR_WRAP = (1 << 33) * 300
 DATA_ORIGIN_VERSION = 'FIRST_SUCCESSFUL_CAPTURED_COMPLETION/v2'
+PCR_BYTE_THRESHOLD = PACKET / 2
+AV_STREAM_TYPES = {0x01, 0x02, 0x03, 0x04, 0x0F, 0x10, 0x11, 0x1B, 0x1C, 0x1F,
+                   0x20, 0x21, 0x24, 0x27, 0x2D, 0x33, 0x42, 0x81, 0x87}
+DVB_AUDIO_TAGS = {0x6A, 0x7A, 0x7B, 0x7C}
+AV_REGISTRATIONS = {b'AC-3', b'EAC3', b'AC-4', b'AV01', b'HEVC', b'VC-1', b'DTS1', b'DTS2', b'DTS3', b'Opus'}
 
 
 def sha256(data):
@@ -137,7 +142,7 @@ def raw_spans(size, urb_size):
             for n, at in enumerate(range(0, size, urb_size))]
 
 
-def sync_segments(data, minimum=5, barriers=(), start_offset=0):
+def sync_segments(data, minimum=5, barriers=(), start_offset=0, *, validate_anchor=False):
     if minimum < 2:
         raise ValueError('Need at least two sync packets')
     segments = []
@@ -146,8 +151,13 @@ def sync_segments(data, minimum=5, barriers=(), start_offset=0):
         at = low
         while at + minimum * PACKET <= high:
             start = data.find(b'G', at, high)
-            if start < 0:
+            if start < 0 or start + minimum * PACKET > high:
                 break
+            if validate_anchor and not segments and any(
+                    data[offset] != 0x47 or parse_packet(data[offset:offset + PACKET])['invalid']
+                    for offset in range(start, start + minimum * PACKET, PACKET)):
+                at = start + 1
+                continue
             end = start
             while end + PACKET <= high and data[end] == 0x47:
                 end += PACKET
@@ -164,6 +174,24 @@ def sync_segments(data, minimum=5, barriers=(), start_offset=0):
             else:
                 at = start + 1
     return segments
+
+
+def debug_prefix_sync(data, declared_skip, barriers=()):
+    """Report an offline candidate, not proof of which complete packets were stale."""
+    probe = data[:2048 + 7 * PACKET]
+    initial = sync_segments(probe, barriers=barriers, validate_anchor=True)
+    floor = declared_skip
+    old_grid_break = None
+    if initial and initial[0]['start'] < 2048:
+        first = initial[0]['start']
+        old_grid_break = next((at for at in range(first, len(probe), PACKET) if probe[at] != 0x47), None)
+        if old_grid_break is not None and 2048 - PACKET <= old_grid_break < 2048 + PACKET:
+            # A byte just before the old grid's missing sync can also align with the new grid.
+            floor = max(floor, old_grid_break)
+    segments = sync_segments(probe, barriers=barriers, start_offset=min(floor, len(probe)), validate_anchor=True)
+    return {'floor_offset': floor, 'old_grid_first_missing_sync': old_grid_break,
+            'candidate_offset': segments[0]['start'] if segments else None,
+            'basis': 'Five complete 188-byte packets with valid headers in the bounded prefix probe; not proof of FX2 FIFO contents.'}
 
 
 def parse_packet(packet):
@@ -352,6 +380,10 @@ class Tables:
         self.pmts = {}
         self.services = {}
         self.transport_id = None
+        self.sdt_transport_id = None
+        self.av_pids = set()
+        self.pcr_pids = set()
+        self.pmt_pids = set()
 
     def reset(self):
         for a in self.assemblers.values():
@@ -370,10 +402,16 @@ class Tables:
             a.feed(p['payload'], p['pusi'])
 
     def section(self, pid, s):
+        tid = s[0]
         if crc32_mpeg(s) != 0:
             self.counts['crc_errors'] += 1
+            if pid == 0 and tid == 0:
+                self.counts['pat_crc_errors'] += 1
+            elif pid == 0x11 and tid == 0x42:
+                self.counts['sdt_actual_crc_errors'] += 1
+            elif pid in self.pat.values() and tid == 2:
+                self.counts['pmt_crc_errors'] += 1
             return
-        tid = s[0]
         if (pid == 0 and tid != 0) or (pid == 0x11 and tid not in (0x42, 0x46)) or (pid not in (0, 0x11) and tid != 2):
             self.counts['unexpected_table_id'] += 1
             return
@@ -414,13 +452,14 @@ class Tables:
                 self.services.clear()
             self.transport_id = ext
             self.pat = programs
+            self.pmt_pids.update(programs.values())
             self.pmts = {k: v for k, v in self.pmts.items() if programs.get(k) == v['pmt_pid']}
         elif tid == 2:
             if self.pat.get(ext) != pid:
                 self.counts['unmapped_pmt'] += 1
                 return
             streams = {}
-            pcr_pids = set()
+            av_pids, pcr_pids = set(), set()
             for s in sections:
                 if len(s) < 16:
                     raise ValueError('Short PMT')
@@ -438,12 +477,22 @@ class Tables:
                     if at + 5 + size > len(s) - 4:
                         raise ValueError('PMT ES descriptors outside section')
                     ds = descriptors(s[at + 5:at + 5 + size])
-                    streams[target & 0x1FFF] = {'pid': target & 0x1FFF, 'stream_type': stream_type,
-                                                'descriptor_tags': [tag for tag, _ in ds]}
+                    av = stream_type in AV_STREAM_TYPES or (stream_type == 0x06 and any(
+                        tag in DVB_AUDIO_TAGS or (tag == 0x05 and value[:4] in AV_REGISTRATIONS)
+                        for tag, value in ds))
+                    target &= 0x1FFF
+                    if av:
+                        av_pids.add(target)
+                    streams[target] = {'pid': target, 'stream_type': stream_type,
+                                       'descriptor_tags': [tag for tag, _ in ds]}
                     at += 5 + size
             if len(pcr_pids) != 1:
                 raise ValueError('Inconsistent PMT PCR PID')
-            self.pmts[ext] = {'service_id': ext, 'pmt_pid': pid, 'pcr_pid': pcr_pids.pop(),
+            pcr_pid = pcr_pids.pop()
+            self.av_pids.update(av_pids)
+            if pcr_pid != 0x1FFF:
+                self.pcr_pids.add(pcr_pid)
+            self.pmts[ext] = {'service_id': ext, 'pmt_pid': pid, 'pcr_pid': pcr_pid,
                               'version': version, 'streams': list(streams.values())}
         elif tid == 0x42:
             services = {}
@@ -475,6 +524,7 @@ class Tables:
                     at = end
             if self.transport_id is None or ext == self.transport_id:
                 self.services = services
+                self.sdt_transport_id = ext
 
     def report(self, observed_pids):
         services = []
@@ -940,11 +990,104 @@ def pcr_pid_report(windows, pids):
     return rows
 
 
+class PCRIntervals:
+    def __init__(self):
+        self.last = {}
+        self.intervals = {}
+        self.unchecked = Counter()
+        self.observed = set()
+
+    def feed(self, packet, offset, duplicate):
+        pid, clock = packet['pid'], packet['pcr']
+        if clock is not None or packet['pcr_error']:
+            self.observed.add(pid)
+        if (packet['tei'] or packet['invalid'] or packet['pcr_error'] or packet['discontinuity']):
+            if self.last.pop(pid, None) is not None:
+                self.unchecked[pid] += 1
+            if packet['tei'] or packet['invalid'] or packet['pcr_error']:
+                return
+        if clock is None or duplicate:
+            return
+        previous = self.last.get(pid)
+        self.last[pid] = offset, clock
+        if previous is not None:
+            start, old_clock = previous
+            ticks = (clock - old_clock) % PCR_WRAP
+            if 0 < ticks <= PCR_CLOCK * 10:
+                self.intervals.setdefault(pid, []).append((start, offset, ticks))
+            else:
+                self.unchecked[pid] += 1
+
+    def report(self, pids, sync_breaks):
+        def rates(pid):
+            return [(end - start) * 8 * PCR_CLOCK / ticks
+                    for start, end, ticks in self.intervals.get(pid, ())]
+
+        per_pid = {pid: rates(pid) for pid in sorted((pids | self.observed) - {0x1FFF})}
+        median = statistics.median(rate for values in per_pid.values() for rate in values) if any(per_pid.values()) else None
+        rows = []
+        for pid, values in per_pid.items():
+            worst_missing = worst_excess = None
+            missing = excess = 0
+            for start, end, ticks in self.intervals.get(pid, ()):
+                residual = (end - start) - ticks * median / (8 * PCR_CLOCK)
+                interval = {'start_offset': start, 'end_offset': end, 'ticks': ticks,
+                            'observed_bytes': end - start, 'residual_bytes': residual}
+                if residual <= -PCR_BYTE_THRESHOLD:
+                    missing += 1
+                elif residual >= PCR_BYTE_THRESHOLD:
+                    excess += 1
+                if worst_missing is None or residual < worst_missing['residual_bytes']:
+                    worst_missing = interval
+                if worst_excess is None or residual > worst_excess['residual_bytes']:
+                    worst_excess = interval
+            rows.append({'pid': pid, 'intervals': len(values), 'unchecked_intervals': self.unchecked[pid],
+                         'median_bitrate_bps': statistics.median(values) if values else None,
+                         'missing_ge_94_bytes': missing, 'excess_ge_94_bytes': excess,
+                         'min_residual': worst_missing, 'max_residual': worst_excess})
+        return {'status': 'FAIL' if any(row['missing_ge_94_bytes'] for row in rows) else
+                'UNKNOWN' if not rows or sync_breaks or any(row['intervals'] < 2 or row['unchecked_intervals']
+                                                            for row in rows) else 'PASS',
+                'median_bitrate_bps': median, 'by_pid': rows, 'sync_breaks_not_joined': sync_breaks,
+                'basis': 'Signed residual = observed TS bytes minus bytes expected from PCR delta at the median of all eligible PCR interval rates; CC errors do not reset this check.'}
+
+
+def phase4_ts_quality(tables, cc, packets, pcr, sync_breaks):
+    groups = {'content': {'pids': [], 'errors': 0, 'comparisons': 0},
+              'si': {'pids': [], 'errors': 0, 'comparisons': 0, 'note': 'nguồn phát (nhãn báo cáo, không khẳng định nguyên nhân)'},
+              'other': {'pids': [], 'errors': 0, 'comparisons': 0}}
+    si_pids = set(range(0x20)) | tables.pmt_pids
+    content_pids = (tables.av_pids | tables.pcr_pids) - si_pids - {0x1FFF}
+    for pid in sorted(content_pids | si_pids | cc.by_pid.keys()):
+        kind = 'si' if pid in si_pids else 'content' if pid in content_pids else 'other'
+        counts = cc.by_pid.get(pid, {})
+        if pid not in cc.by_pid and pid not in content_pids and pid not in tables.pmt_pids:
+            continue
+        group = groups[kind]
+        group['pids'].append({'pid': pid, 'errors': sum(counts.get(scope + '_errors', 0) for scope in ('within', 'between')),
+                              'comparisons': sum(counts.get(scope + '_comparisons', 0) for scope in ('within', 'between'))})
+        group['errors'] += group['pids'][-1]['errors']
+        group['comparisons'] += group['pids'][-1]['comparisons']
+    pmt_complete = bool(tables.pat) and len(tables.pat) == len(tables.pmts)
+    crc = {}
+    for label, kind, complete in (('pat', 'pat', bool(tables.pat)), ('pmt', 'pmt', pmt_complete),
+                                  ('sdt', 'sdt_actual', tables.sdt_transport_id is not None and
+                                   tables.sdt_transport_id == tables.transport_id)):
+        errors = tables.counts[kind + '_crc_errors']
+        crc[label] = {'status': 'FAIL' if errors else 'PASS' if complete else 'UNKNOWN',
+                      'complete': complete, 'crc_errors': errors,
+                      'valid_sections': tables.counts[kind + '_crc_valid_sections']}
+    return {'cc': groups, 'content_mapping_complete': pmt_complete,
+            'crc': crc, 'pcr': pcr.report(tables.pcr_pids, sync_breaks),
+            'ts_bytes': packets * PACKET}
+
+
 def analyze(data, spans=(), barriers=(), minimum=5, skip_prefix=0, *,
-            frame_baseline_bytes=None, frame_cadence_ns=None, timing_metadata=None):
+            frame_baseline_bytes=None, frame_cadence_ns=None, timing_metadata=None, phase4=False):
     if not 0 <= skip_prefix <= len(data):
         raise ValueError('--skip-prefix must be between zero and stream length')
-    segments = sync_segments(data, minimum, barriers, skip_prefix)
+    minimum = max(minimum, 5) if phase4 else minimum
+    segments = sync_segments(data, minimum, barriers, skip_prefix, validate_anchor=phase4)
     frames = CompletionFrames(spans, len(data), skip_prefix, frame_baseline_bytes,
                               frame_cadence_ns, timing_metadata)
     starts = [s['start'] for s in spans]
@@ -969,6 +1112,7 @@ def analyze(data, spans=(), barriers=(), minimum=5, skip_prefix=0, *,
                        'near_2048': abs(relative - 2048) <= PACKET if relative is not None else None,
                        'forced_by_failed_urb': left['end'] in barriers or any(left['end'] <= b <= right['start'] for b in barriers)})
     cc, tables = Continuity(), Tables()
+    intervals = PCRIntervals() if phase4 else None
     pids, pcr_runs, pcr_windows = {}, {}, []
     diagnostic_runs, diagnostic_windows = {}, []
     prefix_pids, rest_pids = Counter(), Counter()
@@ -990,6 +1134,8 @@ def analyze(data, spans=(), barriers=(), minimum=5, skip_prefix=0, *,
 
     for segment in segments:
         tables.reset()
+        if intervals is not None:
+            intervals.last.clear()
         for runs, windows in ((pcr_runs, pcr_windows), (diagnostic_runs, diagnostic_windows)):
             for key in list(runs):
                 finish_pcr(key, runs, windows)
@@ -1013,6 +1159,8 @@ def analyze(data, spans=(), barriers=(), minimum=5, skip_prefix=0, *,
             frames.packet(offset, p, outcome,
                           cc.counts['within_comparisons'] + cc.counts['between_comparisons'] - previous_comparisons)
             tables.feed(p, outcome)
+            if intervals is not None and (p['pcr'] is not None or p['pcr_error'] or pid in intervals.last):
+                intervals.feed(p, offset, outcome == 'duplicate')
             key = (segment['index'], pid)
             if p['pcr'] is not None:
                 row['pcr_samples'] += 1
@@ -1070,6 +1218,8 @@ def analyze(data, spans=(), barriers=(), minimum=5, skip_prefix=0, *,
                      'tail_counts_as_sync_break': False},
             'completion_frames': frames.report(),
             'cc': cc.report(), 'totals': dict(totals),
+            **({'phase4_ts': phase4_ts_quality(tables, cc, packet_count, intervals, len(breaks))}
+               if intervals is not None else {}),
             'pids': [{'pid': k, 'hex': '0x%04x' % k, **dict(v)} for k, v in sorted(pids.items())],
             'psi': tables.report(pids),
             'pcr': {'windows': pcr_windows, 'by_pid': pcr_pid_report(pcr_windows, pids),

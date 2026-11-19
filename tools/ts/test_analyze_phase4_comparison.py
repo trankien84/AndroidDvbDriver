@@ -225,28 +225,67 @@ class ComparisonTests(unittest.TestCase):
                     candidate = copy.deepcopy(baseline)
                     candidate['phases'][name][field]['median'] += 2
                     result = p4.compare_runs(baseline, candidate)
-                    self.assertEqual(result['off_baseline'], 'WITHIN_2_DB')
-                    self.assertEqual(result['comparison'], 'DESCRIPTIVE_ONLY')
+                    self.assertEqual(result['off_delta_summary'], 'ALL_WITHIN_2_DB')
+                    self.assertEqual(result['role'], 'INFORMATIONAL_ONLY')
                     candidate['phases'][name][field]['median'] += 0.0001
-                    self.assertEqual(p4.compare_runs(baseline, candidate)['off_baseline'], 'INCONCLUSIVE')
+                    self.assertEqual(p4.compare_runs(baseline, candidate)['off_delta_summary'], 'SOME_OVER_2_DB')
 
     def test_missing_off_and_provenance_and_frontend_mismatch(self):
         baseline = p4.summarize(capture())
         candidate = copy.deepcopy(baseline)
         candidate['phases'].pop('OFF2')
-        self.assertEqual(p4.compare_runs(baseline, candidate)['off_baseline'], 'UNKNOWN')
+        self.assertEqual(p4.compare_runs(baseline, candidate)['off_delta_summary'], 'MISSING_MEASUREMENTS')
         candidate = copy.deepcopy(baseline)
         candidate['provenance'].pop('drive')
-        self.assertEqual(p4.compare_runs(baseline, candidate)['comparison'], 'INCONCLUSIVE')
+        result = p4.compare_runs(baseline, candidate)
+        self.assertFalse(result['provenance_complete'])
+        self.assertIsNone(result['same_frontend'])
         candidate = copy.deepcopy(baseline)
         candidate['provenance']['frontend']['plp'] = 'AUTO'
         self.assertFalse(p4.compare_runs(baseline, candidate)['same_frontend'])
 
-    def test_no_automatic_emi_pass_even_with_provenance_and_perfect_metrics(self):
+    def test_p4c_pass_uses_content_cc_and_intra_run_metrics_not_off_drift(self):
         baseline = p4.summarize(capture())
-        result = p4.compare_runs(baseline, baseline)
-        self.assertEqual(result['emi'], 'UNKNOWN_NOT_AUTOMATICALLY_ASSESSED')
-        self.assertNotIn('PASS', result['emi'])
+        for name in ('OFF1', 'OFF2'):
+            baseline['phases'][name]['snr_db']['median'] += 10
+        candidate = p4.summarize(capture())
+        details = {'cc': {'content': {'errors': 1, 'comparisons': 100}, 'si': {'errors': 400}},
+                   'content_mapping_complete': True, 'pcr': {'status': 'PASS'},
+                   'crc': {key: {'status': 'PASS'} for key in ('pat', 'pmt', 'sdt')}}
+        for name in ('ON1', 'ON2'):
+            candidate['phases'][name].update(quality_after5s={'duration_s': 60, 'tei_packets': 0},
+                                             phase4_ts=copy.deepcopy(details), duty_total_percent=90)
+            candidate['phases'][name]['ber']['zero_fraction'] = 0.9
+        candidate['snr_drop_db'] = {'1': 2, '2': 2}
+        criteria = p4.p4c_criteria(candidate['phases'], candidate['snr_drop_db'])
+        self.assertEqual((criteria['ts'], criteria['rf']), ('PASS', 'PASS'))
+        self.assertEqual(criteria['phases']['ON1']['cc_per_min_by_group'], {'content': 1, 'si': 400})
+        self.assertEqual(criteria['rf_observation'], 'EMI_MITIGATED')
+        candidate['p4c_criteria'] = criteria
+        candidate['b5_off_reference'] = p4.compare_runs(baseline, candidate)
+        self.assertEqual(candidate['b5_off_reference']['off_delta_summary'], 'SOME_OVER_2_DB')
+        report = p4.markdown([candidate])
+        self.assertIn('| TS P4c | RF P4c (cùng lượt) |', report)
+        self.assertIn('| PASS | PASS |', report)
+        self.assertIn('chỉ tham khảo', report)
+        self.assertIn('`EMI_MITIGATED`', report)
+        self.assertNotIn('INCONCLUSIVE', report)
+        candidate['phases']['ON1']['quality_after5s']['duration_s'] = 59.999
+        candidate['phases']['ON2']['duty_total_percent'] = 89.999
+        criteria = p4.p4c_criteria(candidate['phases'], candidate['snr_drop_db'])
+        self.assertEqual((criteria['ts'], criteria['rf']), ('FAIL', 'FAIL'))
+        candidate['phases']['ON1']['phase4_ts']['content_mapping_complete'] = False
+        criteria = p4.p4c_criteria(candidate['phases'], candidate['snr_drop_db'])
+        self.assertEqual(criteria['ts'], 'UNKNOWN')
+
+    def test_off_reference_never_supplies_rf_observation(self):
+        baseline, candidate = capture(), capture()
+        candidate['id'] = 'candidate'
+        result = p4.compare_captures(baseline, [candidate])[1]
+        self.assertTrue(result['b5_off_reference']['same_frontend'])
+        self.assertNotIn('comparison', result)
+        self.assertNotIn('emi', result)
+        self.assertIsNone(result['p4c_criteria']['rf_observation'])
 
 
 class DumpTests(unittest.TestCase):
@@ -299,7 +338,7 @@ class DumpTests(unittest.TestCase):
         self.assertEqual(phase['urb_errors'], 0)
         self.assertEqual(result['provenance']['drive'], 85)
         self.assertIn('not_kernel', result['provenance']['timestamp_kind'])
-        self.assertEqual(result['emi'], 'UNKNOWN_NOT_AUTOMATICALLY_ASSESSED')
+        self.assertIsNone(result['p4c_criteria']['rf_observation'])
 
     def test_exact_five_second_marker_and_explicit_raw_path(self):
         sidecar, raw = self.fixture()
@@ -519,9 +558,9 @@ class InputTests(unittest.TestCase):
         for name in ('OFF1', 'OFF2'):
             files['phase31-signal-rssi-fixture-' + name + '.jsonl'] = b''
         files['session-report.json'] = json.dumps(report()).encode()
-        def one(folder, pattern):
+        def one(folder, *patterns):
             import fnmatch
-            return folder / next(name for name in files if fnmatch.fnmatch(name, pattern))
+            return folder / next(name for name in files if any(fnmatch.fnmatch(name, pat) for pat in patterns))
         with patch.object(p4, '_one', one), patch.object(p4, 'read_json', return_value=report()), \
                 patch.object(Path, 'read_bytes', lambda path: files[path.name]):
             result = p4.summarize(p4.load_b5(Path('b5'), Path('export')))

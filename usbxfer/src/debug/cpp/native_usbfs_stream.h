@@ -61,6 +61,7 @@ struct tbs_stream {
     int attempted, submitted, completed, outstanding, delivered, cleanup, uncertain;
     int last_errno, last_status, last_actual, last_slot, last_return;
     int first_status, first_errno, min_outstanding, started, finished, released;
+    int cleanup_last_status, cleanup_last_errno, cleanup_cancellation, cleanup_error;
     uint64_t next_sequence, expected, last_sequence;
     int64_t begin, elapsed, last_progress, max_resubmit, median_resubmit;
     int64_t starvation_count, zero_outstanding_count, horizon_count; /* horizon_count is reserved, always zero. */

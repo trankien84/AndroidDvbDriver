@@ -1,5 +1,36 @@
 # Research log (append-only)
 
+## 2026-11-19 — P4c: đính chính tiêu chí và kiểm ranh đầu luồng
+
+### Đính chính
+
+- Chênh mức OFF giữa hai ngày chỉ là thông tin bối cảnh. So trong cùng lượt: B5 cũ có 10/403 mẫu BER bằng 0 khi ON, SNR 24,75 → 18,90 dB, dữ liệu khoảng 23% thời gian; P4b bước 1 có 406/406 mẫu BER bằng 0 khi ON, SNR 27,59 → 27,60 dB, dữ liệu 100% ở cả hai pha. Không mất lock trong cả hai lượt. Đây là `EMI_MITIGATED` cho tổ hợp bố trí mới và drive `0x55`, không phải xác nhận tác dụng riêng của bố trí, drive hay ferrite.
+- CC trên PID bảng thông tin dịch vụ (SI) không dùng làm tiêu chí đạt/rớt. Đối chiếu PID hình, tiếng và đồng hồ PCR với các bảng PMT rồi chấm riêng; kiểm cả TEI và khoảng byte giữa các PCR. Chỉ xác định được giả thuyết nguồn phát từ phân bố lỗi và bằng chứng không thiếu gói quan sát được, không có đường đo trực tiếp tại máy phát.
+- P4b đóng do hai lỗi mô hình, không phải do firmware nạp thiếu hoặc dữ liệu USB trả status âm: snapshot gốc `TRANSITIONING` ghi 132/132 đúng độ dài, không lỗi; reload `COMPLETE` 132/132 và descriptor operational được chấp nhận. Mỗi pha ON có 16 REAP lúc dọn (15 status `-2`, một status 0), một `DISCARDURB` báo `EINVAL` có REAP đúng URB và outstanding cuối bằng 0. Không có REAP lỗi trước lần DISCARD đầu. `native_urb.urb_status` của app cũ là status cuối khi dọn, làm `receive_error` gắn nhãn sai. Receipt và audit gốc giữ nguyên.
+
+### Chấm lại P4b bước 1
+
+Sau 5 giây, ON1/ON2 có CC nội dung 0/0, CC bảng SI 37/7, TEI 0/0 và 13 dịch vụ với PAT/PMT/SDT hợp lệ. Tốc độ trung vị theo PCR khoảng 35,5798 Mbps. Trên 9.401/1.865 khoảng PCR, không có khoảng thiếu từ 94 byte, có 26/0 khoảng thừa. Kết quả `TS_CLEAN_DEBUG_PATH` áp dụng cho cửa sổ đã phân tích, không chứng nhận Dump release. Việc tham chiếu PCR không tự chứng minh đã loại trừ mọi kiểu lỗi USB hoặc đo trực tiếp nguồn phát.
+
+Sau khi loại vùng nối khỏi hai mẫu đầu pha, kiểm độc lập thấy ON1 có 7 lỗi NIT (`0x10`) và 15 lỗi EIT (`0x12`); ON2 có 4 lỗi NIT, 10 lỗi EIT và 1 lỗi PID `0x14`. Tổng 22/15 lỗi bảng SI so với 21/14 trong phân tích ban đầu. CC nội dung bằng 0, không thiếu từ 94 byte trong 5.634/3.749 khoảng trên 13 PID có PCR. Hai cửa sổ đầu pha và sau 5 giây có độ dài khác nhau, không so trực tiếp số đếm.
+
+ON2 trước đây đếm 22.216.712 byte dù chỉ có 22.216.704 byte payload. Chỉ lấy các gói 188 byte nằm trọn trong cửa sổ cho kết quả 22.216.524 byte; không sửa raw hoặc khai tăng payload để qua chốt.
+
+### Kiểm bộ lọc production trước khi triển khai
+
+Đọc tối đa 65536 byte đầu mỗi mẫu Android nguyên bản, tìm năm byte sync `0x47` cách 188 byte rồi theo nhịp đó đến byte sync đầu tiên bị thiếu. Kiểm độc lập vị trí đầu tiên có năm nhịp nếu bắt đầu dò ở 2048. Offset tính từ 0; bỏ các bản trùng, mẫu giả, mẫu cắt sau 5 giây và luồng Windows không đi qua đường FX2 Android này.
+
+| Raw | Sync ban đầu | Sync đầu bị thiếu theo nhịp cũ | Vị trí đầu có năm sync nếu dò từ 2048 |
+| --- | ---: | ---: | ---: |
+| B3 lượt 1 / 2 / 3 | 0 / 160 / 88 | 2068 / 2228 / 2156 | 2048 / 2064 / 2052 |
+| B4 Android | 142 | 2210 | 2068 |
+| B5 Android ON1 / ON2 | 108 / 178 | 2176 / 2058 | 2154 / 2228 |
+| P4b ON1 / ON2 | 171 / 93 | 2051 / 2161 | 2049 / 2227 |
+
+**BLOCKED cho lọc production:** vị trí phát hiện đứt theo nhịp cũ không nằm trong 2048 byte ở các raw này. Ở P4b ON1, byte `0x47` tại 2049 nằm cùng nhịp 188 với gói tại 2237; cách dò chỉ theo năm sync sẽ trả về 2049. Đây không phải bằng chứng FIFO luôn dài hơn 2048 byte: ranh byte của FIFO và điểm phát hiện mất nhịp gói là hai đại lượng khác nhau. Không sửa đường Dump/client, không đổi 2048 thành một hằng số khác và không lọc raw debug.
+
+Đối chiếu nguồn chỉ đọc: Linux TBS `2ce787de9f6e81b4294692a45de15596ae2e1322` và CoreELEC `072f8e99e0ac66d88d7278784e922e08e8253210`, cùng `drivers/media/usb/dvb-usb/tbs5530.c`, khai báo Bulk `0x82`, 8 × 4096 byte; cấu hình này không chứng minh ranh gói ở đầu luồng Android. Các checkout cộng đồng ở `c5fa27eecbe80633cbb365cc44656daea1c0e2e3` (C) và `6aaa1899991c875ba0482fa9098adc6c83b01fd8` (Go) không thay đổi. Phiên này không thu thêm Windows, VM hoặc Linux USB.
+
 ## 2026-11-19 — P4b bước 1: TS liên tục nhưng helper đóng phiên do guard snapshot/drain quá hẹp
 
 **RUNTIME-OBSERVED:** card P4b/schema SESSION SHA `0a9e343fb9ef217824553be23a41e64f2b40534e00b7c783d0e355bf523ee471`, manifest source đã dùng 504 tệp SHA `34b02b4c073c585ab91a3e92cbd071f48e67ca60d4e41afb1d0fbea795ace04b`, helper `5ac346d1…56119`, APK debug `5c13d652…3ca19f`. Sau fake 324/324, gate và validator thật PASS, người dùng xác nhận bố trí/cold/sẵn sàng, một install-r/history nguyên, rồi chạy đúng ordinal 1/bước 1/K25/drive 85. Hai hộp USB tổng cộng, không Luôn mở, không hộp chọn hai Activity được báo.

@@ -1,5 +1,31 @@
 # Architecture decision record (ADR)
 
+## ADR-069 — Chấm chất lượng TS theo nội dung và không nhầm hủy USB với lỗi nhận
+
+**Date:** 2026-11-19, baseline `7a6e24b`, nhánh `chore/modernize-android-build`.
+
+**Status:** Tiêu chí đo và phân loại USB được duyệt cho P4c; lọc tiền tố production bị chặn bởi kiểm tra raw. Chưa được thực thi phần cứng khi gate chưa đạt đầy đủ.
+
+### Context / Evidence
+
+P4b bước 1 nhận đủ bốn pha nhưng helper bác snapshot bootstrap `TRANSITIONING`. Helper cũng có thể bác status `-2` vì đọc completion cuối lúc dọn thay vì completion của cửa sổ nhận. Mỗi pha ON có một `DISCARDURB` trả `EINVAL` và vẫn reap đúng URB đó. Thay tiêu chí chấm không làm thay đổi raw, receipt hoặc ngân sách đã đóng của P4b.
+
+### Decision
+
+- Chỉ chấp nhận snapshot bootstrap `TRANSITIONING` hoặc `OPERATIONAL_CANDIDATE` khi đủ 132 lượt thử/hoàn tất/đúng độ dài, không lỗi bootstrap hoặc cleanup, reload `COMPLETE` 132/132, `detach_ns` là `-1` và đã xác nhận descriptor operational. Không nới kiểm trước khi cấp quyền I/O.
+- Phân loại REAP trước `DISCARDURB` đầu tiên theo cửa sổ nhận, không cho status khác 0. Trong drain chỉ nhận status 0, `-2` hoặc `-104`; `EINVAL` của DISCARD cần có REAP xác thực đúng URB sau đó. Mọi lỗi khác, outstanding hoặc quarantine chặn kết luận an toàn. Ghi hủy lúc dọn riêng, không dùng để gắn nhãn `receive_error`.
+- Chấm TS sau đồng bộ và sau 5 giây: PID hình/tiếng và PID đồng hồ PCR lấy từ PMT có tối đa một lỗi đếm gói (CC) mỗi phút; PID bảng SI, gồm PID PMT, chỉ báo cáo. Không nhận khoảng PCR thiếu từ 94 byte trở lên so với tốc độ trung vị; khoảng thừa chỉ ghi chú. TEI phải bằng 0 và phải có PAT/PMT/SDT với CRC hợp lệ. Không dùng số lỗi bảng để đánh rớt nhưng cũng không quy chắc cho nhà đài khi thiếu bằng chứng đối chiếu.
+- Chấm nhiễu bằng so sánh OFF/ON trong cùng lượt: tỷ lệ mẫu BER bằng 0 khi ON ít nhất 90%, SNR giảm không quá 2 dB và dữ liệu có mặt ít nhất 90% thời gian. Lệch OFF so với B5 chỉ cung cấp bối cảnh. P4b bước 1 có bằng chứng giảm nhiễu ở tổ hợp bố trí mới với drive `0x55`; chưa tách được tác dụng của từng thay đổi.
+- Chưa áp dụng bỏ 2048 byte và khóa năm nhịp trong production: gói cũ có thể kéo qua ranh 2048 và năm byte sync có thể khớp sớm một gói. Raw debug vẫn giữ nguyên.
+
+### Alternatives / Trade-offs
+
+Không dùng một ngưỡng tuyệt đối giữa hai ngày làm cửa chặn. Không che lỗi nhận bằng cách bỏ mọi errno `EINVAL` hay mọi status âm lúc dọn. Không tăng hằng số bỏ byte theo mẫu xấu nhất khi chưa có thiết kế và điều kiện kiểm chứng mới.
+
+### Validation / Reopen trigger
+
+Muốn mở lại lọc production cần thống nhất cách phân biệt điểm nối và chứng minh trên raw B3/B4/B5/P4b trước khi đổi đường Dump hoặc client. Chỉ bắt đầu P4c live sau khi đạt đủ điều kiện của người dùng. Bước 2 so với B5 cùng drive mới có thể tách ảnh hưởng của bố trí; bước 4 chỉ chạy nếu người dùng đồng ý riêng.
+
 ## ADR-068 — Card phiên có tham số, trần debug cố định và báo lỗi giữ khóa an toàn
 
 **Date:** 2026-11-19, baseline `c39541f83c2103d5f20c2083abf59756ee0ac3c9`, nhánh `chore/modernize-android-build`, working tree sạch trước sửa.

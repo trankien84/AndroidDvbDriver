@@ -1,5 +1,21 @@
 # TBS5530 test matrix
 
+## 2026-11-19 — P4c: kiểm ngoại tuyến, không có lượt phần cứng mới
+
+| Hạng mục | Kết quả | Bằng chứng hoặc giới hạn |
+| --- | --- | --- |
+| Tiền tố FX2 trước khi sửa production | BLOCKED | Điểm thiếu sync đầu tiên nằm tại 2051–2228 trên tám mẫu nguyên bản độc lập (B3/B4/B5/P4b). Không đổi production. |
+| JVM app debug/release, drivers, usbxfer | PASS | 132/13/562/87 PASS, drivers có 5 SKIP; không lỗi sau khi cập nhật hai fixture phản chiếu ABI JNI debug. |
+| JVM dvbservice | FAIL | 16 PASS, 1 FAIL ở hai lượt chạy. `interruptClosesSocketBlockedInClientWrite` timeout 5000 ms khi Mockito đang tạo đối tượng giả. Không sửa mã dịch vụ hoặc nới timeout. |
+| Build debug, release và AndroidTest | PASS | APK app debug/release và AndroidTest của app/drivers/dvbservice/usbxfer build xong. Không chạy instrumentation. |
+| App lint debug/release | PASS | Cả hai variant không có lỗi. Driver lint `UnspecifiedRegisterReceiverFlag` tại `UsbPermissionObtainer` là FAIL lịch sử, không chạy lại hoặc sửa ở P4c. |
+| C host, production và debug | PASS | Lõi TS production, lõi USBFS debug, 91 ca stream gồm hủy/drain, kế hoạch FX2 132 lượt và 397 kịch bản reload. Không có I/O USB thật. |
+| JNI và căn chỉnh 16 KiB | PASS tĩnh | 8 thư viện debug và 4 release trên bốn ABI, segment LOAD ELF64 ít nhất 16 KiB, `zipalign -c -P 16`, không có diagnostic JNI/activity trong release. Chưa kiểm thiết bị 16 KiB thật. |
+| Python và helper fake | PASS ngoại tuyến | Python 138/138; helper 373/373. Guard cũng chấp nhận terminal và hai audit gốc P4b sau khi kiểm pin và ràng đúng ID app từ challenge. Receipt cũ vẫn đóng. |
+| Card P4c | PASS pin ngoại tuyến; BLOCKED live | Validator thật kiểm bước 2/4, 505 tệp nguồn, helper, firmware gốc và APK debug; APK release ký test đã kiểm hash/chữ ký riêng. `execution_authorized=false` chặn helper main. |
+| P4b bước 1 theo tiêu chí mới | PASS ngoại tuyến | `EMI_MITIGATED`, `TS_CLEAN_DEBUG_PATH`. 0 lỗi CC nội dung và TEI, 0 khoảng PCR thiếu từ 94 byte; lỗi CC bảng SI chỉ báo cáo. |
+| P4c bước 2, 4, 5–11 | NOT RUN | Không cài APK điện thoại, không SAF hoặc push/xóa firmware, không phát sinh hộp USB, dữ liệu hay lượt consume. |
+
 ## 2026-11-19 — P4b schema phiên mới: gate production drain đã kiểm lại
 
 | Kiểm mới | Kết quả | Evidence / giới hạn |

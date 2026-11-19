@@ -174,15 +174,23 @@ function Phases {
         $duration=@(10,30,10,10)[$i]*1000000000L
         $phases+=,[pscustomobject]@{phase=$name;start_ns=$now;end_ns=($now+$duration);clock='CLOCK_MONOTONIC';bytes=$(if($name.StartsWith('ON')){$raw.Length}else{0});
             raw_file=$(if($name.StartsWith('ON')){'received-'+$name+'.ts'}else{$null});stale_prefix_bytes=$(if($name -ceq 'ON1'){2048}else{0});audit_run_id=($session+'-'+$name);drained=$true;quarantined=$false;stop_reason='DURATION'}
+        if ($name.StartsWith('ON')) {
+            foreach ($p in @{first_status=0;first_errno=0;last_status=0;last_errno=0;cleanup_last_status=-2;cleanup_last_errno=0;
+                cleanup_cancellation=$true;cleanup_error=$false;outstanding=0;submitted=32;completed=32}.GetEnumerator()) { $phases[-1]|Add-Member $p.Key $p.Value }
+        }
         $now+=$duration;$i++
     }
     return $phases
 }
 $raw=[byte[]](0..255)
+function CleanBootstrap([string]$State='TRANSITIONING') {
+    [pscustomobject]@{state=$State;attempted=132;completed=132;full_length_completed=132;cleanup_failure='NONE';stop_cause='NONE';failure_chain=@()}
+}
 function Report {
     [pscustomobject]@{cleanup='DRAIN_CONFIRMED';state='REPORT';result='STRUCTURE_CONFIRMED';terminal=$true;cleanup_path='RUNTIME_DRAIN_CONFIRMED';
-        native_urb=$null;native_stream=$null;b5_phases=@(Phases);firmware=$null;
+        native_urb=$null;native_stream=$null;b5_phases=@(Phases);firmware=(CleanBootstrap);
         fx2_reload=[pscustomobject]@{state='COMPLETE';attempted=132;completed=132;detach_ns=-1};last_errno=0;ts_bytes=32768;raw_capture='SYNCED_CLOSED';
+        operational_usb_observation=[pscustomobject]@{profile='OPERATIONAL_CANDIDATE'};cleanup_cancellation=$true;receive_error='NOT_CLASSIFIED_AS_COMPLETED_ERROR';
         raw_received_bytes=32768;control_mirror='SYNCED_CLOSED';permission_outcome='AUTO_PERMISSION_HANDLED_BY_OS';pre_native_refusal=$false}
 }
 $r=Report
@@ -325,7 +333,7 @@ function Invoke-B5Adb([string[]]$DeviceArguments,[string]$InputText='',[string]$
             if ($script:fakeFault -cin @('session-ui','session-permission','session-partial','session-uncertain','session-usb','session-reload','session-drain')) {
                 $r.b5_phases=@();$r.fx2_reload=$null;$r.ts_bytes=0;$r.raw_received_bytes=0;$r.result='STOPPED'
                 $r|Add-Member stop_reason $(if($script:fakeFault -ceq 'session-permission'){'PERMISSION_DENIED'}else{'ATTACH_PERMISSION_UI_TIMEOUT'})
-                $r.firmware=[pscustomobject]@{state='OPERATIONAL_CANDIDATE';attempted=132;completed=132;cleanup_failure='NONE';stop_cause='NONE'}
+                $r.firmware=CleanBootstrap 'OPERATIONAL_CANDIDATE';$r.cleanup_cancellation=$false
                 switch ($script:fakeFault) {
                     'session-partial' {$r.firmware.completed=100}
                     'session-uncertain' {$r.firmware.state='UNCERTAIN';$r.state='ERROR_UNCERTAIN'}
@@ -398,10 +406,12 @@ $FrontendExperiment='B5_K25_MANUAL_PLP0'
 foreach ($fault in @('permission','foreground','model','serial','grant-uncertain','status75','status71','detach','drain','oversized','missing-monitor','report-layout')) {
     $Serial='offline-fixture';$script:fakeFault=$fault;SetupIntegration ('failure-'+$fault)
     if($fault -ceq 'serial'){$Serial='wrong-serial'}else{$Serial='offline-fixture'}
-    $threw=$false
-    try {$null=& {$PSCommandPath=$path;$PSScriptRoot=Split-Path -Parent $path;Invoke-Expression $main}}catch{$threw=$true}
+    $threw=$false;$mainError=$null
+    try {$null=& {$PSCommandPath=$path;$PSScriptRoot=Split-Path -Parent $path;Invoke-Expression $main}}catch{$threw=$true;$mainError=$_}
     if($fault -ceq 'serial'){Check ($threw -and -not (Test-Path (Join-Path $B5SessionDirectory 'b5-session-manifest.jsonl'))) 'serial pin fails before transport/budget';continue}
-    $receipt=[IO.File]::ReadAllLines((Join-Path $B5SessionDirectory 'b5-session-manifest.jsonl'))[-1]|ConvertFrom-Json
+    $ledgerPath=Join-Path $B5SessionDirectory 'b5-session-manifest.jsonl'
+    if (-not (Test-Path -LiteralPath $ledgerPath)) { throw "Fake $fault failed before ledger: $mainError" }
+    $receipt=[IO.File]::ReadAllLines($ledgerPath)[-1]|ConvertFrom-Json
     if($fault -cin @('permission','foreground','model','serial')) {
         Check ($threw -and -not $receipt.drained -and $script:grantCalls -eq 0) ('no grant after refusal '+$fault)
     }else{
@@ -775,6 +785,113 @@ foreach ($fault in @('partial','uncertain','firmware-missing','firmware-type','f
 }
 $r=$ui|ConvertTo-Json -Depth 20|ConvertFrom-Json;$r.firmware=$null
 Check ((Get-B5UiRetryReason $r) -ceq 'UI_ABORT_BEFORE_RELOAD') 'SESSION verified no-bootstrap drained UI refusal permitted'
+$r=Report;$r.b5_phases[1].cleanup_last_status=-104
+Check (Test-B5SessionTransportSafe $r) 'SESSION split receive metrics accept ECONNRESET during clean drain'
+$r=Report;$r.b5_phases[1].cleanup_last_status=0
+Check (Test-B5SessionTransportSafe $r) 'SESSION final successful REAP can follow an earlier cleanup cancellation'
+$r=Report;$r.b5_phases[1].bytes=0;$r.b5_phases[1].first_status=$null;$r.b5_phases[1].last_status=$null
+Check (Test-B5SessionTransportSafe $r) 'SESSION no receive REAP permits null receive statuses with proven cleanup'
+$r.b5_phases[1].first_status=0
+Check (Test-B5SessionTransportSafe $r) 'SESSION no receive REAP permits zero first-error sentinel with null last status'
+foreach ($fault in @('bootstrap-131','full-length-131','bootstrap-uncertain','failure-chain','no-reload','detach-unknown','descriptor','descriptor-missing',
+    'receive-minus2','receive-minus75','receive-last-minus2','receive-minus19','receive-errno','receive-unknown-with-bytes','cleanup-minus75','cleanup-minus71','cleanup-minus19',
+    'cleanup-errno','sticky-cleanup-error','sticky-type','missing-last-status','outstanding','quarantine','counts','report-cancellation','no-marker','native-urb-receive','receive-classification')) {
+    $r=Report;$on=$r.b5_phases[1]
+    switch ($fault) {
+        'bootstrap-131' {$r.firmware.completed=131}
+        'full-length-131' {$r.firmware.full_length_completed=131}
+        'bootstrap-uncertain' {$r.firmware.state='UNCERTAIN'}
+        'failure-chain' {$r.firmware.failure_chain=@('UNKNOWN')}
+        'no-reload' {$r.fx2_reload=$null}
+        'detach-unknown' {$r.fx2_reload.detach_ns=-2}
+        'descriptor' {$r.operational_usb_observation.profile='FX2_DEFAULT'}
+        'descriptor-missing' {$r.PSObject.Properties.Remove('operational_usb_observation')}
+        'receive-minus2' {$on.first_status=-2}
+        'receive-minus75' {$on.first_status=-75}
+        'receive-last-minus2' {$on.last_status=-2}
+        'receive-minus19' {$on.last_status=-19}
+        'receive-errno' {$on.last_errno=2}
+        'receive-unknown-with-bytes' {$on.first_status=$null;$on.last_status=$null}
+        'cleanup-minus75' {$on.cleanup_last_status=-75}
+        'cleanup-minus71' {$on.cleanup_last_status=-71}
+        'cleanup-minus19' {$on.cleanup_last_status=-19}
+        'cleanup-errno' {$on.cleanup_last_errno=22}
+        'sticky-cleanup-error' {$on.cleanup_error=$true}
+        'sticky-type' {$on.cleanup_error='false'}
+        'missing-last-status' {$on.PSObject.Properties.Remove('last_status')}
+        'outstanding' {$on.outstanding=1}
+        'quarantine' {$on.quarantined=$true}
+        'counts' {$on.completed--}
+        'report-cancellation' {$r.cleanup_cancellation=$false}
+        'no-marker' {$r.PSObject.Properties.Remove('cleanup_cancellation')}
+        'native-urb-receive' {$r.native_urb=[pscustomobject]@{urb_status=-2;submitted=32;completed=32;outstanding=0;quarantined=$false}}
+        'receive-classification' {$r.receive_error='KNOWN_COMPLETED_USB_ERROR'}
+    }
+    Check (-not (Test-B5SessionTransportSafe $r)) ('SESSION transport refuses '+$fault)
+}
+
+# Rehydrate the ordered transport-only projection with synthetic IDs and relative phase times.
+$legacyFixture=Get-Content -LiteralPath (Join-Path $PSScriptRoot 'tests\fixtures\p4b-step1-transport.json') -Raw | ConvertFrom-Json
+$legacy=$legacyFixture.report;$syntheticPhases=@(Phases)
+for ($i=0;$i -lt $legacy.b5_phases.Count;$i++) {
+    foreach ($key in @('start_ns','end_ns','clock','raw_file','stale_prefix_bytes','audit_run_id')) { $legacy.b5_phases[$i]|Add-Member $key $syntheticPhases[$i].$key }
+}
+$legacyDirectory=Join-Path $root 'p4b-transport\attempt-1'
+$null=New-Item -ItemType Directory -Path $legacyDirectory -Force
+$legacyExports=@(foreach ($name in @('ON1','ON2')) {
+    $a=$legacyFixture.audits.$name;$id=$session+'-'+$name
+    $source=[IO.MemoryStream]::new([Convert]::FromBase64String(($a.gzip_base64 -join '')))
+    $gzip=[IO.Compression.GZipStream]::new($source,[IO.Compression.CompressionMode]::Decompress)
+    $decoded=[IO.MemoryStream]::new()
+    try { $gzip.CopyTo($decoded);$decoded.Position=0 } finally { $gzip.Dispose();$source.Dispose() }
+    $reader=[IO.BinaryReader]::new($decoded)
+    $base='phase31-native-stream-'+$id+'.jsonl';$filename='01-'+$base;$local=Join-Path $legacyDirectory $filename
+    $writer=[IO.StreamWriter]::new($local,$false,[Text.UTF8Encoding]::new($false));$writer.NewLine="`n"
+    try {
+        $ordinal=0;$seq=0
+        while ($decoded.Position -lt $decoded.Length) {
+            $kind=$reader.ReadByte();$slot=$reader.ReadByte();$seq+=[int]$reader.ReadInt16();$rc=$reader.ReadInt16();$errno=$reader.ReadInt16()
+            $status=$reader.ReadInt16();$depth=$reader.ReadByte()
+            $writer.WriteLine(([ordered]@{run_id=$id;read_api='NATIVE_USBFS_STREAM';event=(++$ordinal);kind=$kind;slot=$slot;sequence=$seq;
+                syscall_return=$rc;syscall_errno=$errno;urb_status=$(if($status -ne 32767){$status}else{$null});software_outstanding=$depth}|ConvertTo-Json -Compress))
+        }
+        $a.summary|Add-Member run_id $id
+        $writer.WriteLine(($a.summary|ConvertTo-Json -Compress))
+    } finally { $writer.Dispose();$reader.Dispose() }
+    [pscustomobject]@{path=('files/'+$base);present=$true;file=$filename;local_path=$local;bytes=(Get-Item -LiteralPath $local).Length;sha256=(HashFile $local)}
+})
+$legacyManifest=Join-Path $legacyDirectory 'export-manifest.json'
+Write-B5NewJson $legacyManifest $legacyExports
+$legacyHash=HashFile $legacyManifest
+Check (Test-B5SessionTransportSafe $legacy $legacyDirectory $legacyHash $session) 'P4b actual ON1/ON2 ordered audit proves safe cancellation and drain'
+Check (-not (Test-B5SessionTransportSafe $legacy)) 'P4b legacy negative without bound audit refused'
+Check (-not (Test-B5SessionTransportSafe $legacy $legacyDirectory ('0'*64) $session)) 'P4b legacy manifest hash mismatch refused'
+Check (-not (Test-B5SessionTransportSafe $legacy $legacyDirectory $legacyHash $epoch2)) 'P4b legacy export from another run refused'
+$legacyCard=SessionCard (Card 'legacy-fixture')
+$legacyCard.budget_directory=Split-Path -Parent $legacyDirectory
+$legacyAttempt=Get-B5SessionAttempt $legacyCard 1 1
+$legacy|Add-Member b5_ts_drive 85;$legacy|Add-Member frontend_experiment $legacyAttempt.frontend_experiment
+$legacyTerminal=Join-Path $legacyDirectory 'terminal-report.json';Write-B5NewJson $legacyTerminal $legacy
+$legacyReceipt=[pscustomobject]@{debug_step=1;ts_drive=85;retry_reason=$null;capture_complete=$true;result=$legacy.result;
+    terminal_report_sha256=(HashFile $legacyTerminal);export_manifest_sha256=$legacyHash;audit_session=$session;
+    golden_sha256=$legacyAttempt.golden_sha256;reload_plan_sha256=$legacyAttempt.reload_plan_sha256;frontend_experiment=$legacyAttempt.frontend_experiment}
+$null=Read-B5SessionTerminal $legacyCard $legacyReceipt 1
+Check $true 'SESSION receipt replays legacy audit with durable bindings'
+$legacyReceipt.PSObject.Properties.Remove('audit_session')
+Refuse {Read-B5SessionTerminal $legacyCard $legacyReceipt 1} 'SESSION legacy receipt without audit identity refused'
+$export=$legacyExports[0];$legacyBytes=[IO.File]::ReadAllBytes($export.local_path)
+[IO.File]::AppendAllText($export.local_path,' ')
+Check (-not (Test-B5SessionTransportSafe $legacy $legacyDirectory $legacyHash $session)) 'P4b legacy audit tampering refused'
+$legacyText=[Text.Encoding]::UTF8.GetString($legacyBytes)
+foreach ($pair in @(@('"event":17,"kind":2,"slot":0,"sequence":1,"syscall_return":0,"syscall_errno":0,"urb_status":0','"event":17,"kind":2,"slot":0,"sequence":1,"syscall_return":0,"syscall_errno":0,"urb_status":-2','minus2 during receive'),
+    @('"event":17,"kind":2,"slot":0,"sequence":1,"syscall_return":0,"syscall_errno":0,"urb_status":0','"event":17,"kind":2,"slot":0,"sequence":1,"syscall_return":0,"syscall_errno":0,"urb_status":-75','minus75 during receive'),
+    @('"event":16319,"kind":2,"slot":15,"sequence":8144','"event":16319,"kind":2,"slot":15,"sequence":8143','EINVAL without exact reap sequence'))) {
+    $changed=$legacyText.Replace($pair[0],$pair[1]);if ($changed -ceq $legacyText) { throw 'Legacy mutation did not match' }
+    [IO.File]::WriteAllText($export.local_path,$changed,[Text.UTF8Encoding]::new($false))
+    $export.bytes=(Get-Item -LiteralPath $export.local_path).Length;$export.sha256=HashFile $export.local_path
+    [IO.File]::WriteAllText($legacyManifest,($legacyExports|ConvertTo-Json -Depth 8 -Compress),[Text.UTF8Encoding]::new($false))
+    Check (-not (Test-B5SessionTransportSafe $legacy $legacyDirectory (HashFile $legacyManifest) $session)) ('P4b legacy audit rejects '+$pair[2])
+}
 
 # Independent cap checks do not stub review or device safeguards.
 $c=SessionCard (Card 'caps')
@@ -829,6 +946,19 @@ function Get-FileHash([string]$LiteralPath,[string]$Algorithm) {
 try {
     $v=Assert-B5LocalPins $localCardPath $localHash $localCard.approval $repository $fakeFirmware $localApk 1 1 0 85 $localCard.debug_steps[0].golden_sha256 $localCard.debug_steps[0].reload_plan_sha256
     Check ($v.status -ceq 'LOCAL_PINS_VERIFIED' -and $v.device_io -ceq 'NOT_RUN') 'offline pin entry reaches verified local source/helpers/APK with explicit fake firmware hash only'
+    $p4c=SessionCard $localCard 'P4c' 4
+    $p4c.max_android=8;$p4c.max_oneplus=8;$p4c.debug_steps=$p4c.debug_steps[1,2]
+    $p4c.debug_steps[0].frontend_experiment='B5_K25_MANUAL_PLP0';$p4c.debug_steps[0].allow_k25_auto=$true
+    $p4c|Add-Member execution_authorized $false
+    $p4c|Add-Member status 'BLOCKED_PREFIX_PREFLIGHT'
+    $p4cPath=$localCardPath+'.p4c';Write-B5NewJson $p4cPath $p4c;$p4cHash=HashFile $p4cPath
+    $v=Assert-B5LocalPins $p4cPath $p4cHash 'OK P4c' $repository $fakeFirmware $localApk 1 2 0 84 $p4c.debug_steps[0].golden_sha256 $p4c.debug_steps[0].reload_plan_sha256
+    Check ($v.status -ceq 'LOCAL_PINS_VERIFIED' -and $v.ordinal -eq 1 -and $v.debug_step -eq 2 -and $v.device_io -ceq 'NOT_RUN') 'P4c uses existing validator with ordinal 1, debug step 2, drive 84 and four slots'
+    $v=Assert-B5LocalPins $p4cPath $p4cHash 'OK P4c' $repository $fakeFirmware $localApk 2 4 0 85 $p4c.debug_steps[1].golden_sha256 $p4c.debug_steps[1].reload_plan_sha256
+    Check ($v.status -ceq 'LOCAL_PINS_VERIFIED' -and $v.debug_step -eq 4 -and $v.device_io -ceq 'NOT_RUN') 'P4c optional drive 85 pins validate offline without granting execution'
+    Assert-B5SessionLedger ([byte[]]@()) $p4cHash $p4c 1 2 0
+    Check $true 'P4c empty ledger starts at ordinal 1 and step 2'
+    Refuse {Assert-B5SessionLedger ([byte[]]@()) $p4cHash $p4c 1 4 0} 'P4c empty ledger cannot skip step 2'
     foreach ($fault in @('cardhash','approval','helper','apk','source','golden','drive')) {
         $c=$localCard|ConvertTo-Json -Depth 20|ConvertFrom-Json
         $h=$localHash;$a=$c.approval;$gold=$c.debug_steps[0].golden_sha256;$drive=85
@@ -847,6 +977,18 @@ try {
     }
 } finally { Remove-Item Function:Get-FileHash }
 Check ($script:fakeCalls -eq $calls) 'offline validator never executes main or device transport'
+$card=$p4c;$Approval='OK P4c';$B5SessionDirectory=$card.session_directory
+SelectSessionAttempt 1 2 0
+foreach ($mode in @('missing','false','string')) {
+    $blocked=$p4c|ConvertTo-Json -Depth 20|ConvertFrom-Json
+    if ($mode -ceq 'missing') { $blocked.PSObject.Properties.Remove('execution_authorized') }
+    if ($mode -ceq 'string') { $blocked.execution_authorized='true' }
+    $B5CardPath=$p4cPath+'.'+$mode;Write-B5NewJson $B5CardPath $blocked;$ExpectedB5CardSha256=HashFile $B5CardPath
+    $refused=$false
+    try { & {Invoke-Expression $main}|Out-Null } catch { $refused=$_.Exception.Message -ceq 'SESSION_P4C_EXECUTION_NOT_AUTHORIZED' }
+    Check ($refused -and $script:fakeCalls -eq $calls) ('P4c main refuses '+$mode+' authorization before fake transport')
+}
+$p4c.execution_authorized=$true;Assert-B5SessionExecutionAuthorized $p4c
 $DebugStep=0;$UiRetry=0;$ApproveSessionOptionalStep=$false;$B5AttemptOrdinal=1;$B5TsDrive=85;$Approval='OK B5'
 foreach ($scriptPath in @($path,$PSCommandPath,$b3)) {
     $b=[IO.File]::ReadAllBytes($scriptPath);$text=[Text.Encoding]::UTF8.GetString($b)

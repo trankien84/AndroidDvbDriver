@@ -1,4 +1,4 @@
-"""Offline B5 four-phase analysis built on the unchanged B4 TS/audit analyzer."""
+"""Offline B5 and Phase 4 four-phase analysis using the shared TS/audit analyzer."""
 from __future__ import annotations
 
 import argparse
@@ -170,18 +170,23 @@ def after5_quality(report):
     frames = report['completion_frames']
     after = frames.get('after_5s', {})
     duration = frames.get('observed_duration_ms')
-    metrics = after.get('metrics') or {}
-    known = (after.get('status') == 'OBSERVED' and finite(duration) and duration > 5000)
+    post = report.get('post5s_tables') or {}
+    # Older reports attributed a crossing packet to the completion containing its final byte.
+    metrics = post.get('metrics', after.get('metrics')) or {}
+    known = (after.get('status') == 'OBSERVED' and bool(metrics) and finite(duration) and duration > 5000)
     def rate(key):
         value = metrics.get(key)
         return value * 60_000 / (duration - 5000) if known and finite(value) and value >= 0 else None
-    return {'status': after.get('status', 'UNKNOWN'), 'observed_post5s_ms': duration - 5000 if known else None,
+    status = after.get('status', 'UNKNOWN')
+    if status == 'OBSERVED' and not known:
+        status = 'UNKNOWN_NO_QUALIFIED_POST5S_PACKETS'
+    return {'status': status,
+            'observed_post5s_ms': duration - 5000 if known else None,
             'full_percent': after.get('full_percent_including_missing'),
             'frame_counts': after.get('frame_counts'), 'missing_frames': after.get('missing_frames'),
             'cc_per_minute': rate('cc_errors'), 'tei_per_minute': rate('tei_packets'),
-            'psi': (report.get('post5s_tables') or {}).get('psi'),
-            'pcr': (report.get('post5s_tables') or {}).get('pcr'),
-            'table_scope': 'Only bytes from captured completions >=first data+5s; fresh PSI/CC/PCR state, original offsets retained.'}
+            'psi': post.get('psi'), 'pcr': post.get('pcr'),
+            'table_scope': 'Whole packets inside captured completions >=first data+5s; fresh PSI/CC/PCR state, original offsets retained. Legacy frame attribution is kept separately.'}
 
 
 def smoke_verdict(analyses, phases, policy=None):
@@ -281,9 +286,24 @@ def analyze(report, phase_inputs, monitor_source, *, baseline_bytes=None, cadenc
         analysis['monitor'] = ts.monitor_report(('\n'.join(json.dumps(row) for row in phase_rows) + '\n').encode(), metadata)
         threshold = metadata['origin_ns'] + 5_000_000_000 if type(metadata.get('origin_ns')) is int else None
         start = next((span['start'] for span in spans if threshold is not None and span['timestamp_ns'] >= threshold), None)
+        prefix = ts.debug_prefix_sync(raw, skipped, barriers)
+        analysis['offline_prefix_probe'] = prefix
+        analysis['post5s_tables'] = {'metrics': None}
         if start is not None:
-            post = ts.analyze(raw, spans, barriers, skip_prefix=max(skipped, start), timing_metadata=metadata)
-            analysis['post5s_tables'] = {'psi': post['psi'], 'pcr': post['pcr'], 'analysis_range': post['analysis_range']}
+            crop = max(start, prefix['floor_offset'], prefix['candidate_offset'] or 0)
+            post = ts.analyze(raw, barriers=barriers, skip_prefix=crop, phase4=True)
+            sync, frames = post['sync'], analysis['completion_frames']['after_5s']
+            metrics = None
+            if sync['packets'] and frames['status'] == 'OBSERVED':
+                metrics = {'ts_bytes': sync['packets'] * ts.PACKET,
+                           'cc_errors': post['cc']['within_errors'] + post['cc']['between_errors'],
+                           'tei_packets': post['totals'].get('tei', 0)}
+            analysis['post5s_tables'] = {'psi': post['psi'], 'pcr': post['pcr'], 'analysis_range': post['analysis_range'],
+                                         'metrics': metrics, 'phase4_ts': post['phase4_ts'] if metrics else None,
+                                         'first_sync_offset': sync['segments'][0]['start'] if sync['segments'] else None,
+                                         'unparsed_bytes': sync['unparsed_bytes'],
+                                         'post5s_payload_bytes': sum(span['end'] - span['start'] for span in spans
+                                                                     if span['timestamp_ns'] >= threshold)}
         analysis['after5s_quality'] = after5_quality(analysis)
         analyses[name], spans_by_phase[name] = analysis, spans
         timeline[name] = data_timeline(spans, phase)
