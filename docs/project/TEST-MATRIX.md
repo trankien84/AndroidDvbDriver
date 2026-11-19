@@ -1,5 +1,21 @@
 # TBS5530 test matrix
 
+## 2026-11-19 — P4d: JDK và JVM đạt, phiên phần cứng vẫn bị chặn
+
+| Hạng mục | Kết quả | Bằng chứng hoặc giới hạn |
+| --- | --- | --- |
+| JDK 25.0.5.1 | PASS | `java -version`, `JAVA_HOME`, Gradle launcher, daemon và JVM test cùng dùng bản vá mới. |
+| Tiền tố FX2 | BLOCKED | 7/8 raw đạt tất cả tiêu chí; B3 lượt 3 đúng nhịp tới hết raw nhưng chỉ có 917.504/1.048.576 byte. Không triển khai bộ lọc hoặc chạy hồi quy bộ lọc mới. |
+| Test hủy khi socket đang ghi | PASS | 10/10 lượt `--rerun` liên tiếp; thời gian JUnit 2,440–8,839 giây tính cả `@Before`. |
+| JVM các module | PASS | App debug/release 132/13, drivers 562 và 5 SKIP, dvbservice 17, usbxfer 87. Drivers và usbxfer chạy cưỡng bức sau khi gate chính báo `UP-TO-DATE`. |
+| Build debug, release và AndroidTest | PASS | APK debug và release chưa ký, AndroidTest app/drivers/dvbservice/usbxfer; không chạy instrumentation. |
+| App lint debug/release | PASS | Driver lint `UnspecifiedRegisterReceiverFlag` tại `UsbPermissionObtainer` vẫn là FAIL lịch sử, không chạy lại hoặc sửa trong P4d. |
+| Native host production/debug | PASS | Lõi TS và USBFS, 91 ca stream, kế hoạch FX2 132 bước và 397 tình huống reload; không dùng USB. |
+| Release isolation, JNI và 16 KiB | PASS tĩnh | 12 ELF trên bốn ABI, ELF64 và ZIP align đạt; không thư viện/lớp/mục manifest chẩn đoán hoặc firmware trong release. Không xác minh runtime trên thiết bị trang nhớ 16 KiB. |
+| Python và helper fake | PASS | Python 138/138; helper 373/373. Không ADB thật, phần cứng, VM hoặc mạng. |
+| Guard với dữ liệu thật P4b | PASS ngoại tuyến | Terminal và hai audit gốc được chấp nhận khi khớp manifest và ID phiên app từ challenge. Thử sai hash hoặc sai ID đều bị bác. Không mở receipt P4b. |
+| P4d bước 2–11 và validator thực thi | NOT RUN | Card dự thảo không cấp quyền; không cài APK, nhập firmware, tác động tuner hoặc phát sinh hộp USB. |
+
 ## 2026-11-19 — P4c: kiểm ngoại tuyến, không có lượt phần cứng mới
 
 | Hạng mục | Kết quả | Bằng chứng hoặc giới hạn |

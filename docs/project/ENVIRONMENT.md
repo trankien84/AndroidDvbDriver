@@ -1,5 +1,13 @@
 # Kiểm kê môi trường
 
+## 2026-11-19 — P4d: vá Oracle JDK lên 25.0.5.1
+
+Baseline nhánh `chore/modernize-android-build`, HEAD `930ac0562afffca5c36e9cb6348d12d8ad05d7c5`, cây làm việc sạch lúc bắt đầu. `java -version`, Java dưới `JAVA_HOME`, Gradle launcher và JVM test cùng dùng Oracle JDK `25.0.5.1+4-LTS-20`. `JAVA_HOME` do người dùng đặt qua `C:\Program Files\Java\latest\jdk-25`; Gradle phân giải sang thư mục `C:\Program Files\Java\jdk-25.0.5.1`. Đã dừng daemon cũ bằng `gradlew.bat --stop` trước build.
+
+Giữ AGP `9.5.0`, Wrapper `9.8.2`, SDK `37.2` revision 2, Build-Tools `37.0.0`, NDK `30.0.16248370`, CMake `4.1.2`, Platform-Tools `37.0.1` và Mockito `5.24.0`. Không đổi minSdk 21, targetSdk 37 hoặc Java 8 dùng để dịch mã nguồn. Kiểm kê chỉ đọc chạy thành công sau khi người dùng duyệt `-ExecutionPolicy Bypass` cho đúng một tiến trình PowerShell; không sửa chính sách bền hoặc cài gói. AVD `TBS5530_Runtime_API37` được thấy trong kiểm kê, không khởi động.
+
+[Oracle](https://www.oracle.com/java/technologies/javase/25all-relnotes.html#R25_0_5_1) công bố bản vá dòng 25 ngày 17/11/2026; [ma trận Gradle](https://docs.gradle.org/current/userguide/compatibility.html#java_runtime) hỗ trợ chạy Gradle trên JVM 25 từ Gradle 9.1.0. Số phiên bản lúc chạy P4c giữ nguyên bên dưới để truy vết.
+
 ## 2026-11-19 — P4c kiểm ngoại tuyến, không đổi công cụ hoặc thiết bị
 
 Baseline nhánh `chore/modernize-android-build`, HEAD `7a6e24b`, cây Git sạch trước khi sửa. Dùng Windows PowerShell, JDK `25.0.5.0.3`, Gradle Wrapper `9.8.2` và AGP `9.5.0`. SDK cài sẵn có platform `37.2` revision 2, Build-Tools `37.0.0`, NDK `30.0.16248370`, CMake `4.1.2` và Platform-Tools `37.0.1`. Cấu hình vẫn dùng minSdk 21, targetSdk 37 và Java 8. AVD hiện hữu dùng Google APIs/API 37 x86_64; không khởi động hoặc đổi AVD.

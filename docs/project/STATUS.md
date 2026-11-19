@@ -1,5 +1,13 @@
 # Port TBS5530 sang Android — trạng thái hiện tại
 
+## 2026-11-19 — P4d dừng trước tuner vì một raw ngắn hơn 1 MiB
+
+Tám mẫu đều xác nhận ranh đồng bộ mới; bảy mẫu đạt đủ cửa sổ kiểm. B3 lượt 3 chỉ có 896 KiB dù đã quét hết tệp, nên không triển khai bộ lọc production, không cấp quyền thực thi card P4d và không chạy bước 2–11. Cần raw đủ độ dài hoặc quyết định rõ ràng của người dùng về mẫu ngắn trước khi tiếp tục.
+
+Đã xác minh JDK `25.0.5.1` và sửa riêng test hủy của dvbservice để thời gian Mockito khởi động không tính vào hạn chờ hành vi. Lần chạy riêng trước sửa đạt; mười lượt liên tiếp sau sửa đạt. Xem [TEST-MATRIX.md](TEST-MATRIX.md) và [WORKLOG.md](WORKLOG.md) cho kết quả ngoại tuyến.
+
+P4b bước 1 vẫn là bằng chứng `EMI_MITIGATED` và `TS_CLEAN_DEBUG_PATH`. Chưa có đối chứng cùng drive `0x54` hoặc Dump release; chưa đạt `ROOT_CAUSE_CONFIRMED` và `PHASE4_FUNCTIONAL_PASS`, `TS_SMOKE_PASS=false`.
+
 ## 2026-11-19 — P4c sửa ngoại tuyến; dừng trước tuner vì ranh đồng bộ vượt 2048 byte
 
 **Bộ lọc production chưa được triển khai.** Raw B3/B4/B5/P4b cho thấy điểm phát hiện đứt nhịp cũ ở offset 2051–2228, ngoài 2048 byte. P4b ON1 còn có năm sync hợp lệ bắt đầu từ 2049, trước mốc luồng mới 2237 một gói. Giữ nguyên production và raw debug, không chạy bước 2–11, không dùng card hoặc receipt cũ để tiếp tục.

@@ -1,5 +1,41 @@
 # Architecture decision record (ADR)
 
+## ADR-071 — Dùng bản vá Oracle JDK 25.0.5.1 cho Gradle
+
+**Date:** 2026-11-19, baseline `930ac05`.
+
+**Status:** Đã chọn và xác minh launcher, daemon và JVM test với bản cài do người dùng cung cấp.
+
+### Context / Evidence
+
+Oracle phát hành `25.0.5.1+4` ngày 17/11/2026 cho dòng JDK 25. `JAVA_HOME` và Gradle Wrapper `9.8.2` phân giải cùng bản cài mới. Kết quả cũ với `25.0.5.0.3` được giữ làm lịch sử.
+
+### Decision
+
+Chỉ chuyển bản vá JVM dùng để build và test. Không đổi mã byte Java 8, minSdk 21, AGP, Gradle, SDK, NDK, CMake hoặc dependency. Không tự đặt biến môi trường bền hoặc thay gói SDK.
+
+### Validation / Reopen trigger
+
+Xác minh `java -version`, `gradlew.bat --version`, `gradlew.bat --stop` và executable của JVM test. Chạy các phần kiểm ngoại tuyến trong [TEST-MATRIX.md](TEST-MATRIX.md). Mọi nâng cấp ngoài bản vá này cần quyết định riêng.
+
+## ADR-070 — Điều kiện cho bộ lọc đầu luồng TBS5530 ở production
+
+**Date:** 2026-11-19, baseline `930ac05`.
+
+**Status:** Phương án có điều kiện; chưa triển khai, chốt bằng chứng `BLOCKED`.
+
+### Context / Evidence
+
+Điểm mất sync theo nhịp cũ có thể nằm sau mốc 2048 dù nhịp cũ chỉ bắt đầu trong vùng đầu. Tám raw đều qua điều kiện về vị trí và duy trì nhịp, nhưng raw B3 lượt 3 dài 896 KiB và không thể đạt cửa sổ kiểm tối thiểu 1 MiB. Xem [RESEARCH.md](RESEARCH.md).
+
+### Decision
+
+Chỉ khi đủ bằng chứng: bỏ đúng 2048 byte đầu mỗi lần mở stream TBS5530, dò ít nhất năm sync cách 188 byte, bỏ phần gói dở và chuyển mọi byte từ vị trí khóa nguyên trạng. Đếm số byte đã bỏ cho mỗi lần mở. Không lọc raw debug, không thay hằng số suy đoán và không chuyển kết quả ngoại tuyến thành quyền chạy tuner.
+
+### Validation / Reopen trigger
+
+Cần raw đủ độ dài cho phép kiểm còn thiếu hoặc tiêu chí được người dùng sửa rõ ràng. Sau đó mới thêm test chia chunk, sync qua ranh chunk, khóa ở 2048 và đối chiếu đầu ra byte-for-byte với các raw ngoài Git. Kiểm Dump release bước 6, 7 và 11 bắt đầu đúng gói và số byte bỏ thuộc `[2048, 2236)`.
+
 ## ADR-069 — Chấm chất lượng TS theo nội dung và không nhầm hủy USB với lỗi nhận
 
 **Date:** 2026-11-19, baseline `7a6e24b`, nhánh `chore/modernize-android-build`.

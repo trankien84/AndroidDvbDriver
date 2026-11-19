@@ -1,5 +1,30 @@
 # Research log (append-only)
 
+## 2026-11-19 — P4d: kiểm lại ranh tiền tố FX2 và timeout JVM
+
+### Đính chính
+
+- Điểm thiếu sync đầu tiên bị kiểm sai ở P4c: nếu gói cuối của nhịp cũ bắt đầu trước byte 2048 nhưng vắt qua ranh này, điểm thiếu sync theo nhịp cũ phải nằm trong `[2048, 2236)`, không phải trước 2048. Vị trí đó không phải độ dài vùng dữ liệu cũ.
+- P4b ON1 khóa đúng ở 2049, cùng nhịp 188 byte với 2237. Gói 2049–2236 nằm trọn trong nhịp mới; phép dò trước đó đã bỏ sót gói này. Theo đối chiếu của người dùng, cụm lỗi CC “đầu pha” từng báo xuất phát từ việc so số thứ tự liên tục của gói cũ với gói mới. Không dùng số lỗi ở vùng nối để chấm nhịp mới; kết quả đo ở cửa sổ sau 5 giây của P4c không đổi.
+- Hai log P4c đặt điểm hết 5000 ms tại lần `mock(DvbDevice.class)` đầu tiên, trước khi luồng truyền chạy. Trên Oracle JDK 25.0.5.1, test chưa sửa chạy riêng với `--info` đạt trong 2,426 giây và Mockito báo tự gắn Java agent động. Đo riêng bằng classpath JVM của Gradle với tiến trình mới: mock `DvbDevice` đầu 1950,138 ms, `ServerSocket` 118,658 ms, `Socket` 148,844 ms và `DvbDevice` lần sau 1,273 ms. Chi phí khởi động nằm trong timeout cũ; lần này không treo nên không cần `jstack`. Không tái hiện timeout cũ và không có bằng chứng lỗi chờ trong production.
+
+### Kiểm đủ tám raw
+
+Đối chiếu SHA-256 từng tệp với preflight P4c rồi quét toàn bộ, không cắt hoặc chỉnh raw. Tám tệp giữ đúng nhịp mới tới byte sync cuối; số gói chỉ tính gói 188 byte nằm trọn trong tệp.
+
+| Raw | Byte đã quét | Sync cũ cuối | Điểm đứt cũ | Khóa mới | Gói mới trọn vẹn | Chốt 1 MiB |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| B3 lượt 1 | 1.835.008 | 1880 | 2068 | 2048 | 9.749 | PASS |
+| B3 lượt 2 | 1.720.320 | 2040 | 2228 | 2064 | 9.139 | PASS |
+| B3 lượt 3 | 917.504 | 1968 | 2156 | 2052 | 4.869 | BLOCKED |
+| B4 Android | 2.146.304 | 2022 | 2210 | 2068 | 11.405 | PASS |
+| B5 ON1 | 34.340.864 | 1988 | 2176 | 2154 | 182.652 | PASS |
+| B5 ON2 | 11.141.120 | 1870 | 2058 | 2228 | 59.249 | PASS |
+| P4b ON1 | 133.414.912 | 1863 | 2051 | 2049 | 709.642 | PASS |
+| P4b ON2 | 44.466.176 | 1973 | 2161 | 2227 | 236.510 | PASS |
+
+Cả tám khóa khác nhịp cũ. B3 lượt 3 chỉ có 896 KiB, thiếu 131.072 byte so với mức tối thiểu; không coi hết tệp là ngoại lệ. Trên raw ON1 gốc, số gói trọn vẹn là 709.642, không phải 354.860. ON2 có 236.511 vị trí bắt đầu gói nếu tính cả gói dở cuối tệp. Không triển khai bộ lọc hoặc test hồi quy bộ lọc khi chốt raw chưa đạt.
+
 ## 2026-11-19 — P4c: đính chính tiêu chí và kiểm ranh đầu luồng
 
 ### Đính chính
