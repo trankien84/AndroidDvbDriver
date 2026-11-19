@@ -33,23 +33,28 @@ import androidx.fragment.app.FragmentManager;
 
 import android.widget.Toast;
 
-import info.martinmarinov.dvbservice.dialogs.ShowOneInstanceFragmentDialog;
+import androidx.appcompat.app.AppCompatDialogFragment;
+
+import info.martinmarinov.drivers.DvbException;
 import info.martinmarinov.dvbservice.tools.StackTraceSerializer;
 
-public class ExceptionDialog extends ShowOneInstanceFragmentDialog {
+public class ExceptionDialog extends AppCompatDialogFragment {
     private static final String DIALOG_TAG = ExceptionDialog.class.getSimpleName();
 
     private static final String ARGS_EXC = "argsExc";
     private static final String ARGS_LAST_DEV = "argsLastDev";
 
     public static void showOneInstanceOnly(FragmentManager fragmentManager, Exception e, String lastDeviceDebugString) {
+        if (fragmentManager.isStateSaved() || fragmentManager.isDestroyed()
+                || fragmentManager.findFragmentByTag(DIALOG_TAG) != null) return;
         ExceptionDialog dialog = new ExceptionDialog();
 
         Bundle args = new Bundle();
         args.putSerializable(ARGS_EXC, e);
         args.putSerializable(ARGS_LAST_DEV, lastDeviceDebugString);
 
-        dialog.showOneInstanceOnly(fragmentManager, DIALOG_TAG, args);
+        dialog.setArguments(args);
+        dialog.showNow(fragmentManager, DIALOG_TAG);
     }
 
     private Exception e;
@@ -66,10 +71,13 @@ public class ExceptionDialog extends ShowOneInstanceFragmentDialog {
 
     @Override
     public @NonNull Dialog onCreateDialog(Bundle savedInstanceState) {
-        final String msg = getMessage(e);
+        final String summary = e instanceof DvbException
+                && ((DvbException) e).getErrorCode() == DvbException.ErrorCode.DEVICE_DISCONNECTED
+                ? getString(R.string.tuner_disconnected) : e.getLocalizedMessage();
+        final String message = summary == null ? getString(android.R.string.dialog_alert_title) : summary;
         return new AlertDialog.Builder(getActivity())
                 .setCancelable(true)
-                .setMessage(msg)
+                .setMessage(BuildConfig.DEBUG ? withDetails(message, e) : message)
                 .setIconAttribute(android.R.attr.alertDialogIcon)
                 .setTitle(android.R.string.dialog_alert_title)
                 .setPositiveButton(android.R.string.ok, new DialogInterface.OnClickListener() {
@@ -84,7 +92,7 @@ public class ExceptionDialog extends ShowOneInstanceFragmentDialog {
                         sendEmail(
                                 new String[] { getString(R.string.email_feedback_address) },
                                 getString(R.string.email_subject),
-                                getString(R.string.email_body, msg, getConstants())
+                                getString(R.string.email_body, withDetails(message, e), getConstants())
                         );
                     }
                 })
@@ -112,8 +120,8 @@ public class ExceptionDialog extends ShowOneInstanceFragmentDialog {
         return res.toString();
     }
 
-    private static String getMessage(Exception e) {
-        return e.getLocalizedMessage() + "\n\n" + StackTraceSerializer.serialize(e);
+    private static String withDetails(String summary, Exception e) {
+        return summary + "\n\n" + StackTraceSerializer.serialize(e);
     }
 
     private void sendEmail(String[] addresses, String subject, String message) {

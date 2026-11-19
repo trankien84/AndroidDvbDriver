@@ -34,6 +34,8 @@ class DataHandler extends Thread {
     private final Object recordingLock = new Object();
     private final InputStream is;
     private final boolean collectDiagnostics;
+    private final StreamFailureReporter failures;
+    private final Runnable stopped;
 
     private volatile boolean recording = false;
     private File file;
@@ -68,10 +70,13 @@ class DataHandler extends Thread {
         }
     }
 
-    DataHandler(DvbFrontendActivity dvbFrontendActivity, InputStream is, boolean collectDiagnostics) {
+    DataHandler(DvbFrontendActivity dvbFrontendActivity, InputStream is, boolean collectDiagnostics,
+                StreamFailureReporter failures, Runnable stopped) {
         this.dvbFrontendActivity = dvbFrontendActivity;
         this.is = is;
         this.collectDiagnostics = collectDiagnostics;
+        this.failures = failures;
+        this.stopped = stopped;
     }
 
     void reset() {
@@ -84,14 +89,6 @@ class DataHandler extends Thread {
             this.currFreq = freq;
             this.currBandwidth = bandwidth;
         }
-    }
-
-    @Override
-    public void interrupt() {
-        super.interrupt();
-        try {
-            is.close();
-        } catch (IOException ignored) {}
     }
 
     @Override
@@ -126,6 +123,7 @@ class DataHandler extends Thread {
 
                     readB += read;
                 } else {
+                    if (read < 0) break;
                     try {
                         Thread.sleep(100);
                     } catch (InterruptedException e) {
@@ -147,15 +145,14 @@ class DataHandler extends Thread {
                 }
             }
         } catch (IOException e) {
-            if (!isInterrupted()) {
-                dvbFrontendActivity.handleException(e);
-                interrupt();
-            }
+            failures.report(e);
         } finally {
             try {
                 stopRecording();
             } catch (IOException e) {
-                dvbFrontendActivity.handleException(e);
+                failures.report(e);
+            } finally {
+                failures.whileOpen(stopped);
             }
         }
     }

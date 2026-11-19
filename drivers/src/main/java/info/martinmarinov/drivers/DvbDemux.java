@@ -23,7 +23,6 @@ package info.martinmarinov.drivers;
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 
 import info.martinmarinov.drivers.tools.FastIntFilter;
 import info.martinmarinov.usbxfer.ByteSink;
@@ -36,7 +35,6 @@ public class DvbDemux implements ByteSink,Closeable {
     private final int pktSize;
     private final byte[] tsBuf = new byte[204];
     private final NativePipe pipe;
-    private final OutputStream out;
     private final FastIntFilter filter = new FastIntFilter(0x1fff);
 
     @SuppressWarnings("ConstantConditions")
@@ -54,7 +52,6 @@ public class DvbDemux implements ByteSink,Closeable {
     private DvbDemux(int pktSize) {
         this.pktSize = pktSize;
         this.pipe = new NativePipe();
-        this.out = pipe.getOutputStream();
         reset();
     }
 
@@ -164,7 +161,7 @@ public class DvbDemux implements ByteSink,Closeable {
             }
         }
 
-        if (passFullTsStream || filter.isFiltered(pid)) out.write(buf, offset, 188);
+        if (passFullTsStream || filter.isFiltered(pid)) pipe.write(buf, offset, 188);
     }
 
     private boolean checkSequenceIntegrity(int pid, byte[] buf, int offset) {

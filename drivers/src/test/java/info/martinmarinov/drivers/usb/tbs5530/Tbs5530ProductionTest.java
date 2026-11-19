@@ -16,6 +16,29 @@ import info.martinmarinov.usbxfer.ByteSource;
 import static org.junit.Assert.*;
 
 public class Tbs5530ProductionTest {
+    @Test public void nativeReadFailureRequiresDetachEvidenceAndRetainsOriginalCause() throws Exception {
+        for (int[] detail : new int[][]{{-71, 0}, {-19, 0}, {-108, 0}, {0, 19}, {-75, 0}}) {
+            for (boolean attached : new boolean[]{true, false}) {
+                info.martinmarinov.usbxfer.NativeUsbfsByteSource.ReceiveFailure original =
+                        new info.martinmarinov.usbxfer.NativeUsbfsByteSource.ReceiveFailure(2, detail[0], detail[1]);
+                java.util.List<IOException> reported = new java.util.ArrayList<>();
+                Tbs5530StreamGate gate = new Tbs5530StreamGate(() -> new ByteSource() {
+                    @Override public void open() { }
+                    @Override public void close() { }
+                    @Override public void readNext(ByteSink sink) throws IOException { throw original; }
+                }, true, reported::add, () -> !attached);
+                IOException error = assertThrows(IOException.class, () -> gate.readNext((data, length) -> { }));
+                assertEquals(java.util.Collections.singletonList(error), reported);
+                if (!attached && detail[0] != -75) {
+                    assertEquals(info.martinmarinov.drivers.DvbException.ErrorCode.DEVICE_DISCONNECTED,
+                            ((info.martinmarinov.drivers.DvbException) error).getErrorCode());
+                    assertSame(original, error.getCause());
+                } else assertSame(original, error);
+                gate.close();
+            }
+        }
+    }
+
     private static Tbs5530FirmwarePlan syntheticPlan() throws Exception {
         byte[] image = new byte[8192];
         return Tbs5530FirmwarePlan.create(image, new Tbs5530FirmwarePlan.Policy(

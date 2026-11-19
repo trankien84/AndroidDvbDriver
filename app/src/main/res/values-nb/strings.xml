@@ -21,6 +21,7 @@
     <string name="no_device_open">Ingen enheter er åpne</string>
     <string name="dump">Ta opp en TS-fil</string>
     <string name="dump_stop">Stopp opptaket</string>
+    <string name="tuner_disconnected">Mottakeren er koblet fra. Koble den til igjen og trykk på Start.</string>
     <string name="mHz">MHz</string>
     <string name="thanks">
         Takk for at du installerte DVB-T Driver. Vennligst bemerk at denne appen ikke er ment å brukes manuelt.

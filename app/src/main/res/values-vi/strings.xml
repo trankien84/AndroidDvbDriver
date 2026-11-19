@@ -22,6 +22,7 @@
     <string name="no_device_open">Chưa mở thiết bị</string>
     <string name="dump">Ghi TS</string>
     <string name="dump_stop">Dừng ghi</string>
+    <string name="tuner_disconnected">Tuner đã bị rút. Cắm lại rồi bấm Bắt đầu.</string>
     <string name="mHz">MHz</string>
     <string name="thanks">Cảm ơn bạn đã cài DVB-T Driver. Ứng dụng thường được app xem truyền hình gọi tự động để điều khiển bộ thu USB DVB-T, chẳng hạn RTL2832U. Bạn có thể đóng cửa sổ này và mở app truyền hình tương thích. Chế độ chẩn đoán cho phép chọn tần số và ghi TS thủ công.</string>
     <string name="btn_advanced_mode">Chẩn đoán (chế độ nâng cao)</string>

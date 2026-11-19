@@ -6,7 +6,7 @@ import java.io.IOException;
 /** In-memory attachment continuity; a reused Android identity never erases a detach. */
 final class Tbs5530AttachmentEpoch {
     private String selected;
-    private boolean sealed, transition, oldDetached, failed, closed;
+    private boolean sealed, transition, oldDetached, selectedDetached, failed, closed;
     private String candidate;
 
     Tbs5530AttachmentEpoch(String initial) { selected = initial; }
@@ -20,6 +20,7 @@ final class Tbs5530AttachmentEpoch {
         notifyAll();
     }
     synchronized void detach(String identity) {
+        if (!closed && !transition && selected.equals(identity)) selectedDetached = true;
         if (closed || failed) return;
         if (transition && selected.equals(identity) && !oldDetached && candidate == null) oldDetached = true;
         else if (selected.equals(identity) || identity.equals(candidate)) failed = true;
@@ -50,6 +51,7 @@ final class Tbs5530AttachmentEpoch {
         if (failed || closed) throw new Tbs5530ProductionFailure(Tbs5530ProductionFailure.Kind.REMOVED,
                 "TBS5530 attachment was removed or replaced");
     }
+    synchronized boolean selectedDetached() { return selectedDetached; }
     synchronized boolean invalid() { return failed || closed; }
     synchronized void close() { closed = true; notifyAll(); }
 }

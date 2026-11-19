@@ -23,8 +23,12 @@ package info.martinmarinov.drivers;
 import androidx.annotation.NonNull;
 
 import java.io.Closeable;
+import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.Set;
 
 import info.martinmarinov.usbxfer.ByteSource;
@@ -34,7 +38,7 @@ import static info.martinmarinov.drivers.DvbException.ErrorCode.BAD_API_USAGE;
 public abstract class DvbDevice implements Closeable {
     private DvbDemux dvbDemux;
 
-    private DataPump dataPump;
+    private volatile DataPump dataPump;
 
     protected DvbDevice(DvbDemux dvbDemux) {
         this.dvbDemux = dvbDemux;
@@ -82,15 +86,28 @@ public abstract class DvbDevice implements Closeable {
         dvbDemux.disablePidFilter();
     }
 
+    protected final void beginStreamStop() {
+        DataPump pump = dataPump;
+        if (pump != null) pump.stopping = true;
+    }
+
+    protected final void reportStreamFailure(IOException failure) {
+        DataPump pump = dataPump;
+        if (pump != null && pump.isAlive()) pump.reportFailure(failure);
+    }
+
     @Override
     public void close() throws IOException {
+        DataPump pump = dataPump;
+        if (pump != null) pump.stopping = true;
         boolean interrupted = false;
-        while (dataPump != null && dataPump.isAlive()) {
-            dataPump.interrupt();
-            if (Thread.currentThread() == dataPump) break;
-            try {
-                dataPump.join();
-            } catch (InterruptedException ignored) { interrupted = true; }
+        if (pump != null && Thread.currentThread() != pump) {
+            pump.interrupt();
+            while (pump.isAlive()) {
+                try {
+                    pump.join();
+                } catch (InterruptedException ignored) { interrupted = true; }
+            }
         }
         try { dvbDemux.close(); }
         finally { if (interrupted) Thread.currentThread().interrupt(); }
@@ -98,9 +115,18 @@ public abstract class DvbDevice implements Closeable {
 
     public InputStream getTransportStream(StreamCallback streamCallback) throws DvbException {
         if (dataPump != null && dataPump.isAlive()) throw new DvbException(BAD_API_USAGE, "Data stream is still running. Please close the input stream first to start a new one");
-        dataPump = new DataPump(streamCallback);
-        dataPump.start();
-        return dvbDemux.getInputStream();
+        DataPump pump = new DataPump(streamCallback);
+        DvbDemux demux = dvbDemux;
+        InputStream input = new FilterInputStream(demux.getInputStream()) {
+            @Override public void close() throws IOException {
+                pump.stopping = true;
+                pump.interrupt();
+                demux.close();
+            }
+        };
+        dataPump = pump;
+        pump.start();
+        return input;
     }
 
     public interface StreamCallback {
@@ -114,20 +140,17 @@ public abstract class DvbDevice implements Closeable {
      * This thread also does pid filtering. **/
     private class DataPump extends Thread {
         private final StreamCallback callback;
+        private final AtomicBoolean failureReported = new AtomicBoolean();
+        private volatile boolean stopping;
 
         private DataPump(StreamCallback callback) {
             this.callback = callback;
         }
 
-        @Override
-        public void interrupt() {
-            super.interrupt();
-            try {
-                dvbDemux.close();
-            } catch (IOException e) {
-                e.printStackTrace();
-                // Close the pipes
-            }
+        private void reportFailure(IOException error) {
+            if (!stopping && failureReported.compareAndSet(false, true)) callback.onStreamException(error);
+            else Logger.getLogger(DvbDevice.class.getName()).log(Level.FINE,
+                    "TS error during cleanup or after a primary failure", error);
         }
 
         @Override
@@ -136,33 +159,33 @@ public abstract class DvbDevice implements Closeable {
             setPriority(MAX_PRIORITY);
 
             ByteSource tsSource = null;
-
             try {
+                if (stopping) return;
                 tsSource = createTsSource();
+                if (stopping) return;
                 tsSource.open();
-
                 dvbDemux.reset();
-                while (!isInterrupted()) {
-                    try {
-                        tsSource.readNext(dvbDemux);
-                    } catch (IOException e) {
-                        if (!isInterrupted()) callback.onStreamException(e);
-                        interrupt();
-                    }
-                }
+                while (!stopping && !isInterrupted()) tsSource.readNext(dvbDemux);
             } catch (InterruptedException ignored) {
-                // interrupted is ok
+                // The pump was cancelled.
             } catch (IOException e) {
-                if (!isInterrupted()) callback.onStreamException(e);
+                reportFailure(e);
             } catch (RuntimeException e) {
-                if (!isInterrupted()) callback.onStreamException(new IOException("Cannot create or run TS source", e));
+                reportFailure(new IOException("Cannot create or run TS source", e));
             } finally {
                 try {
                     if (tsSource != null) tsSource.close();
                 } catch (IOException e) {
-                    callback.onStreamException(e);
+                    reportFailure(e);
+                } finally {
+                    try {
+                        if (!stopping) dvbDemux.close();
+                    } catch (IOException e) {
+                        reportFailure(e);
+                    } finally {
+                        callback.onStoppedStreaming();
+                    }
                 }
-                callback.onStoppedStreaming();
             }
         }
     }

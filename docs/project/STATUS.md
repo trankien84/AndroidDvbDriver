@@ -1,5 +1,13 @@
 # Port TBS5530 sang Android — trạng thái hiện tại
 
+## 2026-11-19 — P4e: Dừng và mở lại đạt; rút tuner còn hiện lỗi native
+
+`ROOT_CAUSE_CONFIRMED` theo phép đối chứng P4d cùng drive `0x54`; bố trí cáp mới đã khử biểu hiện nhiễu khi đọc USB. `TS_SMOKE_PASS=true` cho ba Dump release P4d: K25 bước 6 và 11 đạt kiểm từng khoảng PCR, K36 bước 7 đạt kiểm độ trôi trên toàn bộ 59,698 giây. Cả ba có CC nội dung và TEI bằng 0, đủ PAT/PMT/SDT và dịch vụ.
+
+E1 và E2 đạt trên OnePlus: không có hộp lỗi khi dừng, cả hai Dump K25 đều đạt. E2 không hỏi quyền mới, không bootstrap và có reload 132 A0 vào RAM. E3 cắm lại và ghi TS đạt, nhưng khi rút vẫn hiện một hộp lỗi native `-71`, không phải thông báo thân thiện; vì vậy chưa `PHASE4_FUNCTIONAL_PASS`. E4 tùy chọn không chạy; bằng chứng Samsung K25 P4d vẫn giữ nguyên.
+
+Phase 4 chưa hoàn tất. Bước tiếp là đo thứ tự native báo lỗi, danh sách USB mất thiết bị và sự kiện rút trong cùng phiên, rồi sửa phân loại và chạy lại E3 với APK đã khóa mới. Phase 5 chỉ lên kế hoạch sau đó: cắm là xem, lựa chọn **Dùng mặc định**, biến thể kèm firmware chỉ dùng cá nhân nếu quyền sử dụng cho phép.
+
 ## 2026-11-19 — P4d đã đóng: K25 sạch trên hai máy, thiếu bằng chứng PCR K36
 
 Bộ lọc production qua 8/8 raw theo tiêu chí ít nhất 1 MiB hoặc hết tệp nếu ngắn hơn, với 16/16 đối chiếu theo từng byte. P4b ON1 khóa ở 2049. Bản release ký bằng chứng chỉ debug để thử cục bộ; build, JVM, cách ly release, JNI và 16 KiB tĩnh đạt. Card P4d đã qua validator thực thi; hai APK cùng `versionCode=30`, không hạ phiên bản OnePlus.

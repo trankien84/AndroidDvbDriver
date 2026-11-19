@@ -1,5 +1,9 @@
 # Kiểm kê môi trường
 
+## 2026-11-19 — P4e: Windows và OnePlus, không đổi công cụ
+
+Nhánh `chore/modernize-android-build`, HEAD `53c2cca96404dff1678de53e08f2486304231101`, cây sạch lúc bắt đầu. Đã kiểm Oracle JDK `25.0.5.1+4-LTS-20`, Wrapper `9.8.2`, Build-Tools `37.0.0`, NDK `30.0.16248370`, Platform-Tools `37.0.1`, Python `3.12.2`, TSDuck `3.45-4798` và GCC `16.2.0`. Tệp AVD hiện có cấu hình API 37/x86_64; không khởi động. ADB ban đầu rỗng; sau khi kết nối, hai alias báo cùng phiên khởi động của một OnePlus GM1900/API 30. Bản đang cài và release ký thử đều `versionCode=30`; cài đè một lần và hash bản đang cài khớp. Không cài gói công cụ, đổi driver, chủ USB sang máy khác, VM, phiên bản SDK hoặc ảnh firmware.
+
 ## 2026-11-19 — P4d tiếp nối: công cụ giữ nguyên, hai thiết bị thật đã xác minh
 
 Nhánh `chore/modernize-android-build`, HEAD `5ca4cb2a5fee1a519436a8bc76ef22b14d277971`, ngay sau `930ac05`; cây Git sạch lúc bắt đầu. PowerShell dùng Oracle JDK `25.0.5.1+4-LTS-20`, Gradle Wrapper `9.8.2`, AGP `9.5.0`, SDK `37.2` revision 2, Build-Tools `37.0.0`, NDK `30.0.16248370`, CMake `4.1.2` và Platform-Tools `37.0.1`. Không đổi minSdk 21, Java 8, AVD, driver, chủ USB hay VM.

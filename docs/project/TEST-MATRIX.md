@@ -1,5 +1,23 @@
 # TBS5530 test matrix
 
+## 2026-11-19 — P4e: ngoại tuyến và chấm lại Dump P4d
+
+| Hạng mục | Kết quả | Bằng chứng hoặc giới hạn |
+| --- | --- | --- |
+| Dừng khi đang ghi pipe | FAIL trước sửa; PASS sau sửa | Cùng test JVM: bản cũ báo `Stream Closed`; bản mới không báo lỗi và đóng nguồn trước pipe qua 200 vòng. |
+| Một báo lỗi mỗi phiên | PASS JVM | Lỗi native phù hợp chỉ thành `DEVICE_DISCONNECTED` khi xác nhận mất kết nối; thiết bị còn cắm giữ lỗi gốc. Lỗi phụ chuyển vào log; dừng chủ động không hiện lỗi. |
+| JVM tất cả module | PASS | Drivers 564 PASS, 5 SKIP; usbxfer 90; dvbservice 17; app debug 134 và release 15. |
+| Gradle build và lint app | PASS | Debug/release, APK AndroidTest, lint debug/release. Không chạy instrumentation; driver lint FAIL lịch sử không chạy lại. |
+| Native host | PASS | Năm chương trình C với GCC; có 397 ca reload và 91 ca native stream giả. Không thao tác phần cứng. |
+| Python | PASS 139/139 | PCR tổng hợp rung ±100 gói không mất gói đạt `PASS_DRIFT`; mất 1 hoặc 20 gói báo `FAIL`; mất đồng bộ giữ `UNKNOWN`. |
+| Dump P4d bước 6 / 7 / 11 | PASS TS | SHA-256 khớp. PCR `PASS` / `PASS_DRIFT` / `PASS`; 13/14/13 dịch vụ; CC nội dung và TEI = 0; CRC đạt trên cả ba. |
+| Helper giả, chữ ký, JNI và 16 KiB | PASS | Helper 373/373; 12 ELF trên bốn ABI và release không có thành phần debug; kiểm 16 KiB tĩnh, không phải kiểm runtime. |
+| Card P4e | PASS thực thi | Validator chỉ đọc xác minh OnePlus, bản cài 30, pin nguồn/APK/firmware và tuner đã rút trước `install -r`; hash APK sau cài khớp. |
+| E1, OnePlus | PASS | 2 hộp quyền, 0 lỗi khi dừng, bootstrap/reload 132/132. K25 20,364 giây, 90.603.592 byte, TS PASS. |
+| E2, OnePlus | PASS | 0 hộp quyền mới, 0 lỗi, không bootstrap, dùng lại kết nối operational, reload 132/132. K25 20,806 giây, 92.536.796 byte, TS PASS. |
+| E3, OnePlus | FAIL nội dung hộp; phục hồi và TS PASS | Đúng 1 hộp khi rút: `Native TS failed: reason=2,status=-71,errno=0`; không crash theo người dùng. Cắm lại có 2 hộp quyền, K25 19,560 giây, 87.015.424 byte đạt TS, 0 hộp lỗi khi dừng. |
+| E4, Samsung tùy chọn | NOT RUN | Giữ bằng chứng K25 từ bước 11 P4d; không dùng thêm lượt khi tiêu chí E3 chưa đạt. |
+
 ## 2026-11-19 — P4d tiếp nối: kiểm bộ lọc production và APK ký thử
 
 | Hạng mục | Kết quả | Bằng chứng hoặc giới hạn |

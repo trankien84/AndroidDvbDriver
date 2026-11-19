@@ -34,6 +34,7 @@ import static info.martinmarinov.drivers.DvbException.ErrorCode.NO_DVB_DEVICES_F
 
 class DeviceController extends Thread {
     private final DvbFrontendActivity dvbFrontendActivity;
+    private final StreamFailureReporter failures;
     private volatile long desiredFreq, desiredBand;
     private volatile long currFreq, currBand;
     private volatile DeliverySystem currDelSystem, desiredDelSystem;
@@ -42,6 +43,8 @@ class DeviceController extends Thread {
 
     DeviceController(DvbFrontendActivity dvbFrontendActivity, long desiredFreq, long desiredBand, DeliverySystem deliverySystem) {
         this.dvbFrontendActivity = dvbFrontendActivity;
+        this.failures = new StreamFailureReporter(dvbFrontendActivity::handleException,
+                error -> android.util.Log.d("DeviceController", "TS session cleanup or secondary error", error));
         tuneTo(desiredFreq, desiredBand, deliverySystem);
     }
 
@@ -54,6 +57,11 @@ class DeviceController extends Thread {
 
     DataHandler getDataHandler() {
         return dataHandler;
+    }
+
+    void requestStop() {
+        failures.beginClosing();
+        interrupt();
     }
 
     @Override
@@ -76,14 +84,14 @@ class DeviceController extends Thread {
             dataHandler = new DataHandler(dvbFrontendActivity, dvbDevice.getTransportStream(new DvbDevice.StreamCallback() {
                 @Override
                 public void onStreamException(IOException e) {
-                    dvbFrontendActivity.handleException(e);
+                    failures.report(e);
                 }
 
                 @Override
                 public void onStoppedStreaming() {
-                    interrupt();
+                    failures.whileOpen(DeviceController.this::interrupt);
                 }
-            }), dvbDevice instanceof info.martinmarinov.drivers.usb.tbs5530.Tbs5530DvbDevice);
+            }), dvbDevice instanceof info.martinmarinov.drivers.usb.tbs5530.Tbs5530DvbDevice, failures, this::interrupt);
             dataHandler.setFreqAndBandwidth(currFreq, currBand);
             dataHandler.start();
             dvbFrontendActivity.announceOpen(true, dvbDevice.getDebugString());
@@ -123,26 +131,26 @@ class DeviceController extends Thread {
                 // Interrupted exceptions are ok
             }
         } catch (Exception e) {
-            dvbFrontendActivity.handleException(e);
+            failures.report(dvbDevice instanceof info.martinmarinov.drivers.usb.tbs5530.Tbs5530DvbDevice
+                    ? ((info.martinmarinov.drivers.usb.tbs5530.Tbs5530DvbDevice) dvbDevice).classifyControlFailure(e) : e);
         } finally {
+            failures.beginClosing();
             boolean interrupted = Thread.interrupted();
+            if (dvbDevice != null) {
+                try { dvbDevice.close(); }
+                catch (IOException e) { failures.report(e); }
+            }
             if (dataHandler != null) {
                 dataHandler.interrupt();
-                try {
-                    dataHandler.join();
-                } catch (InterruptedException e) {
-                    interrupted = true;
+                while (dataHandler.isAlive()) {
+                    try { dataHandler.join(); }
+                    catch (InterruptedException e) { interrupted = true; }
                 }
-            }
-            if (dvbDevice != null) {
-                try {
-                    dvbDevice.close();
-                    if (dataHandler != null && dvbDevice instanceof info.martinmarinov.drivers.usb.tbs5530.Tbs5530DvbDevice) {
+                if (dvbDevice instanceof info.martinmarinov.drivers.usb.tbs5530.Tbs5530DvbDevice) {
+                    try {
                         dataHandler.exportTbs5530Diagnostics(
                                 ((info.martinmarinov.drivers.usb.tbs5530.Tbs5530DvbDevice) dvbDevice).receptionSnapshot());
-                    }
-                } catch (IOException e) {
-                    dvbFrontendActivity.handleException(e);
+                    } catch (IOException e) { failures.report(e); }
                 }
             }
             dvbFrontendActivity.announceOpen(false, null);

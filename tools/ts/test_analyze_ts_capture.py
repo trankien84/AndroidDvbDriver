@@ -357,6 +357,25 @@ class Phase4QualityTests(unittest.TestCase):
         self.assertEqual({k: v['status'] for k, v in q['crc'].items()}, {'pat': 'PASS', 'pmt': 'PASS', 'sdt': 'FAIL'})
         self.assertEqual(q['pcr']['status'], 'UNKNOWN')
 
+    def test_jittery_pcr_distinguishes_persistent_packet_loss_from_jitter(self):
+        for nonstandard in (False, True):
+            for loss in (0, 1, 20):
+                with self.subTest(nonstandard=nonstandard, deleted_packets=loss):
+                    pcr = ts.PCRIntervals()
+                    for sample in range(20 * 25):
+                        for pid in (100, 101, 102, 103, 104):
+                            position = sample * 400 + pid
+                            jitter = (-100, 0, 100, 50, -50)[(sample + pid) % 5]
+                            offset = (position + jitter - (loss if sample >= 250 else 0)) * 188
+                            pcr.feed({'pid': pid, 'pcr': position * 2700, 'pcr_reserved': 0 if nonstandard else 126,
+                                      'pcr_error': 'invalid PCR reserved bits' if nonstandard else None,
+                                      'discontinuity': nonstandard, 'tei': False, 'invalid': None}, offset, False)
+                    result = pcr.report({100, 101, 102, 103, 104}, 0)
+                    self.assertEqual(result['mode'], 'DRIFT')
+                    self.assertEqual(result['status'], 'FAIL' if loss else 'PASS_DRIFT')
+                    self.assertEqual(result['drift']['nonstandard_clock_fields'], nonstandard)
+                    self.assertEqual(pcr.report({100, 101, 102, 103, 104}, 1)['status'], 'UNKNOWN')
+
     def test_pcr_half_packet_deficit_is_inclusive_excess_informational_and_wrap(self):
         def fixture(deficit):
             ticks = ts.PCR_WRAP - 100

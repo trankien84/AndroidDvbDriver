@@ -33,7 +33,8 @@ public class DvbException extends IOException {
         HARDWARE_EXCEPTION,
         CANNOT_TUNE_TO_FREQ,
         UNSUPPORTED_BANDWIDTH,
-        DVB_DEVICE_UNSUPPORTED
+        DVB_DEVICE_UNSUPPORTED,
+        DEVICE_DISCONNECTED
     }
 
     private final ErrorCode errorCode;

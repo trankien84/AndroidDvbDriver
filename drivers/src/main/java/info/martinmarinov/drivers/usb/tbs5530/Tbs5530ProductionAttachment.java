@@ -91,6 +91,9 @@ final class Tbs5530ProductionAttachment implements AutoCloseable {
                 selected = operational;
                 requireCurrent();
             }
+            java.util.logging.Logger.getLogger("Tbs5530Production").info("Cold RAM bootstrap complete: 132/132 A0 and operational handoff");
+        } else {
+            java.util.logging.Logger.getLogger("Tbs5530Production").info("Operational attachment reused without bootstrap");
         }
         return selected;
     }
@@ -192,9 +195,15 @@ final class Tbs5530ProductionAttachment implements AutoCloseable {
         @Override public void close() { raw.close(); }
     }
 
-    private void requirePresent(UsbDevice expected) throws IOException {
+    boolean disconnected() { return epoch.selectedDetached() || !isPresent(selected); }
+
+    private boolean isPresent(UsbDevice expected) {
         UsbDevice current = manager.getDeviceList().get(expected.getDeviceName());
-        if (current == null || !identity(expected).equals(identity(current)) || !target(current))
+        return target(current) && identity(expected).equals(identity(current));
+    }
+
+    private void requirePresent(UsbDevice expected) throws IOException {
+        if (!isPresent(expected))
             throw new Tbs5530ProductionFailure(Tbs5530ProductionFailure.Kind.REMOVED,
                     "TBS5530 attachment is no longer present");
     }

@@ -39,7 +39,7 @@ public final class Tbs5530DvbDevice extends DvbDevice {
     private volatile Tbs5530ProductionAttachment attachment;
     private volatile Tbs5530StreamGate stream;
     private volatile NativeUsbfsByteSource lastNativeSource;
-    private volatile boolean closing, opened;
+    private volatile boolean closing, opened, confirmedDetach;
     private volatile IOException cleanupFailure;
     private boolean demuxClosed;
     private int closers;
@@ -69,7 +69,7 @@ public final class Tbs5530DvbDevice extends DvbDevice {
         this.clock = clock;
         this.context = context.getApplicationContext(); this.device = operational;
         this.filter = filter; this.attachment = attachment;
-        attachment.onRemoval(this::removed);
+        attachment.onRemoval(this::attachmentRemoved);
     }
 
     @Override public void open() throws DvbException {
@@ -84,7 +84,7 @@ public final class Tbs5530DvbDevice extends DvbDevice {
                 if (attachment == null) {
                     attachment = new Tbs5530ProductionAttachment(context, device);
                     attachment.prepare(false);
-                    attachment.onRemoval(this::removed);
+                    attachment.onRemoval(this::attachmentRemoved);
                 }
                 attachment.requireCurrent();
                 byte[] image = Tbs5530ProductionFirmware.load(context);
@@ -103,6 +103,7 @@ public final class Tbs5530DvbDevice extends DvbDevice {
                 session.transaction(generation, () -> {
                     try {
                         NativeUsbfsControl.reloadFx2(owner, image, this::requireAttachment);
+                        java.util.logging.Logger.getLogger("Tbs5530Production").info("Operational RAM reload complete: 132/132 A0");
                         settle(100); settle(1500);
                     } catch (IOException e) {
                         throw new Tbs5530ControlIo.TransferException(Tbs5530ControlIo.FailureKind.IO_FAILURE,
@@ -337,7 +338,7 @@ public final class Tbs5530DvbDevice extends DvbDevice {
                     source.readNext(sink);
                 }
                 @Override public void close() throws IOException { if (source != null) source.close(); }
-            }, tuned && !closing, this::streamFailed);
+            }, tuned && !closing, this::streamFailed, this::attachmentDisconnected);
             return stream;
         }
     }
@@ -347,13 +348,33 @@ public final class Tbs5530DvbDevice extends DvbDevice {
         if (active != null) active.failed(generation, error);
         // The pump must publish this native error before asynchronous cleanup can interrupt it.
     }
+    private void attachmentRemoved() {
+        attachmentDisconnected();
+        removed();
+    }
+
+    private boolean attachmentDisconnected() {
+        Tbs5530ProductionAttachment current = attachment;
+        if (!confirmedDetach && current != null && current.disconnected()) confirmedDetach = true;
+        return confirmedDetach;
+    }
+
+    public Exception classifyControlFailure(Exception error) {
+        return error instanceof IOException && attachmentDisconnected()
+                ? Tbs5530StreamGate.disconnected((IOException) error) : error;
+    }
+
     private void removed() {
         if (!removalCleanup.compareAndSet(false, true)) return;
         poisoned = true; closing = true;
         Tbs5530Session active = session;
         if (active != null) active.requestCancellation(generation, true);
         Thread cleanup = new Thread(() -> {
-            try { close(); } catch (IOException error) { cleanupFailure = error; }
+            try {
+                if (attachmentDisconnected()) reportStreamFailure(Tbs5530StreamGate.disconnected(null));
+            } finally {
+                try { close(); } catch (IOException error) { cleanupFailure = error; }
+            }
         }, "tbs5530-remove-cleanup");
         cleanup.start();
     }
@@ -361,7 +382,9 @@ public final class Tbs5530DvbDevice extends DvbDevice {
         poisoned = true; tuned = false;
         if (session != null) session.failed(generation, e);
         Tbs5530StreamGate gate = stream;
-        if (gate != null) gate.fail(new IOException("TBS5530 session failed", e));
+        if (gate != null) gate.fail(attachmentDisconnected()
+                ? Tbs5530StreamGate.disconnected(new IOException("TBS5530 session failed", e))
+                : new IOException("TBS5530 session failed", e));
         // Callers hold lifecycle here; joining the pump under it could deadlock a stopped callback.
         removed();
     }
@@ -380,6 +403,7 @@ public final class Tbs5530DvbDevice extends DvbDevice {
     public IOException getCleanupFailure() { return cleanupFailure; }
 
     @Override public void close() throws IOException {
+        beginStreamStop();
         closing = true;
         synchronized (lifecycle) { closing = true; closers++; }
         try {
@@ -388,7 +412,6 @@ public final class Tbs5530DvbDevice extends DvbDevice {
                 if (stream != null) try { stream.close(); }
                 catch (IOException | RuntimeException e) { failure = asIo(e); }
             }
-            // Closes the pipe to unblock a sink before joining the framework pump.
             try { super.close(); } catch (IOException | RuntimeException e) { failure = append(failure, asIo(e)); }
             synchronized (lifecycle) {
                 opened = false; tuned = false; demuxClosed = true;

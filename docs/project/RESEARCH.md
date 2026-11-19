@@ -1,5 +1,25 @@
 # Research log (append-only)
 
+## 2026-11-19 — P4e: dừng luồng, rút tuner và chấm lại PCR
+
+**Hộp khi dừng (`SOURCE-CONFIRMED` và `OFFLINE-TESTED`).** Trước sửa, `DeviceController` ngắt và chờ `DataHandler` trước khi đóng thiết bị. `DataHandler.interrupt()` đóng đầu đọc; `NativePipe` đóng luôn đầu ghi. Khi ấy `DataPump` chưa được ngắt và vẫn có thể đang ghi gói vào đầu đã đóng. Không cần giả thiết cờ interrupt bị xóa trong đường USB để giải thích stack trace P4d. Test đồng bộ hóa thời điểm đóng với một lần ghi đang chờ, tái hiện lỗi khi phép chờ nhận ngắt rồi ném `IOException`, và kiểm sau sửa không báo lỗi qua 200 vòng.
+
+**Ba hộp khi rút (`RUNTIME-OBSERVED` ở P4d).** Hộp đầu mang lỗi native `reason=2,status=-71,errno=0`; hai hộp còn lại mang `InterruptedIOException: read interrupted` từ pipe. Mã cũ chuyển lỗi từ nhiều luồng thẳng lên giao diện, kể cả lỗi theo sau khi dọn pipe. Giao diện đăng thao tác hiện hộp bất đồng bộ và gỡ hộp cũ ở lần gọi sau, không bỏ qua lỗi phụ. Bản sửa gom báo lỗi theo phiên và dùng bằng chứng mất đúng kết nối USB để phân biệt rút tuner với lỗi USB khi thiết bị còn cắm.
+
+**Đính chính bước 8.** Card P4d ghi nhầm “không nạp lại firmware”. Theo ADR-063, bấm **Dừng** thiết bị rồi **Bắt đầu** khi vẫn cắm không thực hiện bootstrap, không làm thiết bị xuất hiện lại và không hỏi quyền USB mới; vẫn phải nạp lại 132 yêu cầu A0 vào RAM sau cấu hình USB, sau đó khởi tạo frontend, khóa K25 và nhận TS. Dừng riêng nút **Ghi TS** không phải bước 8.
+
+**Đính chính PCR.** Mẫu 15 giây K36 cho thấy khoảng 420–500 PCR mỗi PID và tốc độ khoảng 27,493 Mbps. Đo lại toàn bộ 205.151.264 byte (59,698 giây) xác nhận 14 PID và 24.480 trường PCR có bit dự trữ bằng 0; 24.181 trường còn đặt cờ discontinuity. Đó là lý do không có khoảng hợp lệ theo bộ kiểm cũ, không phải không có mẫu PCR. Đồng hồ giải mã tăng đều; khoảng trống lớn nhất dưới 42 ms. Không xem các trường này là PCR hợp chuẩn. Chấm phụ theo độ trôi: 27,489154 Mbps, phân vị 99% sai số khoảng 66,86 gói, biên trung vị cửa sổ 1,90 gói, không phát hiện bậc giảm bền trên đa số PID. Ngưỡng thiếu 94 byte chỉ dùng với đồng hồ đủ chính xác.
+
+| Dump P4d (SHA-256 khớp hồ sơ) | CC nội dung / TEI | CRC PAT/PMT/SDT | PCR toàn tệp | Dịch vụ TSDuck |
+| --- | --- | --- | --- | ---: |
+| Bước 6, OnePlus K25 | 0 / 0 | PASS | `PASS`, `INTERVAL` | 13 |
+| Bước 7, OnePlus K36 | 0 / 0 | PASS | `PASS_DRIFT`, 14/14 PID đủ mẫu | 14 |
+| Bước 11, Samsung K25 | 0 / 0 | PASS | `PASS`, `INTERVAL` | 13 |
+
+Bước 7 và 11 cũng đạt cửa sổ sau 5 giây. Bước 6 chấm mới toàn tệp; không thấy sidecar cục bộ tương ứng để dựng lại mốc sau 5 giây, nên kết quả cửa sổ trước đó giữ nguyên là bằng chứng P4d. Các kết quả không chứng minh mọi loại mất gói đều phát hiện được, không xác nhận chất lượng của bản ghi tương lai, và không thay bằng chứng phần cứng P4e.
+
+**Kết quả P4e trên OnePlus (`RUNTIME-OBSERVED`).** E1 không có hộp khi dừng; log ghi bootstrap 132/132 và reload 132/132. E2 không hỏi quyền mới, log ghi dùng lại kết nối operational, không bootstrap và reload 132/132. E3 loại được hai hộp kéo theo, nhưng hộp duy nhất vẫn có tiêu đề **Chú ý** và nội dung hai dòng `Native TS failed:` rồi `reason=2,status=-71,errno=0`; nút **Báo lỗi** và **OK**, không thấy vết ngăn xếp trong nội dung người dùng báo. Sau đó cắm lại được, có hai hộp quyền và ghi TS tốt. Log nhắm riêng không còn đủ dữ liệu để xác nhận thứ tự lỗi native, danh sách USB và broadcast; việc `-71` đến trước xác nhận rút là giả thuyết, chưa chứng minh. Không đổi mọi `-71` thành lỗi rút tuner vì sẽ che lỗi USB khi còn cắm. Không dùng lượt lặp với APK không đổi.
+
 ## 2026-11-19 — P4d: kiểm lại ranh tiền tố FX2 và timeout JVM
 
 ### Đính chính

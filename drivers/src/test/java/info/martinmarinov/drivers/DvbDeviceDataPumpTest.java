@@ -30,12 +30,51 @@ public class DvbDeviceDataPumpTest {
         @Override public String getDebugString() { return "fixture"; }
         @Override protected void tuneTo(long f, long b, DeliverySystem d) { }
     }
+    @Test public void closingDuringWriteDoesNotReportStreamClosed() throws Exception {
+        for (int run = 0; run < 200; run++) {
+            DvbDemux demux = mock(DvbDemux.class);
+            when(demux.getInputStream()).thenReturn(new ByteArrayInputStream(new byte[0]));
+            ByteSource source = mock(ByteSource.class);
+            byte[] packet = new byte[188];
+            CountDownLatch writing = new CountDownLatch(1);
+            CountDownLatch stopped = new CountDownLatch(1);
+            AtomicReference<IOException> reported = new AtomicReference<>();
+            doAnswer(call -> {
+                writing.countDown();
+                try {
+                    new CountDownLatch(1).await();
+                } catch (InterruptedException e) {
+                    throw new IOException("Stream Closed", e);
+                }
+                return null;
+            }).when(demux).consume(packet, packet.length);
+            doAnswer(call -> {
+                demux.consume(packet, packet.length);
+                return null;
+            }).when(source).readNext(demux);
+            Device device = new Device(demux, source);
+            device.getTransportStream(new DvbDevice.StreamCallback() {
+                @Override public void onStreamException(IOException error) { reported.set(error); }
+                @Override public void onStoppedStreaming() { stopped.countDown(); }
+            });
+            assertTrue(writing.await(2, TimeUnit.SECONDS));
+            device.close();
+            assertEquals(0, stopped.getCount());
+            assertNull("Stop must not report a pipe write failure", reported.get());
+            org.mockito.InOrder order = inOrder(source, demux);
+            order.verify(source).close();
+            order.verify(demux).close();
+            verify(demux, times(1)).close();
+        }
+    }
+
     @Test public void nativeReadFailureReachesCallbackClosesSourceAndStops() throws Exception {
         DvbDemux demux = mock(DvbDemux.class);
         when(demux.getInputStream()).thenReturn(new ByteArrayInputStream(new byte[0]));
         ByteSource source = mock(ByteSource.class);
         IOException failure = new IOException("native URB fixture");
         doThrow(failure).when(source).readNext(demux);
+        doThrow(new IOException("secondary drain failure")).when(source).close();
         Device device = new Device(demux,source);
         CountDownLatch stopped = new CountDownLatch(1);
         AtomicReference<IOException> observed = new AtomicReference<>();

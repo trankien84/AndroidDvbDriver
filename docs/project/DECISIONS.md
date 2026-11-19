@@ -1,5 +1,29 @@
 # Architecture decision record (ADR)
 
+## ADR-078 — Giữ kết luận đối chứng nhiễu P4d
+
+**Date:** 2026-11-19, baseline `53c2cca`. **Status:** `ROOT_CAUSE_CONFIRMED`; kế thừa và làm rõ ADR-074.
+
+**Decision:** Dùng đối chứng B5/P4d cùng drive `0x54`: bố trí RG6, đầu kim loại, ferrite và đường cáp mới đã khử biểu hiện nhiễu đọc USB ghép vào RF trong lượt K25. BER pha ON bằng 0 ở 405/405 mẫu; SNR 29,28 → 29,37 dB thay vì sụt như B5 cũ. Chưa tách tác dụng riêng của từng thay đổi bố trí. Chỉ mở lại kết luận nếu hiện tượng trở lại trong cùng cấu hình, hoặc có phép đối chứng mới chỉ ra nguồn khác.
+
+## ADR-077 — Chọn phép kiểm PCR theo độ dao động của đồng hồ
+
+**Date:** 2026-11-19, baseline `53c2cca`. **Status:** Đã kiểm ngoại tuyến trên dữ liệu giả và ba Dump P4d.
+
+**Decision:** Giữ ngưỡng thiếu 94 byte đối với PCR chính xác. Khi sai số khoảng ở phân vị 99% vượt 2 gói, dùng trung vị độ lệch tích lũy mỗi giây; báo mất dữ liệu khi mức giảm ít nhất một gói kéo dài và trùng trên đa số PID. Chỉ riêng chữ ký đồng nhất như K36 mới cho phép dùng giá trị PCR không hợp chuẩn ở phép kiểm phụ, với đồng hồ tăng đều và đủ cửa sổ. Không thay phép kiểm chính là CC nội dung và TEI bằng 0; không dùng `PASS_DRIFT` để suy rằng không thể có mất gói. Xem lại ngưỡng nếu có mẫu đối chứng mất gói hoặc thay đổi đồng hồ làm kết quả sai.
+
+## ADR-076 — Mỗi phiên chỉ hiện một lỗi chính
+
+**Date:** 2026-11-19, baseline `53c2cca`. **Status:** Đã kiểm P4e: chỉ một hộp khi rút, nhưng vẫn hiện lỗi native `-71` thay cho thông báo thân thiện. Giữ mở phần phân loại.
+
+**Decision:** Phân loại `DEVICE_DISCONNECTED` khi lỗi native phù hợp và `UsbManager` không còn thấy đúng tuner hoặc nhận sự kiện rút đúng kết nối. Sự kiện rút xác nhận riêng có thể kết thúc phiên trước khi native trả lỗi. Nếu tuner vẫn hiện diện, giữ lỗi USB gốc. Trình điều khiển phiên và hộp giao diện đều ngăn hiện lặp; lỗi phụ vào log. Bản release không hiện vết ngăn xếp; nút **Báo lỗi** và bản debug vẫn giữ chi tiết. Kiểm lại nếu OEM trả sự kiện muộn làm mất thông báo chính.
+
+## ADR-075 — Đánh dấu dừng trước khi đóng nguồn và pipe
+
+**Date:** 2026-11-19, baseline `53c2cca`. **Status:** JVM tái hiện trên bản cũ; sau sửa E1 và E2 dừng không hiện lỗi trên OnePlus.
+
+**Decision:** Đánh dấu `stopping` không phụ thuộc cờ interrupt. Với TBS5530, đóng nguồn native và chờ dọn yêu cầu trước, sau đó ngắt và đợi luồng ghi kết thúc rồi đóng pipe; không đóng đầu đọc trước khi yêu cầu dừng thiết bị. Đầu ghi không chặn vô hạn khi pipe đầy, nên việc ngắt có thể giải phóng luồng ghi mà chưa cần đóng pipe. Giữ nguyên cách xử lý dọn USB không xác nhận. Kiểm lại nếu thao tác dừng bị treo hoặc lượng dữ liệu giảm khi đọc liên tục.
+
 ## ADR-074 — Chốt đối chứng nhiễu P4d, không thay tiêu chí TS khi thiếu PCR
 
 **Date:** 2026-11-19, baseline `5ca4cb2`.

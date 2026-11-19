@@ -531,7 +531,8 @@ def p4c_criteria(phases, drops):
         return 'UNKNOWN' if value is None else 'PASS' if meets(value) else 'FAIL'
 
     def overall(values):
-        return 'FAIL' if 'FAIL' in values else 'UNKNOWN' if 'UNKNOWN' in values else 'PASS'
+        values = tuple(values)
+        return 'FAIL' if 'FAIL' in values else 'PASS' if all(v in ('PASS', 'PASS_DRIFT') for v in values) else 'UNKNOWN'
 
     criteria = {}
     for index, name in enumerate(('ON1', 'ON2'), 1):
@@ -544,7 +545,8 @@ def p4c_criteria(phases, drops):
         classified = (details.get('content_mapping_complete') and content.get('comparisons', 0) > 0
                       and all(row['comparisons'] > 0 for row in content.get('pids', [])))
         content_rate = rates.get('content')
-        ts_checks = {'content_cc': grade(content_rate if classified else None, lambda value: value <= 1),
+        content_limit = 0 if phase.get('dump_alignment') is not None else 1
+        ts_checks = {'content_cc': grade(content_rate if classified else None, lambda value: value <= content_limit),
                      'tei': grade(quality.get('tei_packets'), lambda value: value == 0),
                      'pcr_missing_bytes': details.get('pcr', {}).get('status', 'UNKNOWN'),
                      **{key + '_crc': details.get('crc', {}).get(key, {}).get('status', 'UNKNOWN')

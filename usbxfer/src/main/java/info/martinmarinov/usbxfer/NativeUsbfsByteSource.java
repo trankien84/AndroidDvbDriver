@@ -153,6 +153,20 @@ public final class NativeUsbfsByteSource implements ByteSource {
         this.backend = backend;
     }
 
+    public static final class ReceiveFailure extends IOException {
+        private final int status, errno;
+
+        public ReceiveFailure(int reason, int status, int errno) {
+            super("Native TS failed: reason=" + reason + ",status=" + status + ",errno=" + errno);
+            this.status = status;
+            this.errno = errno;
+        }
+
+        public boolean isDisconnectCandidate() {
+            return status == -71 || status == -19 || status == -108 || errno == 19;
+        }
+    }
+
     @Override public void open() throws IOException {
         synchronized (lifecycle) {
             if (used || closed || stopping) throw new IOException("Native TS source is one-shot");
@@ -173,8 +187,7 @@ public final class NativeUsbfsByteSource implements ByteSource {
                         if (detail == null || detail.length != 3 || detail[0] != reason)
                             throw new IOException("Invalid native TS error details");
                         if (reason != 1 || detail[1] != 0 || detail[2] != 0)
-                            failure = new IOException("Native TS failed: reason=" + detail[0]
-                                    + ",status=" + detail[1] + ",errno=" + detail[2]);
+                            failure = new ReceiveFailure(detail[0], detail[1], detail[2]);
                     } catch (IOException | RuntimeException | Error e) {
                         failure = new IOException("Native TS worker failed", e);
                     }

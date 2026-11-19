@@ -21,41 +21,35 @@
 package info.martinmarinov.drivers.tools.io;
 
 import android.os.ParcelFileDescriptor;
+import android.system.ErrnoException;
+import android.system.Os;
+import android.system.OsConstants;
 
 import java.io.Closeable;
+import java.io.FileDescriptor;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
+import java.io.InterruptedIOException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class NativePipe implements Closeable {
-    private final InputStream inputStream;
-    private final OutputStream outputStream;
+    private final ParcelFileDescriptor.AutoCloseInputStream inputStream;
+    private final ParcelFileDescriptor writeEnd;
+    private final AtomicBoolean closed = new AtomicBoolean();
 
     public NativePipe() {
         try {
             ParcelFileDescriptor[] pipe = ParcelFileDescriptor.createPipe();
-            inputStream = new ParcelFileDescriptor.AutoCloseInputStream(pipe[0]) {
-                private boolean closed = false;
-
-                @Override
-                public void close() throws IOException {
-                    if (closed) return;
-                    closed = true;
-                    super.close();
-                    outputStream.close();
-                }
-            };
-            outputStream = new ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]) {
-                private boolean closed = false;
-
-                @Override
-                public void close() throws IOException {
-                    if (closed) return;
-                    closed = true;
-                    super.close();
-                    inputStream.close();
-                }
-            };
+            FileDescriptor fd = pipe[1].getFileDescriptor();
+            try {
+                int flags = Os.fcntlInt(fd, OsConstants.F_GETFL, 0);
+                Os.fcntlInt(fd, OsConstants.F_SETFL, flags | OsConstants.O_NONBLOCK);
+            } catch (ErrnoException e) {
+                try { pipe[0].close(); } finally { pipe[1].close(); }
+                throw new IOException("Cannot set up cancellable TS pipe", e);
+            }
+            inputStream = new ParcelFileDescriptor.AutoCloseInputStream(pipe[0]);
+            writeEnd = pipe[1];
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
@@ -65,13 +59,27 @@ public class NativePipe implements Closeable {
         return inputStream;
     }
 
-    public OutputStream getOutputStream() {
-        return outputStream;
+    public void write(byte[] buf, int offset, int length) throws IOException {
+        // Thread.interrupt() does not cancel a blocking pipe write on Android.
+        while (length > 0 && !Thread.currentThread().isInterrupted()) {
+            if (closed.get()) throw new IOException("TS pipe is closed");
+            try {
+                int written = Os.write(writeEnd.getFileDescriptor(), buf, offset, length);
+                offset += written;
+                length -= written;
+            } catch (ErrnoException e) {
+                if (e.errno != OsConstants.EAGAIN) throw new IOException("Cannot write TS pipe", e);
+                try { Thread.sleep(1); }
+                catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+            }
+        }
+        if (length > 0) throw new InterruptedIOException("TS pipe write cancelled");
     }
 
     @Override
     public void close() throws IOException {
-        inputStream.close();
-        outputStream.close();
+        if (!closed.compareAndSet(false, true)) return;
+        try { writeEnd.close(); }
+        finally { inputStream.close(); }
     }
 }

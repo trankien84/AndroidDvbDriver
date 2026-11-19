@@ -200,7 +200,7 @@ def parse_packet(packet):
     r = {'pid': pid, 'cc': packet[3] & 15, 'tei': bool(packet[1] & 128),
          'pusi': bool(packet[1] & 64), 'scrambled': packet[3] >> 6,
          'has_payload': bool(afc & 1), 'discontinuity': False, 'pcr': None,
-         'invalid': None, 'pcr_error': None, 'payload': b'', 'duplicate_key': packet}
+         'invalid': None, 'pcr_error': None, 'pcr_reserved': None, 'payload': b'', 'duplicate_key': packet}
     if afc == 0:
         r['invalid'] = 'reserved adaptation_field_control'
         return r
@@ -220,6 +220,7 @@ def parse_packet(packet):
                 p = packet[6:12]
                 base = (p[0] << 25) | (p[1] << 17) | (p[2] << 9) | (p[3] << 1) | (p[4] >> 7)
                 ext = ((p[4] & 1) << 8) | p[5]
+                r['pcr_reserved'] = p[4] & 0x7E
                 if ext >= 300:
                     r['pcr_error'] = 'invalid PCR extension'
                 else:
@@ -996,11 +997,17 @@ class PCRIntervals:
         self.intervals = {}
         self.unchecked = Counter()
         self.observed = set()
+        self.raw = {}
+        self.clock_fields = Counter()
 
     def feed(self, packet, offset, duplicate):
         pid, clock = packet['pid'], packet['pcr']
         if clock is not None or packet['pcr_error']:
             self.observed.add(pid)
+            if pid != 0x1FFF and not duplicate:
+                self.clock_fields[packet['pcr_reserved'], packet['discontinuity'], clock is not None] += 1
+                if clock is not None and not packet['tei'] and not packet['invalid']:
+                    self.raw.setdefault(pid, []).append((offset, clock))
         if (packet['tei'] or packet['invalid'] or packet['pcr_error'] or packet['discontinuity']):
             if self.last.pop(pid, None) is not None:
                 self.unchecked[pid] += 1
@@ -1045,11 +1052,112 @@ class PCRIntervals:
                          'median_bitrate_bps': statistics.median(values) if values else None,
                          'missing_ge_94_bytes': missing, 'excess_ge_94_bytes': excess,
                          'min_residual': worst_missing, 'max_residual': worst_excess})
-        return {'status': 'FAIL' if any(row['missing_ge_94_bytes'] for row in rows) else
-                'UNKNOWN' if not rows or sync_breaks or any(row['intervals'] < 2 or row['unchecked_intervals']
-                                                            for row in rows) else 'PASS',
-                'median_bitrate_bps': median, 'by_pid': rows, 'sync_breaks_not_joined': sync_breaks,
-                'basis': 'Signed residual = observed TS bytes minus bytes expected from PCR delta at the median of all eligible PCR interval rates; CC errors do not reset this check.'}
+        result = {'status': 'FAIL' if any(row['missing_ge_94_bytes'] for row in rows) else
+                  'UNKNOWN' if not rows or sync_breaks or any(row['intervals'] < 2 or row['unchecked_intervals']
+                                                              for row in rows) else 'PASS',
+                  'mode': 'INTERVAL', 'median_bitrate_bps': median, 'by_pid': rows,
+                  'sync_breaks_not_joined': sync_breaks,
+                  'basis': 'Observed TS bytes minus expected bytes at the median eligible PCR interval rate; CC errors do not reset this check.'}
+        residuals = sorted(abs((end - start) - ticks * median / (8 * PCR_CLOCK)) / PACKET
+                           for intervals in self.intervals.values() for start, end, ticks in intervals)
+        interval_p99 = residuals[(len(residuals) - 1) * 99 // 100] if residuals else None
+        result['interval_jitter_p99_packets'] = interval_p99
+
+        # A multiplex-wide K36 signature: zero reserved bits and repeated discontinuity flags.
+        # Only the diagnostic drift check may use those clock values, never the strict PCR rate.
+        counts = self.clock_fields
+        sample_count = sum(counts.values())
+        nonstandard = (sample_count > 0 and counts[0, True, True] >= .95 * sample_count
+                       and counts[0, True, True] + counts[0, False, True] == sample_count)
+        if nonstandard or (interval_p99 is not None and interval_p99 > 2):
+            drift = self.drift(pids or self.observed, sync_breaks, nonstandard)
+            result.update({'interval_status': result['status'], 'status': drift['status'],
+                           'mode': 'DRIFT', 'drift': drift})
+        return result
+
+    def drift(self, pids, sync_breaks, nonstandard):
+        pids = sorted(pids - {0x1FFF})
+        result = {'status': 'UNKNOWN', 'pid_count': len(pids), 'eligible_pids': 0,
+                  'nonstandard_clock_fields': nonstandard, 'window_seconds': 1, 'supporting_steps': []}
+        if sync_breaks or not pids:
+            return result
+        runs = {}
+        for pid in pids:
+            samples = self.raw.get(pid, ())
+            if len(samples) < 2 or (not nonstandard and self.unchecked[pid]):
+                continue
+            ticks = 0
+            run = [(samples[0][0] / PACKET, ticks)]
+            for (_, previous), (offset, clock) in zip(samples, samples[1:]):
+                delta = (clock - previous) % PCR_WRAP
+                if not 0 < delta <= PCR_CLOCK:
+                    break
+                ticks += delta
+                run.append((offset / PACKET, ticks))
+            else:
+                if ticks >= 7 * PCR_CLOCK:
+                    runs[pid] = run
+        if len(runs) <= len(pids) // 2:
+            return result
+
+        rate = statistics.median((run[-1][0] - run[0][0]) * PCR_CLOCK / run[-1][1]
+                                 for run in runs.values())
+        origin = min(run[0][0] for run in runs.values())
+        by_pid = {}
+        jitter = []
+        for pid, run in runs.items():
+            buckets = {}
+            for (packet, ticks), (following, later) in zip(run, run[1:]):
+                window = int((packet - origin) / rate)
+                buckets.setdefault(window, []).append(packet - run[0][0] - ticks * rate / PCR_CLOCK)
+                jitter.append(abs(following - packet - (later - ticks) * rate / PCR_CLOCK))
+            by_pid[pid] = {window: statistics.median(values) for window, values in buckets.items()
+                           if len(values) >= 5 and min(buckets) < window < max(buckets)}
+        jitter.sort()
+        p99 = jitter[(len(jitter) - 1) * 99 // 100]
+        max_window = max((w for rows in by_pid.values() for w in rows), default=-1)
+        eligible = {pid: rows for pid, rows in by_pid.items() if len(rows) >= 6}
+        result.update(eligible_pids=len(eligible), jitter_p99_packets=p99,
+                      long_bitrate_bps=rate * PACKET * 8)
+        if len(eligible) <= len(pids) // 2 or p99 <= 2:
+            return result
+
+        def level(rows, windows, split, slope):
+            values = [rows[w] - (w - split) * slope for w in windows if w in rows]
+            return statistics.median(values) if len(values) >= 3 else None
+
+        # Across each cut, estimate slopes within the two sides, never across the cut itself.
+        for split in range(4, max_window - 1):
+            before, after = range(max(0, split - 6), split), range(split, min(split + 6, max_window + 1))
+            tail = range(max(split, max_window - 5), max_window + 1)
+            slopes = [(rows[b] - rows[a]) / (b - a) for rows in eligible.values()
+                      for side in (before, after) for a in side for b in side
+                      if b >= a + 3 and a in rows and b in rows]
+            if not slopes:
+                continue
+            slope = statistics.median(slopes)
+            votes = {}
+            for pid, rows in eligible.items():
+                left, right, end = [level(rows, batch, split, slope) for batch in (before, after, tail)]
+                middle = [level(rows, range(w, min(w + 3, max_window + 1)), split, slope)
+                          for w in range(split, max_window - 1, 3)]
+                # Allow a fraction of one PCR clock tick for calculation/clock quantization.
+                limit = 1 - min(.01, rate / PCR_CLOCK)
+                if (None not in (left, right, end) and left - right >= limit and left - end >= limit
+                        and all(value is not None and left - value >= limit for value in middle)):
+                    votes[pid] = left - right
+            if len(votes) > len(pids) // 2:
+                result['supporting_steps'].append({'window': split, 'pids': votes})
+        medians = {}
+        for w in range(max_window + 1):
+            values = [rows[w] - statistics.median(rows.values()) for rows in eligible.values() if w in rows]
+            if len(values) > len(pids) // 2:
+                medians[w] = statistics.median(values)
+        span = max(medians.values()) - min(medians.values()) if len(medians) >= 6 else None
+        result['window_median_span_packets'] = span
+        result['status'] = ('FAIL' if result['supporting_steps'] else
+                            'PASS_DRIFT' if span is not None and span <= p99 else 'UNKNOWN')
+        return result
 
 
 def phase4_ts_quality(tables, cc, packets, pcr, sync_breaks):

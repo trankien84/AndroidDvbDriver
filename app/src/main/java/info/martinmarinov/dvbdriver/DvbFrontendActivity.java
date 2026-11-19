@@ -134,7 +134,7 @@ public class DvbFrontendActivity extends FragmentActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        if (deviceController != null && deviceController.isAlive()) deviceController.interrupt();
+        if (deviceController != null && deviceController.isAlive()) deviceController.requestStop();
     }
 
     // GUI helpers
@@ -266,7 +266,7 @@ public class DvbFrontendActivity extends FragmentActivity {
         public void run() {
             if (deviceController != null && deviceController.isAlive()) {
                 // wait for device to close
-                deviceController.interrupt();
+                deviceController.requestStop();
                 try {
                     deviceController.join();
                 } catch (InterruptedException e) {
