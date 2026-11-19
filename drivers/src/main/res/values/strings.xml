@@ -47,4 +47,23 @@
     <string name="unsupported_slave_on_tuner">Unsupported slave demodulator on tuner</string>
     <string name="cannot_load_firmware">Cannot load device firmware</string>
     <string name="unsupported_delivery_system">The hardware does not support the selected delivery system</string>
+    <string name="tbs5530_discovery_failed">Cannot prepare TBS5530. Check USB permission, connection and the imported original firmware.</string>
+    <string name="tbs5530_open_failed">Cannot initialize TBS5530. The RAM transfer will not be retried automatically.</string>
+    <string name="tbs5530_already_open">TBS5530 is already open.</string>
+    <string name="tbs5530_no_retry">TBS5530 stopped after an uncertain USB operation. Reconnect the tuner before trying again.</string>
+    <string name="tbs5530_interrupted">TBS5530 operation was interrupted.</string>
+    <string name="tbs5530_dvbt2_only">TBS5530 currently supports DVB-T2 only.</string>
+    <string name="tbs5530_bandwidth">TBS5530 supports DVB-T2 bandwidths of 6, 7 or 8 MHz.</string>
+    <string name="tbs5530_frequency">TBS5530 requires 174–868 MHz in exact 1 kHz steps.</string>
+    <string name="tbs5530_no_lock">No DVB-T2 lock after PLP 0 and one automatic PLP attempt.</string>
+    <string name="tbs5530_tune_failed">Cannot tune TBS5530. USB errors are not retried automatically.</string>
+    <string name="tbs5530_metrics_failed">Cannot read TBS5530 signal measurements safely.</string>
+    <string name="tbs5530_permission_denied">USB permission for TBS5530 was denied or revoked. Allow USB access before trying again.</string>
+    <string name="tbs5530_permission_timeout">Timed out waiting for TBS5530 USB permission. No automatic retry was started.</string>
+    <string name="tbs5530_handoff_timeout">TBS5530 did not return as an operational USB device after RAM bootstrap. No automatic retry was started.</string>
+    <string name="tbs5530_firmware_failed">The original TBS5530 firmware is missing or invalid. Import the original 8192-byte image before opening the tuner.</string>
+    <string name="tbs5530_descriptor_failed">The TBS5530 USB descriptors do not match the supported device profile.</string>
+    <string name="tbs5530_bootstrap_failed">The first TBS5530 RAM bootstrap failed or was partial. It will not be retried automatically.</string>
+    <string name="tbs5530_reload_failed">The operational TBS5530 RAM reload failed or did not remain attached during settling. It will not be retried automatically.</string>
+    <string name="tbs5530_removed">TBS5530 was removed or replaced. The current session has stopped.</string>
 </resources>

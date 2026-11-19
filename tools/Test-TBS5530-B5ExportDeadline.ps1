@@ -38,7 +38,8 @@ foreach($fault in @('before-drain','missing-size','string-size','oversize','wron
 $child=[ExportChildFixture]::new(20000,$false)
 Check (-not $child.WaitForExit(10000)) 'original 10 s would truncate 20 s export'
 Check ($child.WaitForExit((Get-B5AdbTimeout $argsBinary 'new.ts' $true 34340864))) 'same 20 s binary accepted within 96 s'
-$report=[IO.File]::ReadAllText('D:\TSDuck\logs\phase31-b5-20261113-124425-302b54cb\b5-budget-25afe484-c22d-476f-b5bf-b516b5804a35\attempt-4\terminal-report.json')|ConvertFrom-Json
+$report=[pscustomobject]@{cleanup='DRAIN_CONFIRMED';state='REPORT';result='STRUCTURE_CONFIRMED';terminal=$true;cleanup_path='RUNTIME_DRAIN_CONFIRMED';
+    native_stream=$null;b5_phases=@([pscustomobject]@{phase='ON1';drained=$true;quarantined=$false})}
 $synthetic=[byte[]](0..255);$syntheticHash=Get-B5Hash $synthetic
 function Get-B5ExportPaths([string]$Session){return @($remote)}
 $script:fault='';$script:shaCalls=0;$script:binaryDeadline=0;$script:childStopped=$false

@@ -85,6 +85,21 @@ public class Tbs5530FrontendTest {
         return new Tbs5530DvbT2TuneParameters(666_000_000L, width, plp);
     }
 
+    @Test public void productionTuneAcceptsGeneralSourceFrequencyAndOneExplicitAutoStrategy() throws Exception {
+        for (int width : new int[]{6_000_000, 7_000_000, 8_000_000}) {
+            Rig r = new Rig(); r.initialize();
+            Tbs5530DvbT2TuneParameters manual = new Tbs5530DvbT2TuneParameters(650_123_000L, width, 0);
+            tuneFixture(r.script, manual, false);
+            r.frontend.execute(r.frontend.planTerrestrialTune(manual));
+            Tbs5530DvbT2TuneParameters automatic = new Tbs5530DvbT2TuneParameters(650_123_000L, width,
+                    Tbs5530DvbT2TuneParameters.Selection.automatic());
+            tuneFixture(r.script, automatic, true);
+            r.frontend.execute(r.frontend.planTerrestrialTune(automatic));
+            r.script.assertComplete();
+            assertThrows(IllegalArgumentException.class, () -> r.frontend.planTerrestrialTune(parameters(5_000_000, 0)));
+        }
+    }
+
     @Test public void probeIsExactSlvXBankZeroFbFdNotSlvTOrUsbReadiness() throws Exception {
         for (int id : new int[]{0x197, 0x19c, 0x39a}) {
             Rig r = new Rig();
@@ -674,7 +689,7 @@ public class Tbs5530FrontendTest {
         w(f, T, 0, 0x60); rmw(f, T, 0x52, 0, 1);
         w(f, T, 0, 0); rmw(f, T, 0x95, 0, 1);
         w(f, T, 0, 0); rmw(f, T, 0x95, 1, 0x15);
-        w(f, T, 0, 0); w(f, T, 0x96, 0x54); w(f, T, 0, 0); w(f, T, 0x97, 0x54);
+        w(f, T, 0, 0); w(f, T, 0x96, 0x55); w(f, T, 0, 0); w(f, T, 0x97, 0x55);
     }
     static void tuneFixture(ScriptedFakeControlIo f, Tbs5530DvbT2TuneParameters p, boolean active) {
         w(f, T, 0, 0x23);
@@ -708,9 +723,11 @@ public class Tbs5530FrontendTest {
             case 8_000_000: bw = 2; offset = 0x1c; widthOffset = 0x1a; break;
             default: throw new AssertionError();
         }
-        assertTrue(p.frequencyHz == 506_000_000L || p.frequencyHz == 594_000_000L || p.frequencyHz == 666_000_000L);
+        assertTrue(p.frequencyHz == 506_000_000L || p.frequencyHz == 594_000_000L
+                || p.frequencyHz == 650_123_000L || p.frequencyHz == 666_000_000L);
         int[] channel = p.frequencyHz == 506_000_000L ? new int[]{0x90, 0xb8, 0x07}
-                : p.frequencyHz == 594_000_000L ? new int[]{0x50, 0x10, 0x09} : new int[]{0x90, 0x29, 0x0a};
+                : p.frequencyHz == 594_000_000L ? new int[]{0x50, 0x10, 0x09}
+                : p.frequencyHz == 650_123_000L ? new int[]{0x8b, 0xeb, 0x09} : new int[]{0x90, 0x29, 0x0a};
         w(f, U, 0x68, 0, 0x88, 0, 0x0b, 0x22, bw, offset, widthOffset, channel[0], channel[1], channel[2], 255, 0x11, 0x99, 0, 0x24, 0x87);
         w(f, U, 0x88, 0); w(f, U, 0x87, 0xc0); w(f, X, 0, 0); w(f, X, 8, 0);
         w(f, T, 0, 0); w(f, T, 0xfe, 1); streamFixture(f, true);

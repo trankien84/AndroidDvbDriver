@@ -33,8 +33,9 @@ class DataHandler extends Thread {
     private final DvbFrontendActivity dvbFrontendActivity;
     private final Object recordingLock = new Object();
     private final InputStream is;
+    private final boolean collectDiagnostics;
 
-    private boolean recording = false;
+    private volatile boolean recording = false;
     private File file;
     private FileOutputStream fos;
     private int recordedSize = 0;
@@ -42,10 +43,34 @@ class DataHandler extends Thread {
     private long readB = 0;
     private long currFreq;
     private long currBandwidth;
+    private long recordingStart;
+    private Tbs5530RecordingTimeline recordingTimeline;
+    private final java.util.List<RecordingWindow> finishedRecordings = new java.util.ArrayList<>();
 
-    DataHandler(DvbFrontendActivity dvbFrontendActivity, InputStream is) {
+    private static final class RecordingWindow {
+        final File file;
+        final long start, end, frequency, bandwidth;
+        final Tbs5530RecordingTimeline timeline;
+        RecordingWindow(File file, long start, long end, long frequency, long bandwidth, Tbs5530RecordingTimeline timeline) {
+            this.file = file; this.start = start; this.end = end;
+            this.frequency = frequency; this.bandwidth = bandwidth; this.timeline = timeline;
+        }
+    }
+
+    void exportTbs5530Diagnostics(info.martinmarinov.usbxfer.NativeUsbfsByteSource.CompletionSnapshot snapshot) throws IOException {
+        synchronized (recordingLock) {
+            for (RecordingWindow window : finishedRecordings) {
+                Tbs5530DumpDiagnostics.write(window.file, window.start, window.end,
+                        window.frequency, window.bandwidth, snapshot, window.timeline);
+            }
+            finishedRecordings.clear();
+        }
+    }
+
+    DataHandler(DvbFrontendActivity dvbFrontendActivity, InputStream is, boolean collectDiagnostics) {
         this.dvbFrontendActivity = dvbFrontendActivity;
         this.is = is;
+        this.collectDiagnostics = collectDiagnostics;
     }
 
     void reset() {
@@ -53,8 +78,11 @@ class DataHandler extends Thread {
     }
 
     void setFreqAndBandwidth(long freq, long bandwidth) {
-        this.currFreq = freq;
-        this.currBandwidth = bandwidth;
+        synchronized (recordingLock) {
+            if (recording && (currFreq != freq || currBandwidth != bandwidth)) recordingTimeline.invalidate();
+            this.currFreq = freq;
+            this.currBandwidth = bandwidth;
+        }
     }
 
     @Override
@@ -76,12 +104,18 @@ class DataHandler extends Thread {
                 if (read > 0) {
                     synchronized (recordingLock) {
                         if (recording) {
-                            fos.write(b, 0, read);
+                            try {
+                                fos.write(b, 0, read);
+                            } catch (IOException e) {
+                                recordingTimeline.invalidate();
+                                throw e;
+                            }
                             recordedSize += read;
+                            recordingTimeline.observe(System.nanoTime(), recordedSize, false);
                         }
                     }
 
-                    readB += b.length;
+                    readB += read;
                 } else {
                     try {
                         Thread.sleep(100);
@@ -93,22 +127,26 @@ class DataHandler extends Thread {
 
                 if (System.currentTimeMillis() > nextUpdate) {
                     nextUpdate = System.currentTimeMillis() + 1_000;
-                    if (recording) {
-                        dvbFrontendActivity.announceRecorded(file, recordedSize);
-                    } else {
-                        dvbFrontendActivity.announceBitRate(readB);
+                    synchronized (recordingLock) {
+                        if (recording) {
+                            dvbFrontendActivity.announceRecorded(file, recordedSize);
+                        } else {
+                            dvbFrontendActivity.announceBitRate(readB);
+                        }
                     }
                     readB = 0;
                 }
             }
         } catch (IOException e) {
             if (!isInterrupted()) {
-                throw new RuntimeException(e);
+                dvbFrontendActivity.handleException(e);
+                interrupt();
             }
         } finally {
             try {
-                if (fos != null) fos.close();
-            } catch (IOException ignored) {
+                stopRecording();
+            } catch (IOException e) {
+                dvbFrontendActivity.handleException(e);
             }
         }
     }
@@ -117,21 +155,43 @@ class DataHandler extends Thread {
         return recording;
     }
 
-    void startRecording() throws FileNotFoundException {
+    void startRecording() throws IOException {
         synchronized (recordingLock) {
+            if (recording) return;
+            if (collectDiagnostics && finishedRecordings.size() >= 16) throw new IOException(dvbFrontendActivity.getString(R.string.recording_diagnostics_full));
             file = TsDumpFileUtils.getFor(dvbFrontendActivity.getApplicationContext(), currFreq, currBandwidth, new Date());
             fos = new FileOutputStream(file, false);
             recordedSize = 0;
+            recordingStart = System.nanoTime();
+            recordingTimeline = new Tbs5530RecordingTimeline(recordingStart);
             recording = true;
         }
     }
 
     void stopRecording() throws IOException {
         synchronized (recordingLock) {
+            if (!recording) return;
             recording = false;
-            fos.close();
-            fos = null;
-            file = null;
+            long end = System.nanoTime();
+            recordingTimeline.observe(end, recordedSize, true);
+            try {
+                fos.flush();
+                fos.getFD().sync();
+            } catch (IOException e) {
+                recordingTimeline.invalidate();
+                throw e;
+            } finally {
+                try {
+                    fos.close();
+                } catch (IOException e) {
+                    recordingTimeline.invalidate();
+                    throw e;
+                } finally {
+                    fos = null;
+                    if (collectDiagnostics) finishedRecordings.add(new RecordingWindow(file, recordingStart, end, currFreq, currBandwidth, recordingTimeline));
+                    file = null;
+                }
+            }
         }
     }
 }

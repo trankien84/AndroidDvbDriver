@@ -20,7 +20,7 @@ final class Tbs5530AutonomousSession {
     final String id = UUID.randomUUID().toString();
     final File directory;
     final Tbs5530AutonomousPolicy policy;
-    final Tbs5530AutonomousPlans golden;
+    Tbs5530AutonomousPlans golden;
     final Tbs5530TsSmoke.ReadApi readApi;
     final Tbs5530FrontendExperiment frontendExperiment;
     Tbs5530ReloadLedger reloadLedger;
@@ -51,11 +51,17 @@ final class Tbs5530AutonomousSession {
     }
     final java.util.Map<String, info.martinmarinov.usbxfer.NativeUsbfsStream.Result> b5Results = new java.util.LinkedHashMap<>();
     final java.util.Map<String, Tbs5530AutonomousCapture> b5Captures = new java.util.LinkedHashMap<>();
-    void configureB5() throws IOException {
+    int tsDrive = 0x55;
+    void configureB5() throws IOException { configureB5(0x55); }
+    void configureB5(int drive) throws IOException {
+        if (drive != 0x54 && drive != 0x55) throw new IOException("B5 drive must be 0x54 or 0x55");
         if (!nativeStream || accepted || b4Capture || !frontendExperiment.isB5() || streamQueueDepth != 16 || streamUrbBytes != 16384)
             throw new IOException("Invalid B5 capture scope");
+        tsDrive = drive;
+        golden = new Tbs5530AutonomousPlans(frontendExperiment, drive);
         b5Capture = true; streamDurationMillis = 30000; streamMaxBytes = 256 * 1024 * 1024;
         try {
+            challenge.put("golden_sha256", golden.fingerprint()).put("b5_ts_drive", drive);
             challenge.put("b5_enabled", true).put("b5_layout", Tbs5530B5Runner.LAYOUT)
                     .put("b5_stale_prefix_bytes", 2048).put("b5_monitor_period_ms", 100)
                     .put("b5_monitor_jitter_ms", 20).put("b5_rssi_samples_per_off", 3)
@@ -300,7 +306,7 @@ final class Tbs5530AutonomousSession {
                 for (String key : new String[]{"b3_queue_depth", "b3_urb_bytes", "b3_max_bytes", "b3_duration_ms"})
                     if (!challenge.get(key).toString().equals(grant.get(key).toString())) throw new IOException("B3 receive scope mismatch: " + key);
                 if (b5Capture) {
-                    for (String key : new String[]{"b5_enabled", "b5_layout", "b5_stale_prefix_bytes", "b5_monitor_period_ms", "b5_monitor_jitter_ms", "b5_rssi_samples_per_off", "b5_allow_k25_auto", "b5_rssi_sequence"})
+                    for (String key : new String[]{"b5_enabled", "b5_layout", "b5_ts_drive", "b5_stale_prefix_bytes", "b5_monitor_period_ms", "b5_monitor_jitter_ms", "b5_rssi_samples_per_off", "b5_allow_k25_auto", "b5_rssi_sequence"})
                         if (!challenge.get(key).equals(grant.get(key))) throw new IOException("B5 scope mismatch: " + key);
                     Tbs5530AutonomousLaunch.requireB5Budget(grant.getString("b5_card_sha256"), grant.getString("b5_budget_id"),
                             grant.getString("b5_session_id"), grant.getInt("b5_attempt_ordinal"), grant.getInt("b5_max_attempts"),
@@ -702,6 +708,7 @@ final class Tbs5530AutonomousSession {
                     .put("b4_parity", b4Capture ? "PENDING_PAIRED_OFFLINE_ANALYSIS" : "NOT_APPLICABLE")
                     .put("signal_monitor_samples", signalSampleCount)
                     .put("signal_monitor_failure", signalMonitorFailure == null ? JSONObject.NULL : signalMonitorFailure);
+            json.put("b5_ts_drive", b5Capture ? tsDrive : JSONObject.NULL);
             json.put("b5_enabled", b5Capture).put("b5_layout", b5Capture ? Tbs5530B5Runner.LAYOUT : JSONObject.NULL)
                     .put("b5_clock", b5Capture ? "CLOCK_MONOTONIC" : JSONObject.NULL)
                     .put("b5_stale_prefix_bytes", b5Capture ? 2048 : JSONObject.NULL)

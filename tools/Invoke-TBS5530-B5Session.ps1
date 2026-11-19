@@ -15,6 +15,15 @@ notes {separation, cable, accessories} không chứa định danh cá nhân.
 -75/-71/detach/uncertainty hoặc thiếu typed drain đóng toàn bộ ngân sách.
 Helper chỉ ghi PENDING_ANALYSIS, không tạo TS_SMOKE_PASS hoặc kết luận nguyên nhân.
 B5 Windows dùng ngân sách Windows riêng do parent quản lý; helper này không capture.
+B5TsDrive nhận 84/85 (0x54/0x55), mặc định 85; attempt.ts_drive phải là số nguyên.
+Card B5 cũ thiếu ts_drive chỉ tương thích drive 85, không kế thừa approval cho card đổi.
+P4 dùng TBS5530-P4-CARD/v1 và đúng OK P4, phase4_scope=K25_DEBUG_ONLY,
+model GM1900/OnePlus/API30, max_oneplus=10 và max_samsung=2 chỉ là trần tài liệu.
+max_android_debug=max_android=3, max_windows=0, windows_authorized=false;
+max_attempts=2 hoặc 3, drive 85 rồi 84 rồi tùy chọn 85. Mỗi attempt cần optional
+và ferrite_only kiểu bool (chỉ lượt 3 true). Lượt 3 còn cần ApproveP4OptionalFerrite;
+không tự chạy tiếp. ApproveP4SessionBudget là alias của ApproveB5SessionBudget.
+Review mới có ts_drive; không reset/rearm hoặc dùng extension B5 lịch sử trong P4.
 #>
 [CmdletBinding()]
 param(
@@ -31,7 +40,8 @@ param(
     [switch]$AntennaNoDcConfirmed,
     [switch]$GrantBoundedSession,
     [switch]$ProofOfGuardPassed,
-    [switch]$ApproveB5SessionBudget,
+    [Alias('ApproveP4SessionBudget')][switch]$ApproveB5SessionBudget,
+    [switch]$ApproveP4OptionalFerrite,
     [string]$Approval,
     [string]$B5CardPath,
     [ValidatePattern('^[a-f0-9]{64}$')][string]$ExpectedB5CardSha256,
@@ -48,6 +58,7 @@ param(
     [ValidateSet(30000)][int]$B5DurationMillis=30000,
     [ValidateSet(268435456)][int]$B5MaxBytes=268435456,
     [ValidateSet('B5_K25_MANUAL_PLP0','B5_K36_MANUAL_PLP0')][string]$FrontendExperiment='B5_K25_MANUAL_PLP0',
+    [ValidateSet(84,85)][int]$B5TsDrive=85,
     [string]$OutputDirectory,
     [string]$AdbPath='D:\Android\Sdk\platform-tools\adb.exe'
 )
@@ -135,6 +146,44 @@ function Assert-B5ForegroundSnapshot([string]$Activities) {
         $null=$records.Add($Matches.record)
     }
     if($records.Count -ne 1){throw 'B5_FOREGROUND_UNVERIFIED'}
+}
+
+function Get-B5AttemptDrive([object]$Attempt) {
+    if ($null -eq $Attempt.PSObject.Properties['ts_drive']) { return 85 }
+    if (-not (Test-B5Integer $Attempt.ts_drive) -or $Attempt.ts_drive -notin @(84,85)) { throw 'B5_CARD_TS_DRIVE_INVALID' }
+    return [int]$Attempt.ts_drive
+}
+function Assert-B5DriveBinding([object]$Value,[string]$Key,[int]$Drive) {
+    if ($null -eq $Value.PSObject.Properties[$Key] -or -not (Test-B5Integer $Value.$Key) -or $Value.$Key -ne $Drive) { throw 'B5_TS_DRIVE_BINDING_MISMATCH' }
+}
+function Assert-B5Approval([object]$Card,[string]$Value) {
+    $expected=switch -CaseSensitive ($Card.schema) {
+        'TBS5530-B5-CARD/v1' { 'OK B5' }
+        'TBS5530-P4-CARD/v1' { 'OK P4' }
+        default { throw 'B5_CARD_SCHEMA_INVALID' }
+    }
+    if ($Value -cne $expected -or $Card.approval -cne $expected) { throw 'B5_CARD_APPROVAL_MISMATCH' }
+}
+function Assert-P4Envelope([object]$Card) {
+    foreach ($pin in @{max_oneplus=10;max_samsung=2;max_android_debug=3;max_android=3;max_windows=0;api=30}.GetEnumerator()) {
+        if ($null -eq $Card.PSObject.Properties[$pin.Key] -or -not (Test-B5Integer $Card.($pin.Key)) -or $Card.($pin.Key) -ne $pin.Value) { throw 'P4_ENVELOPE_LIMIT_INVALID' }
+    }
+    if ($Card.phase4_scope -cne 'K25_DEBUG_ONLY' -or $Card.model -cne 'GM1900' -or $Card.manufacturer -cne 'OnePlus' -or
+        $Card.windows_authorized -isnot [bool] -or $Card.windows_authorized -or $Card.max_attempts -notin @(2,3)) { throw 'P4_ENVELOPE_SCOPE_INVALID' }
+    if ($null -ne $Card.PSObject.Properties['windows_capture'] -and
+        ($Card.windows_capture.authorized -isnot [bool] -or $Card.windows_capture.authorized)) { throw 'P4_WINDOWS_NEVER_AUTHORIZED' }
+    foreach ($key in @('carry_forward','target_migration','one_extra_extension')) {
+        if ($null -ne $Card.PSObject.Properties[$key]) { throw 'P4_HISTORICAL_EXTENSION_FORBIDDEN' }
+    }
+    $index=0
+    foreach ($attempt in $Card.attempts) {
+        $drive=@(85,84,85)[$index];$optional=$index -eq 2;$index++
+        Assert-B5DriveBinding $attempt 'ts_drive' $drive
+        if ($attempt.optional -isnot [bool] -or $attempt.optional -ne $optional -or
+            $attempt.ferrite_only -isnot [bool] -or $attempt.ferrite_only -ne $optional) { throw 'P4_ATTEMPT_OPTIONAL_SCOPE_INVALID' }
+        $variants=@(Get-B5AllowedFrontends $attempt)
+        if ($variants.Count -ne 1 -or $variants[0].frontend_experiment -cne 'B5_K25_MANUAL_PLP0') { throw 'P4_K25_DEBUG_ONLY' }
+    }
 }
 
 function Set-B5Overrides {
@@ -232,7 +281,7 @@ function Set-B5Overrides {
         }
         return $configs
     }
-    function script:Assert-B5Card([object]$Card,[hashtable]$Pins,[int]$Ordinal,[string]$Epoch,[int]$Depth,[int]$Chunk) {
+    function script:Assert-B5Card([object]$Card,[hashtable]$Pins,[int]$Ordinal,[string]$Epoch,[int]$Depth,[int]$Chunk,[object]$Drive=85) {
         Assert-B5Guid $Card.session_id; Assert-B5Guid $Card.budget_id
         foreach ($key in $Pins.Keys) {
             if ($null -eq $Card.PSObject.Properties[$key] -or $null -eq $Card.$key -or $Card.$key -cne $Pins[$key] -or
@@ -243,8 +292,10 @@ function Set-B5Overrides {
             -not (Test-B5Integer $Card.max_android) -or $Card.max_android -lt 1 -or $Card.max_android -gt 6 -or $Card.max_attempts -gt $Card.max_android -or
             -not (Test-B5Integer $Card.max_windows) -or $Card.max_windows -lt 0 -or $Card.max_windows -gt 2 -or
             @($Card.attempts).Count -ne $Card.max_attempts -or $Ordinal -lt 1 -or $Ordinal -gt $Card.max_attempts) { throw 'B5_CARD_BUDGET_INVALID' }
-        if ($Card.schema -cne 'TBS5530-B5-CARD/v1' -or $Card.approval -cne 'OK B5' -or
-            -not (Test-B5Integer $Card.duration_ms) -or $Card.duration_ms -ne 30000 -or
+        Assert-B5Approval $Card $Card.approval
+        if ($Card.schema -ceq 'TBS5530-P4-CARD/v1') { Assert-P4Envelope $Card }
+        if (-not (Test-B5Integer $Drive) -or $Drive -notin @(84,85)) { throw 'B5_TS_DRIVE_INVALID' }
+        if (-not (Test-B5Integer $Card.duration_ms) -or $Card.duration_ms -ne 30000 -or
             -not (Test-B5Integer $Card.max_bytes) -or $Card.max_bytes -ne 268435456 -or
             $Card.antenna_dc -isnot [bool] -or $Card.antenna_dc -or $Card.rf_input -cne 'RF_IN' -or
             $Card.antenna -cnotin @('PASSIVE','EXTERNALLY_POWERED_NO_TUNER_DC')) { throw 'B5_CARD_SCOPE_INVALID' }
@@ -260,12 +311,14 @@ function Set-B5Overrides {
             if (-not (Test-B5Integer $attempt.ordinal) -or $attempt.ordinal -ne $i -or -not $epochs.Add($attempt.physical_recovery_epoch)) { throw 'B5_CARD_ATTEMPT_INVALID' }
             $null=Get-B5AllowedReceiveConfigs $attempt
             $null=Get-B5AllowedFrontends $attempt
+            $null=Get-B5AttemptDrive $attempt
             foreach ($note in @('separation','cable','accessories')) {
                 if ($attempt.notes.$note -isnot [string] -or [string]::IsNullOrWhiteSpace($attempt.notes.$note) -or $attempt.notes.$note.Length -gt 240) { throw 'B5_SETUP_NOTES_REQUIRED' }
             }
         }
         $selected=$Card.attempts[$Ordinal-1]
-        if ($selected.physical_recovery_epoch -cne $Epoch -or @((Get-B5AllowedReceiveConfigs $selected)|Where-Object {$_.queue_depth -eq $Depth -and $_.urb_bytes -eq $Chunk}).Count -ne 1) { throw 'B5_CARD_ATTEMPT_BINDING_MISMATCH' }
+        if ($selected.physical_recovery_epoch -cne $Epoch -or (Get-B5AttemptDrive $selected) -ne $Drive -or
+            @((Get-B5AllowedReceiveConfigs $selected)|Where-Object {$_.queue_depth -eq $Depth -and $_.urb_bytes -eq $Chunk}).Count -ne 1) { throw 'B5_CARD_ATTEMPT_BINDING_MISMATCH' }
     }
     function script:Assert-B5Challenge([object]$Value,[string]$Launch,[long]$Now) {
         if (-not (Test-TBS5530LaunchChallenge $Value $Launch $false $Now)) { throw 'B5_CHALLENGE_STALE_OR_FOREIGN' }
@@ -276,7 +329,7 @@ function Set-B5Overrides {
             retry=0;max_upload_per_attachment=1;max_reload_per_physical_epoch=1;max_session_ms=300000;heartbeat_ms=2000
             fx2_reload_option='B2_RELOAD_AFTER_SET_CONFIG';fx2_reload_plan_sha256=$ExpectedReloadPlanSha256;bootstrap_proof='SAME_SESSION_ORIGINAL132_APP_BOUNDARIES_DRAIN_REQUIRED'
             b3_queue_depth=$B5QueueDepth;b3_urb_bytes=$B5UrbBytes;b3_max_bytes=$B5MaxBytes;b3_duration_ms=$B5DurationMillis
-            b5_enabled=$true;b5_rssi_sequence='WINDOWS_88_00_87_C0';b5_allow_k25_auto=($FrontendExperiment -ceq 'B5_K25_MANUAL_PLP0');b5_layout=$layout;b5_stale_prefix_bytes=2048;b5_monitor_period_ms=100;b5_monitor_jitter_ms=20;b5_rssi_samples_per_off=3}
+            b5_ts_drive=$B5TsDrive;b5_enabled=$true;b5_rssi_sequence='WINDOWS_88_00_87_C0';b5_allow_k25_auto=($FrontendExperiment -ceq 'B5_K25_MANUAL_PLP0');b5_layout=$layout;b5_stale_prefix_bytes=2048;b5_monitor_period_ms=100;b5_monitor_jitter_ms=20;b5_rssi_samples_per_off=3}
         foreach ($key in $pins.Keys) {
             if ($null -eq $Value.PSObject.Properties[$key] -or $Value.$key -cne $pins[$key] -or
                 ($pins[$key] -is [bool] -and $Value.$key -isnot [bool]) -or ((Test-B5Integer $pins[$key]) -and -not (Test-B5Integer $Value.$key))) { throw ('B5_CHALLENGE_PIN_MISMATCH:'+$key) }
@@ -362,6 +415,10 @@ function Read-B5Review([object]$Card,[string]$CardHash,[object]$Receipt,[int]$Or
         $v.session_id -cne $Card.session_id -or -not (Test-B5Integer $v.ordinal) -or $v.ordinal -ne $Ordinal -or
         $v.physical_recovery_epoch -cne $Card.attempts[$Ordinal-1].physical_recovery_epoch -or
         $v.result -cnotin @('B5_REVIEWED','RF_LIMITED','B5_ANDROID_GAP','PRE_IO_REFUSED','PENDING_ANALYSIS')) { throw 'B5_OFFLINE_VALIDATION_SCOPE_OR_RESULT_INVALID' }
+    if ($null -ne $Card.attempts[$Ordinal-1].PSObject.Properties['ts_drive']) {
+        Assert-B5DriveBinding $v 'ts_drive' (Get-B5AttemptDrive $Card.attempts[$Ordinal-1])
+        Assert-B5DriveBinding $Receipt 'ts_drive' (Get-B5AttemptDrive $Card.attempts[$Ordinal-1])
+    }
     if ($v.result -ceq 'PENDING_ANALYSIS') { throw 'B5_OFFLINE_ANALYSIS_PENDING' }
     if ($v.result -ceq 'PRE_IO_REFUSED') {
         if ($Receipt.pre_io_refusal -isnot [bool] -or -not $Receipt.pre_io_refusal) { throw 'B5_PRE_IO_OBSERVATION_REQUIRED' }
@@ -415,8 +472,13 @@ function Assert-B5Ledger([byte[]]$Bytes,[string]$CardHash,[object]$Card,[int]$Or
         } elseif ($row.event -ceq 'CONSUME' -and -not $pending) {
             if (-not (Test-B5Integer $row.ordinal) -or $row.ordinal -ne $next -or $next -gt $Card.max_attempts -or $row.epoch -cne $Card.attempts[$next-1].physical_recovery_epoch) { throw 'B5_MANIFEST_CONSUME_INVALID' }
             if($null -ne $Card.PSObject.Properties['carry_forward'] -and $row.carry_sha256 -cne (Get-B5CarryPin $Card)){throw 'B5_CARRY_CONSUME_BINDING_MISMATCH'}
-            Assert-B5Card $Card @{} $next $row.epoch $row.queue_depth $row.urb_bytes
-            if ($null -ne $Card.attempts[$next-1].PSObject.Properties['allowed_frontends']) {
+            $attemptDrive=Get-B5AttemptDrive $Card.attempts[$next-1]
+            if ($null -ne $Card.attempts[$next-1].PSObject.Properties['ts_drive'] -or $null -ne $row.PSObject.Properties['ts_drive']) {
+                Assert-B5DriveBinding $row 'ts_drive' $attemptDrive
+            }
+            Assert-B5Card $Card @{} $next $row.epoch $row.queue_depth $row.urb_bytes $attemptDrive
+            if ($null -ne $Card.attempts[$next-1].PSObject.Properties['allowed_frontends'] -or
+                $null -ne $Card.attempts[$next-1].PSObject.Properties['ts_drive']) {
                 $null=Select-B5Frontend $Card.attempts[$next-1] $row.frontend_experiment $row.golden_sha256 $row.reload_plan_sha256
             }
             if ($next -gt 1) {
@@ -425,6 +487,9 @@ function Assert-B5Ledger([byte[]]$Bytes,[string]$CardHash,[object]$Card,[int]$Or
             }
             $depth=$row.queue_depth; $chunk=$row.urb_bytes; $pending=$true
         } elseif ($row.event -ceq 'RECEIPT' -and $pending) {
+            if ($null -ne $Card.attempts[$next-1].PSObject.Properties['ts_drive'] -or $null -ne $row.PSObject.Properties['ts_drive']) {
+                Assert-B5DriveBinding $row 'ts_drive' (Get-B5AttemptDrive $Card.attempts[$next-1])
+            }
             if ($row.ordinal -ne $next -or $row.session_closed -isnot [bool] -or $row.session_closed -or $row.drained -isnot [bool] -or
                 (-not $row.drained -and -not (Test-B5PreGrantRefusal $row)) -or [string]::IsNullOrWhiteSpace($row.result) -or
                 $row.queue_depth -ne $depth -or $row.urb_bytes -ne $chunk) { throw 'B5_SESSION_CLOSED' }
@@ -759,7 +824,7 @@ function Get-B5CaptureClassification([object]$Report,[object[]]$Exports) {
 $b3=Join-Path $PSScriptRoot 'Invoke-TBS5530-B3Session.ps1'
 Import-B5SharedGuards $b3 $ExpectedB3HelperSha256
 Set-B5Overrides
-if (-not $GrantBoundedSession -or -not $ProofOfGuardPassed -or -not $ApproveB5SessionBudget -or $Approval -cne 'OK B5' -or
+if (-not $GrantBoundedSession -or -not $ProofOfGuardPassed -or -not $ApproveB5SessionBudget -or $Approval -cnotin @('OK B5','OK P4') -or
     -not $PhysicalRecoveryConfirmed -or $PhysicalColdSeconds -lt 5 -or -not $RfInConfirmed -or -not $AntennaNoDcConfirmed) { throw 'B5_EXPLICIT_BUDGET_COLD_RF_ANTENNA_PROOF_REQUIRED' }
 Assert-B5Guid $PhysicalRecoveryEpoch
 if ($ExpectedModel -cne 'GM1900' -or $ExpectedApi -ne 30 -or $DurationSeconds -ne 300 -or $B5QueueDepth -ne 16 -or $B5UrbBytes -ne 16384) { throw 'B5_SCOPE_INVALID' }
@@ -772,11 +837,13 @@ $cardBytes=[IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $B5CardPath))
 if ($cardBytes.Length -gt 65536 -or (Get-B5Hash $cardBytes) -cne $ExpectedB5CardSha256) { throw 'B5_CARD_HASH_MISMATCH' }
 $card=[Text.UTF8Encoding]::new($false,$true).GetString($cardBytes).TrimStart([char]0xFEFF)|ConvertFrom-Json
 $sessionPath=[IO.Path]::GetFullPath($B5SessionDirectory)
-$pins=@{schema='TBS5530-B5-CARD/v1';approval='OK B5';model=$ExpectedModel;api=$ExpectedApi;boot_count=$ExpectedBootCount;session_directory=$sessionPath
+Assert-B5Approval $card $Approval
+$pins=@{approval=$Approval;model=$ExpectedModel;api=$ExpectedApi;boot_count=$ExpectedBootCount;session_directory=$sessionPath
     app_apk_sha256=$ExpectedAppApkSha256;autonomous_helper_sha256=$ExpectedHelperSha256;b3_helper_sha256=$ExpectedB3HelperSha256;b5_helper_sha256=$ExpectedB5HelperSha256
     firmware_sha256=$firmwareSha
     rssi_sequence='WINDOWS_88_00_87_C0';serial=$Serial;manufacturer='OnePlus';layout=$layout;stale_prefix_bytes=2048;monitor_period_ms=100;monitor_jitter_ms=20;rssi_samples_per_off=3;max_bytes=$B5MaxBytes;duration_ms=$B5DurationMillis;ttl_ms=300000;heartbeat_ms=2000;permission_wait_ms=30000}
-Assert-B5Card $card $pins $B5AttemptOrdinal $PhysicalRecoveryEpoch $B5QueueDepth $B5UrbBytes
+Assert-B5Card $card $pins $B5AttemptOrdinal $PhysicalRecoveryEpoch $B5QueueDepth $B5UrbBytes $B5TsDrive
+if ($card.schema -ceq 'TBS5530-P4-CARD/v1' -and $B5AttemptOrdinal -eq 3 -and -not $ApproveP4OptionalFerrite) { throw 'P4_OPTIONAL_FERRITE_EXPLICIT_SELECTION_REQUIRED' }
 $selected=Select-B5Frontend $card.attempts[$B5AttemptOrdinal-1] $FrontendExperiment $ExpectedFrontendGoldenSha256 $ExpectedReloadPlanSha256
 Assert-B5Source $card ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..')))
 $attemptPath=Join-Path $sessionPath ('attempt-'+$B5AttemptOrdinal)
@@ -786,6 +853,7 @@ if ((Test-Path -LiteralPath $attemptPath) -or (Test-Path -LiteralPath $rawAttemp
 if (-not (Test-Path -LiteralPath $AdbPath -PathType Leaf)) { throw 'B5_PINNED_ADB_MISSING' }
 if (-not (Test-Path -LiteralPath $sessionPath)) { $null=New-Item -ItemType Directory -Path $sessionPath }
 $windowsLedger=Join-Path $sessionPath 'b5-windows-budget.jsonl'
+if ($card.schema -ceq 'TBS5530-P4-CARD/v1' -and (Test-Path -LiteralPath $windowsLedger)) { throw 'P4_WINDOWS_NEVER_AUTHORIZED' }
 $extensionProof=Assert-B5OneExtraExtension $card $B5AttemptOrdinal
 $migrationProof=$null
 if($null -ne $extensionProof){
@@ -829,7 +897,7 @@ try {
     if($null -ne $carryProof){$carryProof=Assert-B5CarryForward $card}
     if ($prefix.Length -eq 0) { $prefix=Add-B5ManifestRecord $manifestStream $prefix ([pscustomobject]@{event='HEADER';card_sha256=$ExpectedB5CardSha256;budget_id=$card.budget_id;max_attempts=$card.max_attempts;max_windows=$card.max_windows;carry_sha256=$(if($null -ne $carryProof){$carryProof.sha256}else{$null});prior_windows_ledger_sha256=$(if($null -ne $carryProof){$carryProof.prior_ledger_sha256}else{$null});prior_windows_result_sha256=$(if($null -ne $carryProof){$carryProof.prior_result_sha256}else{$null})}) }
     }
-    $prefix=Add-B5ManifestRecord $manifestStream $prefix ([pscustomobject]@{event='CONSUME';ordinal=$B5AttemptOrdinal;epoch=$PhysicalRecoveryEpoch;
+    $prefix=Add-B5ManifestRecord $manifestStream $prefix ([pscustomobject]@{event='CONSUME';ordinal=$B5AttemptOrdinal;epoch=$PhysicalRecoveryEpoch;ts_drive=$B5TsDrive;
         session_id=$card.session_id;one_extra_sha256=$(if($null -ne $extensionProof){$extensionProof.sha256}else{$null});target_migration_sha256=$(if($null -ne $migrationProof){$migrationProof.sha256}else{$null});carry_sha256=$(if($null -ne $carryProof){$carryProof.sha256}else{$null});frontend_experiment=$FrontendExperiment;golden_sha256=$ExpectedFrontendGoldenSha256;reload_plan_sha256=$ExpectedReloadPlanSha256;physical_cold_confirmed=$true;cold_seconds=$PhysicalColdSeconds;queue_depth=$B5QueueDepth;urb_bytes=$B5UrbBytes;
         previous_offline_validation_sha256=$(if($prior){$prior.sha256}else{$null});utc=[DateTime]::UtcNow.ToString('o')})
     $consumed=$true
@@ -848,7 +916,7 @@ try {
     $launch=@('shell','am','start','--activity-clear-top','--activity-single-top','-n',"$package/.Tbs5530AutonomousDiagnosticActivity",
         '--es','read_api','NATIVE_USBFS_STREAM','--es','frontend_experiment',$FrontendExperiment,'--es','launch_token',$launchToken,
         '--ez','control_plane_only','false','--ez','control_mirror','true','--ei','b3_queue_depth',[string]$B5QueueDepth,'--ei','b3_urb_bytes',[string]$B5UrbBytes,
-        '--ei','b3_max_bytes',[string]$B5MaxBytes,'--ei','b3_duration_ms',[string]$B5DurationMillis,'--ez','b5_enabled','true',
+        '--ei','b3_max_bytes',[string]$B5MaxBytes,'--ei','b3_duration_ms',[string]$B5DurationMillis,'--ez','b5_enabled','true','--ei','b5_ts_drive',[string]$B5TsDrive,
         '--ez','b5_allow_k25_auto',($FrontendExperiment -ceq 'B5_K25_MANUAL_PLP0').ToString().ToLowerInvariant(),'--es','b5_layout',$layout,'--ei','b5_stale_prefix_bytes','2048','--ei','b5_monitor_period_ms','100','--ei','b5_monitor_jitter_ms','20','--ei','b5_rssi_samples_per_off','3')
     $script:adbStage='B5_LAUNCH'; $null=Invoke-B5Adb $launch
     $watch=[Diagnostics.Stopwatch]::StartNew()
@@ -876,6 +944,7 @@ try {
     $grant.b3_max_attempts=$card.max_attempts; $grant.b3_physical_cold_seconds=$PhysicalColdSeconds
     $grant.b5_card_sha256=$ExpectedB5CardSha256; $grant.b5_budget_id=$card.budget_id; $grant.b5_session_id=$card.session_id
     $grant.b5_attempt_ordinal=$B5AttemptOrdinal; $grant.b5_max_attempts=$card.max_attempts; $grant.b5_physical_cold_seconds=$PhysicalColdSeconds
+    $grant.b5_ts_drive=$B5TsDrive
     Write-B5NewJson (Join-Path $attemptPath 'grant.private.json') $grant
     $script:adbStage='B5_GRANT'; $granted=$true
     $initial=Exchange-B5Heartbeat -Grant $grant
@@ -892,7 +961,7 @@ try {
     if ($null -eq $terminalReport) { throw 'B5_TERMINAL_DEADLINE_NO_FORCE_CLOSE' }
     if ($terminalReport.launch_token -cne $launchToken -or $terminalReport.frontend_experiment -cne $FrontendExperiment -or
         $terminalReport.ts_variant -cne 'NATIVE_USBFS_STREAM' -or $terminalReport.control_plane_only -isnot [bool] -or $terminalReport.control_plane_only) { throw 'B5_REPORT_SCOPE_MISMATCH' }
-    foreach ($pin in @{b5_enabled=$true;b5_rssi_sequence='WINDOWS_88_00_87_C0';b5_allow_k25_auto=($FrontendExperiment -ceq 'B5_K25_MANUAL_PLP0');b5_layout=$layout;b5_stale_prefix_bytes=2048;b5_monitor_period_ms=100;b5_monitor_jitter_ms=20;b5_rssi_samples_per_off=3}.GetEnumerator()) {
+    foreach ($pin in @{b5_ts_drive=$B5TsDrive;b5_enabled=$true;b5_rssi_sequence='WINDOWS_88_00_87_C0';b5_allow_k25_auto=($FrontendExperiment -ceq 'B5_K25_MANUAL_PLP0');b5_layout=$layout;b5_stale_prefix_bytes=2048;b5_monitor_period_ms=100;b5_monitor_jitter_ms=20;b5_rssi_samples_per_off=3}.GetEnumerator()) {
         if ($null -eq $terminalReport.PSObject.Properties[$pin.Key] -or $terminalReport.($pin.Key) -cne $pin.Value -or
             ($pin.Value -is [bool] -and $terminalReport.($pin.Key) -isnot [bool]) -or
             ((Test-B5Integer $pin.Value) -and -not (Test-B5Integer $terminalReport.($pin.Key)))) { throw 'B5_REPORT_LIMITS_MISMATCH' }
@@ -910,6 +979,7 @@ try {
     $exportManifestSha=(Get-FileHash -LiteralPath (Join-Path $attemptPath 'export-manifest.json') -Algorithm SHA256).Hash.ToLowerInvariant()
     $raw=@($exports|Where-Object {$_.path -clike '*/received-ON1.ts' -and $_.present}); if ($raw.Count -eq 1) { $captureRawSha=$raw[0].sha256 }
     $classification=Get-B5CaptureClassification $terminalReport $exports
+    $classification|Add-Member ts_drive $B5TsDrive
     Write-B5NewJson (Join-Path $attemptPath 'host-classification.json') $classification
     $classification|ConvertTo-Json -Compress
     $failure=$terminalReport.result
@@ -926,7 +996,7 @@ try {
                 $e=Write-B5PreGrantEvidence $attemptPath $ExpectedB5CardSha256 $card.session_id $B5AttemptOrdinal $PhysicalRecoveryEpoch $hostError $script:adbStage
                 $preGrantEvidenceSha=$e.evidence_sha256; $exportManifestSha=$e.export_sha256; $failure='PRE_GRANT_HOST_REFUSAL'; $closed=$false; $drained=$false
             }
-            $receipt=[pscustomobject]@{event='RECEIPT';ordinal=$B5AttemptOrdinal;result=$failure;drained=$drained;session_closed=$closed;exit_code=$exitCode;
+            $receipt=[pscustomobject]@{event='RECEIPT';ordinal=$B5AttemptOrdinal;ts_drive=$B5TsDrive;result=$failure;drained=$drained;session_closed=$closed;exit_code=$exitCode;
                 single_run_pass=$false;capture_complete=($null -ne $classification -and $classification.capture_complete);raw_sha256=$captureRawSha;
                 export_manifest_sha256=$exportManifestSha;queue_depth=$B5QueueDepth;urb_bytes=$B5UrbBytes;grant_may_have_been_published=[bool]$granted;
                 pre_grant_evidence_sha256=$preGrantEvidenceSha;pre_io_refusal=(-not $granted -or ($null -ne $terminalReport -and $null -ne $terminalReport.PSObject.Properties['pre_native_refusal'] -and $terminalReport.pre_native_refusal -is [bool] -and $terminalReport.pre_native_refusal));

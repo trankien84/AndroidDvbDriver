@@ -11,7 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** Debug-only bounded parser. Never retains raw bytes, strings or unknown payloads. */
+/** Bounded standard-descriptor parser. Never retains raw bytes, strings or unknown payloads. */
 public final class Tbs5530RawDescriptors {
     public static final int MAX_BYTES = 1024 * 1024;
     public static final class Entry {

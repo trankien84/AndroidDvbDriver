@@ -26,17 +26,29 @@ public final class Tbs5530ControlProbe {
     private final Tbs5530ControlIo ownedIo;
     private boolean executing, observing, knownStatusBank20, readbackCreated;
     private int verifiedChipId = -1;
+    private final Tbs5530Frontend.DriveStrength drive;
     private Tbs5530OperationalHandoff handoff;
 
     public Tbs5530ControlProbe(Tbs5530OperationalHandoff owner, Authorization authorization, Tbs5530Frontend.Clock clock)
             throws IOException {
-        this(owner.session(), owner.session().getGeneration(), owner.controlIo(), authorization, clock);
+        this(owner, authorization, clock, 0x55);
+    }
+    public Tbs5530ControlProbe(Tbs5530OperationalHandoff owner, Authorization authorization,
+                              Tbs5530Frontend.Clock clock, int drive) throws IOException {
+        this(owner.session(), owner.session().getGeneration(), owner.controlIo(), authorization, clock, drive);
         if (!owner.operationalOwner()) throw new IOException("Fresh operational session required");
         owner.requireReloadComplete();
         handoff = owner;
     }
     Tbs5530ControlProbe(Tbs5530Session session, long generation, Tbs5530ControlIo io,
                        Authorization authorization, Tbs5530Frontend.Clock clock) throws IOException {
+        this(session, generation, io, authorization, clock, 0x55);
+    }
+    Tbs5530ControlProbe(Tbs5530Session session, long generation, Tbs5530ControlIo io,
+                       Authorization authorization, Tbs5530Frontend.Clock clock, int drive) throws IOException {
+        this.drive = drive == 0x54 ? Tbs5530Frontend.DriveStrength.RAW_54 : drive == 0x55
+                ? Tbs5530Frontend.DriveStrength.RAW_55 : null;
+        if (this.drive == null) throw new IOException("TS drive must be 0x54 or 0x55");
         this.session = Objects.requireNonNull(session); this.generation = generation;
         this.authorization = Objects.requireNonNull(authorization);
         ownedIo = Objects.requireNonNull(io);
@@ -44,7 +56,10 @@ public final class Tbs5530ControlProbe {
         frontend = new Tbs5530Frontend(new Tbs5530Bridge(gate, session, generation), session, generation, clock);
     }
     public Tbs5530Frontend.Plan planProbe() throws IOException { return frontend.planProbe(); }
-    public Tbs5530Frontend.Plan planInitialize() throws IOException { return frontend.planInitialize(); }
+    public Tbs5530Frontend.Plan planInitialize() throws IOException { return frontend.planInitialize(drive); }
+    public Tbs5530Frontend.Plan planInitialize(Tbs5530Frontend.DriveStrength drive) throws IOException {
+        return frontend.planInitialize(drive);
+    }
     public void readyForTune() throws IOException { frontend.readyForTune(); }
     public Tbs5530Frontend.Plan planTune(Tbs5530DvbT2TuneParameters parameters) throws IOException { return frontend.planTune(parameters); }
     public Tbs5530Frontend.Plan planExperimentalAutoTune(Tbs5530DvbT2TuneParameters parameters) throws IOException {

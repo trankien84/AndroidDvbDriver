@@ -16,6 +16,29 @@ import static org.junit.Assert.*;
 /** Configuration and fake-clock reports only; no grant, USB connection, firmware or receive call. */
 @RunWith(AndroidJUnit4.class)
 public class Tbs5530B5ReportTest {
+    @Test public void driveSelectionBindsGoldenChallengeAndReportWithoutUsb() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        String previousGolden = null;
+        for (int drive : new int[]{0x54, 0x55}) {
+            Tbs5530AutonomousSession session = new Tbs5530AutonomousSession(context, "NATIVE_USBFS_STREAM", "GM1900", 30, 1,
+                    true, false, null, false, false, "B5_K25_MANUAL_PLP0");
+            session.configureStream(16, 16384);
+            session.configureB5(drive);
+            JSONObject challenge = new JSONObject(Tbs5530AutonomousSession.read(
+                    new File(context.getFilesDir(), "autonomous-v1-challenge.json"), 16384));
+            assertEquals(drive, challenge.getInt("b5_ts_drive"));
+            assertEquals(session.golden.fingerprint(), challenge.getString("golden_sha256"));
+            if (previousGolden != null) assertNotEquals(previousGolden, session.golden.fingerprint());
+            previousGolden = session.golden.fingerprint();
+            session.report("FAKE_ONLY", 0, 0, -1);
+            JSONObject report = new JSONObject(Tbs5530AutonomousSession.read(new File(session.directory, "report.json"), 65536));
+            assertEquals(drive, report.getInt("b5_ts_drive"));
+            assertFalse(report.getBoolean("ts_smoke_pass"));
+            assertThrows(IOException.class, () -> session.configureB5(0x56));
+            session.policy.stop();
+        }
+    }
+
     @Test public void phaseClockLoadsNativeMonotonicSourceWithoutOpeningUsb() throws Exception {
         long before = info.martinmarinov.usbxfer.NativeUsbfsStream.monotonicNanos();
         Thread.sleep(2);

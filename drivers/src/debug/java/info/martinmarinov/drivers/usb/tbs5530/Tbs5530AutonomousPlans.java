@@ -26,11 +26,16 @@ public final class Tbs5530AutonomousPlans {
         this(Tbs5530FrontendExperiment.BASELINE_AUTO);
     }
     public Tbs5530AutonomousPlans(Tbs5530FrontendExperiment experiment) throws IOException {
+        this(experiment, 0x55);
+    }
+    public Tbs5530AutonomousPlans(Tbs5530FrontendExperiment experiment, int drive) throws IOException {
         if (experiment == null) throw new IOException("Explicit frontend experiment required");
+        requireDrive(drive);
         this.experiment = experiment;
-        hashes = dryRun(experiment);
+        hashes = dryRun(experiment, drive);
         for (int i = 0; i < OPERATIONS.length; i++) {
-            String expected = PINNED[i];
+            String expected = OPERATIONS[i] == Tbs5530Frontend.Operation.INITIALIZE && drive == 0x55
+                    ? "91e21e708bb5935e57e6cfc110415c14dd4d8d2ce699b489cfdd10500bf9b359" : PINNED[i];
             if (OPERATIONS[i] == Tbs5530Frontend.Operation.TUNE) {
                 if (experiment == Tbs5530FrontendExperiment.B5_K25_MANUAL_PLP0)
                     expected = "82c8e610ff7f132e0df0a2057c76af38ab26bd100973f8984f2dcae004a034a9";
@@ -88,20 +93,33 @@ public final class Tbs5530AutonomousPlans {
         return dryRun(Tbs5530FrontendExperiment.BASELINE_AUTO);
     }
     public static Map<Tbs5530Frontend.Operation, String> dryRun(Tbs5530FrontendExperiment experiment) throws IOException {
+        return dryRun(experiment, 0x55);
+    }
+    public static Map<Tbs5530Frontend.Operation, String> dryRun(Tbs5530FrontendExperiment experiment, int drive) throws IOException {
         Map<Tbs5530Frontend.Operation, String> result = new LinkedHashMap<>();
-        for (Tbs5530Frontend.Plan plan : dryRunPlans(experiment).values()) result.put(plan.operation, canonical(plan));
+        for (Tbs5530Frontend.Plan plan : dryRunPlans(experiment, drive).values()) result.put(plan.operation, canonical(plan));
         return result;
     }
     /** Immutable approval programs for offline review; the only transport here is the fake below. */
     public static Map<Tbs5530Frontend.Operation, Tbs5530Frontend.Plan> dryRunPlans(Tbs5530FrontendExperiment experiment) throws IOException {
-        return dryRunPlans(experiment, false);
+        return dryRunPlans(experiment, 0x55);
+    }
+    public static Map<Tbs5530Frontend.Operation, Tbs5530Frontend.Plan> dryRunPlans(
+            Tbs5530FrontendExperiment experiment, int drive) throws IOException {
+        return dryRunPlans(experiment, false, drive);
     }
     public static Tbs5530Frontend.Plan dryRunK25FallbackPlan() throws IOException {
-        return dryRunPlans(Tbs5530FrontendExperiment.B5_K25_MANUAL_PLP0, true).get(Tbs5530Frontend.Operation.TUNE);
+        return dryRunPlans(Tbs5530FrontendExperiment.B5_K25_MANUAL_PLP0, true, 0x55).get(Tbs5530Frontend.Operation.TUNE);
+    }
+    private static Tbs5530Frontend.DriveStrength requireDrive(int drive) throws IOException {
+        if (drive == 0x54) return Tbs5530Frontend.DriveStrength.RAW_54;
+        if (drive == 0x55) return Tbs5530Frontend.DriveStrength.RAW_55;
+        throw new IOException("TS drive must be 0x54 or 0x55");
     }
     private static Map<Tbs5530Frontend.Operation, Tbs5530Frontend.Plan> dryRunPlans(
-            Tbs5530FrontendExperiment experiment, boolean fallback) throws IOException {
+            Tbs5530FrontendExperiment experiment, boolean fallback, int drive) throws IOException {
         if (experiment == null) throw new IOException("Explicit frontend experiment required");
+        Tbs5530Frontend.DriveStrength strength = requireDrive(drive);
         Tbs5530Session session = new Tbs5530Session();
         long token = session.requestPermission(); session.permissionResult(token, true);
         session.connected(token, new Tbs5530Session.Resources() {
@@ -125,7 +143,7 @@ public final class Tbs5530AutonomousPlans {
         Map<Tbs5530Frontend.Operation, Tbs5530Frontend.Plan> result = new LinkedHashMap<>();
         try {
             Tbs5530Frontend.Plan probe = frontend.planProbe(); result.put(probe.operation, probe); frontend.execute(probe);
-            Tbs5530Frontend.Plan init = frontend.planInitialize(); result.put(init.operation, init); frontend.execute(init);
+            Tbs5530Frontend.Plan init = frontend.planInitialize(strength); result.put(init.operation, init); frontend.execute(init);
             frontend.readyForTune();
             Tbs5530Frontend.Plan tune = frontend.planTune(experiment.parameters(), experiment.automatic());
             result.put(tune.operation, tune); frontend.execute(tune);

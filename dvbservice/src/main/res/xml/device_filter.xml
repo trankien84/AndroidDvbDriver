@@ -85,4 +85,5 @@
     <usb-device vendor-id="0xb05"  product-id="0x1779"/> <!-- Asus U3100Mini Plus                            -->
     <usb-device vendor-id="0xccd"  product-id="0x93"/>   <!-- TerraTec Cinergy T Stick                       -->
     <usb-device vendor-id="0xccd"  product-id="0xaa"/>   <!-- TerraTec Cinergy T Stick (rev. 2)              -->
+    <usb-device vendor-id="0x734c" product-id="0x5530"/> <!-- TBS5530 DVB-T2 -->
 </resources>

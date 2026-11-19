@@ -1,5 +1,97 @@
 # Architecture decision record (ADR)
 
+## ADR-063 — TBS5530 trong đường production: hai giai đoạn USB, kiểm tra kỹ thuật và nguồn TS native
+
+**Date:** 2026-11-18, baseline `285ba0ba1c148af221ba42a475dc4fd7f44c7764`, nhánh `chore/modernize-android-build`, working tree sạch trước sửa.
+
+**Status:** Thiết kế được yêu cầu trong nhiệm vụ Phase 4; đang triển khai offline. Chưa kiểm phần cứng Phase 4, chưa `PHASE4_FUNCTIONAL_PASS`, chưa `TS_SMOKE_PASS`.
+
+### Context / Evidence
+
+B2/B3/B4 trên Samsung và B5 trên OnePlus đã nhận được dữ liệu sau bootstrap và reload ảnh gốc, mỗi lượt 132 A0. ADR-056 đã ghi `ROOT_CAUSE_CONFIRMED` riêng cho `-75`: SET_CONFIGURATION đặt AUTOINLEN 1024, reload sau đó phục hồi giá trị khởi tạo 512. Không đổi kết luận này thành xác nhận nguyên nhân lỗi chất lượng TS. B5 có hai pha OFF với BER bằng 0 ở 181/181 mẫu và BER tăng ở ON; tiêu chí SNR giảm ít nhất 6 dB theo trung vị không phù hợp để bác bỏ liên hệ với stream. Xem mục Đính chính mới trong [RESEARCH.md](RESEARCH.md).
+
+Framework hiện có `DvbUsbDevice.open()` và `tuneTo()` là final và retry bốn lần; không phù hợp với yêu cầu không nạp lại sau firmware không chắc chắn. `Creator.create()` trả `DvbDevice`, nên TBS5530 triển khai trực tiếp `DvbDevice` và vẫn đăng ký qua `DvbUsbDevice.Creator`/registry. Cả app kiểm frontend và service client đều dùng registry này. Discovery có thể cần chờ permission/re-enumeration, do đó phải chạy ngoài UI thread và không chạy lại do hộp thoại USB làm Activity dừng rồi tiếp tục.
+
+### Decision
+
+- Creator quan sát attach/detach trước I/O, kiểm VID:PID `734c:5530`, descriptor default 189 byte hoặc operational 50 byte bằng SHA đã pin từ debug. Default: xin quyền OS, bootstrap ảnh gốc bằng đúng 132 A0, đóng kết nối cũ, chờ re-enumeration hữu hạn rồi xin quyền operational mới. Chỉ tạo `DvbDevice` trên thiết bị operational. Attach trùng cùng attachment được chấp nhận trước khi chốt descriptor nếu không có detach xen giữa; identity giống nhau không được dùng để bỏ qua detach. Thiết bị mơ hồ, descriptor lạ hoặc permission bị từ chối phải dừng.
+- Mỗi `open()` operational luôn reload 132 A0 qua `USBDEVFS_CONTROL`, kể cả app mở lại khi tuner vẫn cắm. Giữ nguyên thứ tự bootstrap Android controlTransfer/reload JNI, delay 100 ms trong plan rồi theo dõi thêm 1500 ms. Reload gây detach hoặc chuyển thiếu byte phải dừng, không retry hoặc tự release CPU để cứu trạng thái. Thời gian chờ người xử lý permission ít nhất 30 giây, tách khỏi deadline I/O.
+- Production không dùng grant, ledger, history, reload store, helper PC hay card. An toàn dựa trên firmware/descriptor exact, thứ tự trạng thái, quyền OS và owner độc quyền, giới hạn thời gian, hủy/drain và cleanup. Đường debug cùng hồ sơ lịch sử giữ nguyên; ngoại lệ production này không mở lại ngân sách debug đã đóng.
+- DVB-T2 là khả năng được công bố; bandwidth 6/7/8 MHz theo `tuneTo`. Tune MANUAL PLP0 trước, AUTO tối đa một lần khi hết cửa sổ không lock; lỗi USB không được coi là lý do fallback. DVB-T/DVB-C không đủ sequence trong phạm vi này phải trả `UNSUPPORTED`, không quảng cáo chức năng chưa làm.
+- Giám sát dùng cùng mutex EP0/I2C với init/tune. Lock là SYNC_STAT 6 và không unlockDetected; không phụ thuộc bit TS lock theo frame. SNR từ bank 0x20/register 0x28, clamp 10876, công thức `10*log10(r/(12600-r))+32`; đổi theo hợp đồng framework/UI đang dùng, không lấy bytecode/JDK làm đơn vị. BER là pre-BCH theo B5; trạng thái không hợp lệ không được biến thành BER 0. RSSI dùng chuỗi Windows đã duyệt `88=00`, `87=C0`, có cache giới hạn tần suất; phần trăm là quy đổi hiển thị, không phải phép đo công suất đã hiệu chuẩn.
+- Native production nhận mặc định 16 × 16384, giới hạn queue/buffer rõ ràng, atomic stop và ring buffer cấp phát trước. Worker native chỉ reap/copy RAM/resubmit, không parser, ghi file, callback Java hoặc kiểm consent. Consumer riêng nối `ByteSource`/`ByteSink` cho demux/Dump TS/service. Không dùng `UsbBulkSource` mặc định vì vòng Java xen các lần đọc không giữ được lịch resubmit đã kiểm ở B3/B4. Khi lỗi URB, dừng ngay, discard và drain trước giải phóng; không đóng fd khi kernel còn tham chiếu bộ đệm.
+- Đóng app kiểm frontend thì dừng worker; service client dùng foreground service để tiếp tục khi app xuống nền/tắt màn hình. Giữ `mediaPlayback`, thêm `connectedDevice` cho USB sau khi quyền OS đã có; khai báo permission tương ứng. Nguồn Android chính thức ngày 18/11: [Foreground service types](https://developer.android.com/develop/background-work/services/fgs/service-types), truy vấn bằng Android CLI; loại connectedDevice yêu cầu quyền USB hoặc điều kiện kết nối hợp lệ. Không dùng grant/heartbeat PC để giữ production chạy nền.
+- Không EEPROM, LNB/DC, vệ tinh, firmware patch, B7, `8A 04xx` hoặc vendor chưa phân tích. Không đổi toolchain, minSdk 21 hoặc Java 8. Không stage/commit/push. Raw/TS/APK/firmware/serial ngoài Git.
+
+### Kiểm kê lớp và điểm tích hợp
+
+| Nhóm | Dùng cho production / giữ debug |
+| --- | --- |
+| `Tbs5530Bridge`, `Tbs5530Frontend`, `Tbs5530Cxd2878Sequences`, `Tbs5530FirmwarePlan`, `Tbs5530Session`, `Tbs5530ControlIo` | Dùng lại encoding, plan và mutex/cleanup; thêm lựa chọn drive và tune terrestrial cho production, không đổi byte firmware. |
+| `Tbs5530LifecycleCoordinator`, `Tbs5530BulkTransport`, `Tbs5530AndroidRuntime`, `Tbs5530AndroidUsbFacade`, `Tbs5530UsbBinding` | Giữ API cũ. Production dùng facade/binding cho permission/observer nhưng owner riêng; không dùng legacy bulk loop thay vòng native. |
+| Fingerprint/raw descriptor/profile, signal metrics/monitor/RSSI/sampler | Chuyển phần dùng chung sang main cùng tests, giữ tên package; debug tiếp tục gọi lớp chung, không nhân bản thuật toán. |
+| Bootstrap/reload/probe debug, autonomous policy/plans/ledger/history/grant/audit | Giữ trong debug. Production dùng `Tbs5530ProductionFirmware`, `Tbs5530ProductionAttachment`, `Tbs5530AttachmentEpoch` và JNI main hẹp, không dùng store/consent debug. |
+| `Tbs5530DvbDeviceCreator`, `Tbs5530DvbDevice`, `Tbs5530StreamGate` | Creator đăng ký registry, operational owner cung cấp hợp đồng DvbDevice; frontend/tuner hiện gộp trong sequence đã kiểm, không thêm DvbTuner giả chỉ để đủ lớp. |
+| App / service / demux | `DeviceFilter` và XML `734c:5530`, chooser discovery ngoài UI, `DvbFrontendActivity`/Dump TS và foreground `DvbService`, `ByteSource` → `DvbDemux` → file/socket. |
+
+### Chi tiết tích hợp đã chọn trong triển khai
+
+- `readSnr()` của TBS trả mdB (dB × 1000) như Af9033/Cxd2841er. UI chỉ chia 1000 cho TBS; RTL2832 dùng thang khác nên không thay toàn framework. BER giữ hợp đồng quality 0..65535 và thêm getter tỷ lệ pre-BCH không làm tròn để hiển thị/đo; không dùng quality bar gần 100% để gọi BER bằng 0.
+- RSSI quy đổi tuyến tính −100..−20 dBm thành 0..100%, clamp; đây chỉ là thang hiển thị. Chuỗi ADC Windows được đo trước khi stream, cache trong ON để tránh thêm ghi tuner vào phép nhận; chỉ đọc lại khi không active và cách ít nhất hai giây. Không ghi nhãn RSSI cached thành số đo ON mới.
+- Native dùng connection streaming riêng mở từ UsbManager, không dùng dup của control connection đang claim. Native claim interface 0, giữ sole usbfs reference sau khi Java đóng connection ban đầu; control connection không claim interface. Chỉ `CLAIMINTERFACE` và `CLEAR_HALT 0x82`, **không GET/SET_INTERFACE** vì descriptor pin chỉ có interface 0/alt 0. Việc thêm CLEAR_HALT là chuẩn bị endpoint đã phân tích, không phải vendor mới. Khi drain thất bại, đóng sole streaming fd để usbfs hủy URB đồng bộ trước free; khác debug giữ quarantine, không force-close fd còn được đường khác chia sẻ.
+- Preset native 16×16384 mặc định và 32×16384 tùy chọn, ring 4 MiB. Telemetry tối đa 65536 record cấp phát trước (khoảng 1 MiB); quá giới hạn đánh dấu truncated, không ghi đè hoặc chứng nhận duty. Timestamp là userspace sau REAPURBNDELAY/CLOCK_MONOTONIC, không phải IRQ/FX2 emission. Snapshot đầy đủ không tự chứng nhận RF hoặc TS sạch.
+- Dump TS xuất sidecar sau khi dừng thiết bị/drain, cùng cửa sổ thời gian ghi và mốc byte consumer hữu hạn; không serialize/ghi file trong vòng USB native. Mốc consumer dùng để chọn phần sau ít nhất năm giây, không nội suy thành timestamp phát RF. Nếu retune làm snapshot không bao hết recording hoặc telemetry bị cắt, để UNKNOWN thay vì ghép hai epoch.
+
+### Alternatives / Trade-offs
+
+Không đổi toàn bộ framework để bỏ retry cho mọi driver và không tạo DvbDevice trên UsbDevice default đã hết hiệu lực. SAF cần người dùng nhập firmware một lần; có thể có hai hộp thoại permission khi cắm lạnh. Kết quả đo nhiễu không chặn triển khai A–C, nhưng vẫn chặn chứng nhận TS sạch. Native ring có giới hạn: consumer quá chậm phải báo lỗi rõ, không lặng lẽ mất dữ liệu.
+
+### Validation / Reopen trigger
+
+Cần fake hai giai đoạn và nhánh detach/permission/duplicate, mở lại operational, firmware validation/thay/xóa, native 27,5/35,6 Mbps và lỗi/drain, golden monitor/frontend, JVM/build/lint/ABI/release isolation/emulator. Phần D chỉ sau card chung và `OK P4`: tối đa 10 lượt OnePlus/2 Samsung, không Windows, cùng bố trí mới do người dùng mô tả. Chưa có dữ liệu Phase 4 thì không kết luận hiệu quả ferrite/RG6/đi lại cáp. Không yêu cầu tháo bố trí mới để đo lại mốc cũ.
+
+## ADR-064 — Firmware do người dùng nhập, xác thực trước khi lưu và trước mỗi lần mở
+
+**Date:** 2026-11-18.
+
+**Status:** Được chọn cho Phase 4, đang triển khai/kiểm offline; chưa chứng nhận SAF trên điện thoại thật.
+
+### Decision / Rationale
+
+Dùng Storage Access Framework để người dùng chọn ảnh từ gói driver Linux chính thức của TBS. Chỉ nhận đúng 8192 byte/SHA-256 `b97cf208bb586f706b26aa5450de6bb97375a3e3eabe833cddb0ae3a4f69d0dc`; đọc tối đa size + 1 để từ chối tệp dài mà không cấp phát vô hạn. Lưu atomically trong `Context.getNoBackupFilesDir()`, không assets/raw/APK/Git hoặc backup. Nhập sai không làm mất ảnh hợp lệ cũ; cho phép thay/xóa và kiểm lại khi load. Không suy quyền phân phối firmware từ license GPL của source driver.
+
+### Validation / Reopen trigger
+
+Kiểm đúng/sai hash, rỗng/ngắn/dài, read lỗi, thay/xóa và tính nguyên vẹn sau nhập lỗi. Không dùng adb đẩy firmware vào app thay cho SAF trong Phần D; nếu SAF lỗi thì báo trước.
+
+## ADR-065 — Drive TS 0x55 và MANUAL PLP0 là mặc định production
+
+**Date:** 2026-11-18.
+
+**Status:** Thay đổi được yêu cầu, đang triển khai offline; so nhiễu 0x54/0x55 chưa chạy.
+
+### Decision / Rationale
+
+Đặt `0x96/0x97=0x55` theo Windows đã quan sát, thay `0x54` của nguồn `cxd2878.c`; golden K25/K36 và digest của plan phải cập nhật đồng bộ. Debug chỉ cho chọn `0x54` hoặc `0x55` mỗi lượt, mặc định `0x55`, ghi giá trị thật vào card/report. Không thêm giá trị/thanh ghi khác. MANUAL PLP0 trước/AUTO một lần sau timeout như ADR-063; không scan PLP vô hạn.
+
+### Validation / Reopen trigger
+
+Golden/test phải chứng minh đúng hai byte drive và không đổi bootstrap/reload. Nếu đo 0x55 xấu hơn rõ thì ghi bằng chứng và xin quyết định, không tự đổi production. Bố trí mới có nhiều thay đổi cùng lúc nên không tách tác dụng RG6 và đường cáp; chỉ đối chứng ferrite tự nguyện mới có thể đánh giá đóng góp riêng.
+
+## ADR-066 — Vòng nhận native liên tục là nguồn ByteSource riêng cho TBS5530
+
+**Date:** 2026-11-18.
+
+**Status:** Đang triển khai offline; chưa kiểm release trên tuner.
+
+### Decision / Rationale
+
+Chuyển thiết kế vòng native đã kiểm B3/B4 sang `usbxfer/src/main`, không chuyển các chốt debug. Nguồn nhận có worker riêng và ring RAM hữu hạn; demux/file/socket chậm không kéo dài reap→resubmit. Atomic stop, lỗi URB và đầy ring đều phải kết thúc có báo lỗi; discard/drain trước đóng owner. Debug API giữ nguyên cho chẩn đoán, release không được chứa lớp/thư viện debug.
+
+### Validation / Reopen trigger
+
+Mô phỏng nguồn 27,5/35,6 Mbps, stop, lỗi URB và consumer chậm; kiểm ABI/16 KiB, JNI load và release isolation. PASS mô phỏng hoặc emulator không phải PASS MPEG-TS trên tuner. Nếu drain chưa chắc chắn thì giữ tài nguyên còn được kernel tham chiếu và báo lỗi, không giải phóng mù.
+
 ## ADR-062 — B5 OnePlus K25 hoàn tất vận chuyển debug; TS chưa đạt và chưa xác nhận nhiễu USB
 
 **Date:** 2026-11-13, sau ordinal 4 được duyệt riêng theo ADR-061.

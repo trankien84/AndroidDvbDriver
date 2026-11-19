@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tbs5530_firmware_title">Fastvare for TBS5530</string>
+    <string name="tbs5530_firmware_source">Velg din egen fastvarefil før du åpner TBS5530. Hent filen fra den offisielle TBS Linux-driverpakken på tbsdtv.com, og følg lisensvilkårene. Pakk ut arkivet og velg dvb-usb-id5530.fw, ikke arkivfilen. Appen inneholder eller laster ikke ned fastvare.</string>
+    <string name="tbs5530_firmware_identity">Påkrevd størrelse: nøyaktig %1$d byte\nSHA-256: %2$s</string>
+    <string name="tbs5530_firmware_storage">Appen kontrollerer størrelse og SHA-256 før den erstatter den lagrede filen. Den private filen tbs5530-firmware.bin lagres i no_backup og sikkerhetskopieres ikke av Android. Valg av fil åpner ikke mottakeren og laster ikke fastvaren inn i den. Sletting fjerner bare appens kopi, ikke originalfilen. Koble fra mottakeren før du erstatter eller sletter fastvaren.</string>
+    <string name="tbs5530_firmware_usb_permissions">Android kan be om USB-tillatelse to ganger: først ved tilkobling og deretter når enheten kobles til igjen etter innlasting av fastvare. Kontroller at det er riktig TBS5530, og godkjenn hver dialog selv. Filvelgeren gir ikke USB-tillatelse. Root er ikke nødvendig.</string>
+    <string name="tbs5530_firmware_select">Velg fastvarefil…</string>
+    <string name="tbs5530_firmware_delete">Slett lagret fastvare</string>
+    <string name="tbs5530_firmware_delete_confirm">Slette appens private fastvarekopi? Originalfilen blir ikke slettet. Koble fra mottakeren først.</string>
+    <string name="tbs5530_firmware_close">Tilbake</string>
+    <string name="tbs5530_firmware_busy">Kontrollerer eller lagrer fastvare…</string>
+    <string name="tbs5530_firmware_available">Gyldig fastvare er lagret.</string>
+    <string name="tbs5530_firmware_missing">Ingen gyldig fastvare. Velg riktig fil før du åpner TBS5530.</string>
+    <string name="tbs5530_firmware_imported">Fastvaren er kontrollert og lagret. Gå tilbake for å åpne mottakeren.</string>
+    <string name="tbs5530_firmware_deleted">Appens fastvare er slettet.</string>
+    <string name="tbs5530_firmware_cancelled">Filvalg avbrutt. Ingen fastvare ble importert.</string>
+    <string name="tbs5530_firmware_picker_error">Kan ikke åpne Androids filvelger. Aktiver en dokumentleverandør og prøv igjen.</string>
+    <string name="tbs5530_firmware_unreadable">Kan ikke lese den valgte filen. Velg en lesbar fastvarefil, ikke en mappe eller et arkiv.</string>
+    <string name="tbs5530_firmware_permission_error">Lesetillatelse ble avslått. Velg filen på nytt og gi tilgang i filvelgeren.</string>
+    <string name="tbs5530_firmware_import_error">Kan ikke importere fastvaren. Kontroller at filen er nøyaktig 8192 byte og har SHA-256 som vist ovenfor. Lese- eller lagringsfeil kan også være årsaken. Kontroller statusen til den lagrede kopien før du prøver igjen.</string>
+    <string name="tbs5530_firmware_delete_error">Kan ikke slette lagret fastvare. Kontroller appens lagringsplass og prøv igjen.</string>
+</resources>

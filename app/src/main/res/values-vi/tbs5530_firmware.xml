@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tbs5530_firmware_title">Firmware TBS5530</string>
+    <string name="tbs5530_firmware_source">Trước khi mở TBS5530, hãy tự chọn tệp firmware của bạn. Lấy tệp hợp pháp từ gói trình điều khiển/firmware TBS Linux chính thức trên tbsdtv.com và tuân thủ điều khoản giấy phép. Giải nén gói trước, rồi chọn dvb-usb-id5530.fw (không chọn tệp nén). Ứng dụng không chứa hoặc tự tải firmware.</string>
+    <string name="tbs5530_firmware_identity">Kích thước bắt buộc: đúng %1$d byte\nSHA-256: %2$s</string>
+    <string name="tbs5530_firmware_storage">Ứng dụng kiểm tra kích thước và SHA-256 trước khi thay bản đã lưu. Tệp riêng tbs5530-firmware.bin nằm trong thư mục no_backup của ứng dụng và không được Android sao lưu. Không cần quyền đọc toàn bộ bộ nhớ. Chọn tệp không mở hoặc nạp firmware vào bộ thu. Xóa chỉ bỏ bản của ứng dụng, không xóa tệp gốc; hãy ngắt bộ thu trước khi thay hoặc xóa firmware.</string>
+    <string name="tbs5530_firmware_usb_permissions">Khi mở bộ thu sau đó, Android có thể hỏi quyền USB hai lần: lần đầu khi kết nối và lần nữa sau khi nạp firmware, lúc thiết bị kết nối lại. Hãy kiểm tra đúng TBS5530 và tự chấp thuận từng hộp thoại. Hộp chọn tệp khác với hai quyền USB này. Không cần root và không tự chấp thuận quyền.</string>
+    <string name="tbs5530_firmware_select">Chọn tệp firmware…</string>
+    <string name="tbs5530_firmware_delete">Xóa firmware đã lưu</string>
+    <string name="tbs5530_firmware_delete_confirm">Xóa bản firmware riêng của ứng dụng? Tệp gốc bạn đã chọn sẽ không bị xóa. Hãy ngắt bộ thu trước.</string>
+    <string name="tbs5530_firmware_close">Quay lại</string>
+    <string name="tbs5530_firmware_busy">Đang kiểm tra hoặc lưu firmware…</string>
+    <string name="tbs5530_firmware_available">Đã có bản firmware hợp lệ.</string>
+    <string name="tbs5530_firmware_missing">Chưa có firmware hợp lệ. Hãy chọn đúng tệp trước khi mở TBS5530.</string>
+    <string name="tbs5530_firmware_imported">Đã kiểm tra và lưu firmware. Quay lại màn hình chào để mở bộ thu.</string>
+    <string name="tbs5530_firmware_deleted">Đã xóa firmware của ứng dụng.</string>
+    <string name="tbs5530_firmware_cancelled">Đã hủy chọn tệp. Không nhập firmware.</string>
+    <string name="tbs5530_firmware_picker_error">Không mở được hộp chọn tệp Android. Hãy bật ứng dụng cung cấp tài liệu rồi thử lại.</string>
+    <string name="tbs5530_firmware_unreadable">Không mở được tệp đã chọn. Hãy chọn tệp firmware đọc được, không chọn thư mục hoặc tệp nén.</string>
+    <string name="tbs5530_firmware_permission_error">Quyền đọc tệp bị từ chối. Hãy chọn lại tệp và cho phép truy cập trong hộp chọn tệp Android.</string>
+    <string name="tbs5530_firmware_import_error">Không nhập được firmware. Kiểm tra tệp có đúng 8192 byte và SHA-256 hiển thị ở trên. Lỗi đọc hoặc lưu trữ cũng có thể gây thất bại. Kiểm tra trạng thái bản đã lưu trước khi thử lại.</string>
+    <string name="tbs5530_firmware_delete_error">Không xóa được firmware đã lưu. Hãy kiểm tra bộ nhớ ứng dụng rồi thử lại.</string>
+</resources>

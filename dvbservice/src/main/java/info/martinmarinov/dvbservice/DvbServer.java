@@ -39,6 +39,13 @@ class DvbServer implements Closeable {
     private final ServerSocket transferSocket = new ServerSocket();
 
     private final DvbDevice dvbDevice;
+    private volatile Socket activeControl;
+
+    void cancel() {
+        quietClose(activeControl);
+        quietClose(controlSocket);
+        quietClose(transferSocket);
+    }
 
     DvbServer(DvbDevice dvbDevice) throws IOException {
         this.dvbDevice = dvbDevice;
@@ -82,6 +89,7 @@ class DvbServer implements Closeable {
         Socket control = null;
         try {
             control = controlSocket.accept();
+            activeControl = control;
             control.setTcpNoDelay(true);
             inputStream = control.getInputStream();
             outputStream = control.getOutputStream();
@@ -115,6 +123,7 @@ class DvbServer implements Closeable {
             quietClose(inputStream);
             quietClose(outputStream);
             quietClose(control);
+            activeControl = null;
         }
     }
     

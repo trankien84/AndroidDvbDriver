@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tbs5530_firmware_title">TBS5530 firmware</string>
+    <string name="tbs5530_firmware_source">Before opening the TBS5530, choose your own firmware file. Obtain it lawfully from the official TBS Linux driver/firmware package on tbsdtv.com, following its license terms. Extract the package first and select dvb-usb-id5530.fw (not the archive). This app does not include or download firmware.</string>
+    <string name="tbs5530_firmware_identity">Required size: exactly %1$d bytes\nSHA-256: %2$s</string>
+    <string name="tbs5530_firmware_storage">The app validates the size and SHA-256 before replacing the saved copy. The private file tbs5530-firmware.bin is stored in app no_backup storage, excluded from Android backups. No broad storage permission is required. Selecting a file does not open or program the tuner. Delete removes only this app’s copy, not your original file; disconnect the tuner before replacing or deleting firmware.</string>
+    <string name="tbs5530_firmware_usb_permissions">When you later open the tuner, Android may ask for USB permission twice: once for its initial connection and again after firmware loading, when the device reconnects. Check the TBS5530 and approve each prompt yourself. The file picker is separate from these USB permissions. No root or automatic permission approval is used.</string>
+    <string name="tbs5530_firmware_select">Choose firmware file…</string>
+    <string name="tbs5530_firmware_delete">Delete saved firmware</string>
+    <string name="tbs5530_firmware_delete_confirm">Delete this app’s private firmware copy? Your original selected file will not be deleted. Disconnect the tuner first.</string>
+    <string name="tbs5530_firmware_close">Back</string>
+    <string name="tbs5530_firmware_busy">Checking or saving firmware…</string>
+    <string name="tbs5530_firmware_available">A verified firmware copy is available.</string>
+    <string name="tbs5530_firmware_missing">No verified firmware is available. Choose a valid file before opening TBS5530.</string>
+    <string name="tbs5530_firmware_imported">Firmware verified and saved. Return to the welcome screen to open the tuner.</string>
+    <string name="tbs5530_firmware_deleted">The saved firmware was deleted.</string>
+    <string name="tbs5530_firmware_cancelled">File selection cancelled. No firmware was imported.</string>
+    <string name="tbs5530_firmware_picker_error">The Android file picker could not be opened. Enable a document provider and try again.</string>
+    <string name="tbs5530_firmware_unreadable">The selected file could not be opened. Choose a readable firmware file, not a folder or archive.</string>
+    <string name="tbs5530_firmware_permission_error">File access was denied. Choose the file again and allow access in the Android file picker.</string>
+    <string name="tbs5530_firmware_import_error">Firmware could not be imported. Check that the file is exactly 8192 bytes and has the SHA-256 shown above. A read or storage error can also cause this failure. Check the saved-copy status before retrying.</string>
+    <string name="tbs5530_firmware_delete_error">The saved firmware could not be deleted. Check app storage and try again.</string>
+</resources>

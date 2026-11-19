@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Debug-only, RAM-only observer. Caller schedules ticks on its control worker and must wrap the
+ * RAM-only observer shared by production and diagnostics. Caller schedules ticks and must wrap the
  * ENTIRE sample in its generation-bound EP0 transaction, including cleanup. The injected io must
  * not call session.failed on monitor errors. No worker, receive callback, file I/O or owner is created.
  * Windows golden inventory: SHA 70fced47614ff8ec17c9e78f79fca16408c23e6bcadcfb6ad25a4c69cd7f9ded.

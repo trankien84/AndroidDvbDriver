@@ -35,13 +35,15 @@ import info.martinmarinov.drivers.tools.DeviceFilterMatcher;
 import info.martinmarinov.drivers.usb.af9035.Af9035DvbDeviceCreator;
 import info.martinmarinov.drivers.usb.cxusb.CxUsbDvbDeviceCreator;
 import info.martinmarinov.drivers.usb.rtl28xx.Rtl2xx2DvbDeviceCreator;
+import info.martinmarinov.drivers.usb.tbs5530.Tbs5530DvbDeviceCreator;
 
 public class DvbUsbDeviceRegistry {
 
     public static DvbUsbDevice.Creator[] AVAILABLE_DRIVERS = new DvbUsbDevice.Creator[] {
             new Rtl2xx2DvbDeviceCreator(),
             new CxUsbDvbDeviceCreator(),
-            new Af9035DvbDeviceCreator()
+            new Af9035DvbDeviceCreator(),
+            new Tbs5530DvbDeviceCreator()
     };
 
     /**

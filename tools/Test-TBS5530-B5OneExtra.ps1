@@ -9,6 +9,14 @@ if(Test-Path $OutputDirectory){throw 'Fresh output required'};$null=New-Item -It
 $checks=0
 function Check([bool]$v,[string]$n){if(-not $v){throw ('FAIL '+$n)};$script:checks++}
 function Refuse([scriptblock]$f,[string]$n){$caught=$false;try{& $f|Out-Null}catch{$caught=$true};Check $caught $n}
+# Freeze only the fake clock; historical card bytes and live expiry guards stay unchanged.
+$liveDayOriginal=${function:Assert-B5LiveDay}
+$fixtureDay=[DateTime]::ParseExact($prior.live_date,'yyyy-MM-dd',[Globalization.CultureInfo]::InvariantCulture)
+$fixtureNow=[DateTimeOffset]::new($fixtureDay.AddHours(12),[TimeSpan]::FromMinutes($prior.utc_offset_minutes))
+function Assert-B5LiveDay([object]$Card,[DateTimeOffset]$Now=$fixtureNow) { & $liveDayOriginal $Card $Now }
+Assert-B5LiveDay $prior;Check $true 'fake clock accepts historical approved day without editing card'
+Refuse { & $liveDayOriginal $prior $fixtureNow.AddDays(1) } 'real live-day guard still rejects expired approval'
+Check (@($prior.attempts|Where-Object {$null -ne $_.PSObject.Properties['ts_drive'] -or (Get-B5AttemptDrive $_) -ne 85}).Count -eq 0) 'legacy missing ts_drive remains default85'
 $identityOriginal=${function:Get-B5CarryProcessIdentity};function Get-B5CarryProcessIdentity([int]$ProcessId){return $null}
 $ledgerPath=Join-Path $prior.budget_directory 'b5-target-migration-manifest.jsonl';$bytes=[IO.File]::ReadAllBytes($ledgerPath);$hash=Get-B5Hash $bytes;$lines=[Text.Encoding]::UTF8.GetString($bytes).TrimEnd([char]10).Split([char]10)
 $card=$prior|ConvertTo-Json -Depth 40|ConvertFrom-Json;$card.max_attempts=4
@@ -52,6 +60,7 @@ foreach($fault in @('record','user','task','component','same-label','three','mal
 }
 Check ((Get-B5Hash ([IO.File]::ReadAllBytes($ledgerPath))) -ceq $hash) 'old ledger bytes preserved'
 [IO.File]::WriteAllText((Join-Path $OutputDirectory 'one-extra-contract.json'),($card.one_extra_extension|ConvertTo-Json -Depth 16),[Text.UTF8Encoding]::new($false))
-$r=[ordered]@{status='PASS';checks=$checks;helper_sha256=(Get-FileHash $helper -Algorithm SHA256).Hash.ToLowerInvariant();prior_ledger_sha256=$hash;prior_mutations=0;adb_calls=0;main_calls=0;hardware='NOT_RUN';actual_foreground_fixture_sha256=(Get-FileHash $fixture -Algorithm SHA256).Hash.ToLowerInvariant()}
+$r=[ordered]@{status='PASS';checks=$checks;helper_sha256=(Get-FileHash $helper -Algorithm SHA256).Hash.ToLowerInvariant();prior_ledger_sha256=$hash;prior_mutations=0;adb_calls=0;main_calls=0;hardware='NOT_RUN';fixture_clock=$fixtureNow.ToString('o');legacy_ts_drive=85;actual_foreground_fixture_sha256=(Get-FileHash $fixture -Algorithm SHA256).Hash.ToLowerInvariant()}
 [IO.File]::WriteAllText((Join-Path $OutputDirectory 'test-summary.json'),($r|ConvertTo-Json),[Text.UTF8Encoding]::new($false));Set-Item Function:Get-B5CarryProcessIdentity $identityOriginal
+Set-Item Function:Assert-B5LiveDay $liveDayOriginal
 Write-Output "PASS one extra + foreground $checks/$checks no main/ADB/old-ledger mutation. $OutputDirectory"

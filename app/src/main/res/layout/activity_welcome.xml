@@ -42,6 +42,12 @@
     </ScrollView>
 
     <Button
+        android:id="@+id/tbs5530_firmware_settings"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/tbs5530_firmware_title" />
+
+    <Button
         android:id="@+id/btn_advanced_mode"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"

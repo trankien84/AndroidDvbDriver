@@ -54,6 +54,7 @@ public class DvbFrontendActivity extends FragmentActivity {
     private CheckedTextView chHasLock;
 
     private TextView txtSnr;
+    private TextView txtBer;
     private TextView txtDroppedFps;
     private TextView txtBitRate;
     private TextView txtDeviceName;
@@ -86,6 +87,7 @@ public class DvbFrontendActivity extends FragmentActivity {
         chHasLock = (CheckedTextView) findViewById(R.id.chHasLock);
 
         txtSnr = (TextView) findViewById(R.id.txtSnr);
+        txtBer = findViewById(R.id.txtBer);
         txtDroppedFps = (TextView) findViewById(R.id.txtDroppedFps);
         txtBitRate = (TextView) findViewById(R.id.txtBitrate);
         txtDeviceName = (TextView) findViewById(R.id.txtDeviceName);
@@ -164,7 +166,8 @@ public class DvbFrontendActivity extends FragmentActivity {
     void announceMeasurements(final int snr, final int qualityPercertage, final int droppedFps,
                               final int rfStrengthPercentage,
                               final boolean hasSignal, final boolean hasCarrier,
-                              final boolean hasSync, final boolean hasLock) {
+                              final boolean hasSync, final boolean hasLock,
+                              final boolean tbs5530, final Double preBchBer) {
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
@@ -174,7 +177,11 @@ public class DvbFrontendActivity extends FragmentActivity {
                 chHasLock.setChecked(hasLock);
 
                 Resources resources = getResources();
-                txtSnr.setText(resources.getString(R.string.snr, snr));
+                txtSnr.setText(tbs5530 ? (snr < 0 ? resources.getString(R.string.snr_unavailable)
+                        : resources.getString(R.string.snr_db, snr / 1000.0))
+                        : resources.getString(R.string.snr, snr));
+                txtBer.setText(!tbs5530 || preBchBer == null ? resources.getString(R.string.ber_unavailable)
+                        : resources.getString(R.string.ber_pre_bch, preBchBer));
                 txtDroppedFps.setText(resources.getString(R.string.dropped_fps, droppedFps));
 
                 prgRfStrength.setProgress(rfStrengthPercentage);

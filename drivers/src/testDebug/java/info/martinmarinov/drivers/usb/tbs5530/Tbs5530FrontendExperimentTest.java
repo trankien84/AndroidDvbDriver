@@ -70,17 +70,26 @@ public class Tbs5530FrontendExperimentTest {
         assertFalse(e.matches(new Tbs5530DvbT2TuneParameters(594000000L,8000000,1)));
         assertFalse(e.matches(new Tbs5530DvbT2TuneParameters(602000000L,8000000,0)));
     }
-    @Test public void manualKeepsDrive54AndDoesNotAddAnyMonitor() throws Exception {
-        Tbs5530Frontend.Plan init = plans(Tbs5530FrontendExperiment.MANUAL_PLP0_K36).get(Tbs5530Frontend.Operation.INITIALIZE);
-        int drive = 0;
-        for (Tbs5530Frontend.RegisterTransaction t : init.getTransactions()) {
-            if (t.kind == Tbs5530Frontend.Kind.WRITE && t.address == 0x64 && t.bank == 0 && (t.register == 0x96 || t.register == 0x97)) {
-                assertArrayEquals(new byte[]{0x54}, t.getData()); drive++;
+    @Test public void explicitDrive54Or55ChangesOnlyTwoBytesAndKeepsPinnedGolden() throws Exception {
+        Tbs5530FrontendExperiment experiment = Tbs5530FrontendExperiment.MANUAL_PLP0_K36;
+        for (int value : new int[]{0x54, 0x55}) {
+            Tbs5530AutonomousPlans approved = new Tbs5530AutonomousPlans(experiment, value);
+            Map<Tbs5530Frontend.Operation,Tbs5530Frontend.Plan> programs = Tbs5530AutonomousPlans.dryRunPlans(experiment, value);
+            int writes = 0;
+            for (Tbs5530Frontend.RegisterTransaction t : programs.get(Tbs5530Frontend.Operation.INITIALIZE).getTransactions()) {
+                if (t.kind == Tbs5530Frontend.Kind.WRITE && t.address == 0x64 && t.bank == 0 && (t.register == 0x96 || t.register == 0x97)) {
+                    assertArrayEquals(new byte[]{(byte)value}, t.getData()); writes++;
+                }
             }
+            assertEquals(2,writes);
+            for (Tbs5530Frontend.Plan p : programs.values()) approved.require(p);
+            assertEquals(value == 0x54 ? "75875b84fc3f959b35d436560ae19ccf7e52b890173f1f5e24984367f64fe228"
+                    : "c08c4298172e3aef7c4f382794a1752eece1b7f410bbedacb24594dcc1acea72", approved.fingerprint());
         }
-        assertEquals(2,drive);
-        assertEquals(Tbs5530AutonomousPlans.dryRun().get(Tbs5530Frontend.Operation.POLL_STATUS),
-                Tbs5530AutonomousPlans.dryRun(Tbs5530FrontendExperiment.MANUAL_PLP0_K36).get(Tbs5530Frontend.Operation.POLL_STATUS));
+        assertEquals(Tbs5530AutonomousPlans.dryRun(experiment, 0x55), Tbs5530AutonomousPlans.dryRun(experiment));
+        Tbs5530AutonomousPlans old = new Tbs5530AutonomousPlans(experiment, 0x54);
+        assertThrows(IOException.class, () -> old.require(plans(experiment).get(Tbs5530Frontend.Operation.INITIALIZE)));
+        assertThrows(IOException.class, () -> new Tbs5530AutonomousPlans(experiment, 0x56));
     }
     @Test public void k25GoldenDiffContainsOnlyFrequencyParameters() throws Exception {
         Map<Tbs5530Frontend.Operation,Tbs5530Frontend.Plan> k36 = plans(Tbs5530FrontendExperiment.B5_K36_MANUAL_PLP0);

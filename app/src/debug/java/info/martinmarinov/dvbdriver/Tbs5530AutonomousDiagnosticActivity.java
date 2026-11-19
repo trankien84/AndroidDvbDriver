@@ -125,7 +125,7 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
                     intent.getBooleanExtra("control_mirror", false), intent.getBooleanExtra("explicit_set_interface_alt0", false),
                     token, true, intent.getBooleanExtra("sony_ts_output_readback",false), intent.getStringExtra("frontend_experiment"));
         if (session.nativeStream) session.configureStream(intent.getIntExtra("b3_queue_depth", 16), intent.getIntExtra("b3_urb_bytes", 16384));
-        if (intent.getBooleanExtra("b5_enabled", false)) session.configureB5();
+        if (intent.getBooleanExtra("b5_enabled", false)) session.configureB5(intent.getIntExtra("b5_ts_drive", 0x55));
         if (intent.getBooleanExtra("b4_enabled", false)) session.configureB4(
                 intent.getIntExtra("b4_duration_ms", 30000), intent.getIntExtra("b4_max_bytes", 256 * 1024 * 1024),
                 intent.getBooleanExtra("b4_tuner_rssi", false));
@@ -513,7 +513,7 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
                 }, new Tbs5530Frontend.Clock() {
                     public long elapsedRealtimeMillis() { return SystemClock.elapsedRealtime(); }
                     public void delayMillis(long millis) throws InterruptedException { Thread.sleep(millis); }
-                });
+                }, session.tsDrive);
                 execute(probe, probe.planProbe());
                 session.policy.transition(Tbs5530AutonomousPolicy.State.FRONTEND_INIT);
                 execute(probe, probe.planInitialize()); probe.readyForTune();

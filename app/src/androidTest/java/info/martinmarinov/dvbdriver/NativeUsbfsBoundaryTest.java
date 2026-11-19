@@ -61,6 +61,18 @@ public class NativeUsbfsBoundaryTest {
         assertEquals(0L, ((Long)create.invoke(null, 0, 16, 16384, 268435456, 60001)).longValue());
     }
 
+    @Test public void productionJniRejectsInvalidFdBeforeUsbIo() throws Exception {
+        System.loadLibrary("UsbXfer");
+        Class<?> source = Class.forName("info.martinmarinov.usbxfer.NativeUsbfsByteSource");
+        Method create = source.getDeclaredMethod("nativeCreate", int.class, int.class, int.class, int.class);
+        create.setAccessible(true);
+        for (int fd : new int[]{-1, Integer.MIN_VALUE}) {
+            java.lang.reflect.InvocationTargetException error = assertThrows(
+                    java.lang.reflect.InvocationTargetException.class, () -> create.invoke(null, fd, 0, 0, 16));
+            assertTrue(error.getCause() instanceof java.io.IOException);
+        }
+    }
+
     @Test public void publicConstructorRejectsNegativeFdWithoutConsentOrAudit() throws Exception {
         AtomicInteger consentCalls = new AtomicInteger();
         StringWriter audit = new StringWriter();

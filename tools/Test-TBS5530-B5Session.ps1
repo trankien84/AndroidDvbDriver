@@ -1,7 +1,7 @@
 ﻿# SPDX-License-Identifier: GPL-2.0-or-later
 # Fake-only: override device transport before evaluating main. Never invokes ADB or hardware.
 [CmdletBinding()]
-param([Parameter(Mandatory)][string]$OutputDirectory,[Parameter(Mandatory)][string]$ReportDirectory)
+param([Parameter(Mandatory)][string]$OutputDirectory,[Parameter(Mandatory)][string]$ReportDirectory,[switch]$RepositoryFixtures)
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
 $path=Join-Path $PSScriptRoot 'Invoke-TBS5530-B5Session.ps1'
@@ -15,6 +15,14 @@ foreach ($function in @($ast.EndBlock.Statements|Where-Object {$_ -is [Managemen
 $ExpectedB3HelperSha256=(Get-FileHash -LiteralPath $b3 -Algorithm SHA256).Hash.ToLowerInvariant()
 Import-B5SharedGuards $b3 $ExpectedB3HelperSha256
 Set-B5Overrides
+if ($RepositoryFixtures) {
+    function Assert-B5PrivatePath([string]$Path,[string]$Root) {
+        $full=[IO.Path]::GetFullPath($Path)
+        if (-not $full.StartsWith($repository.TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase) -or $full -cne $Path) { throw 'Fake fixture outside repository' }
+        return $full
+    }
+}
+$B5TsDrive=85;$ApproveP4OptionalFerrite=$false
 $root=Assert-B5PrivatePath ([IO.Path]::GetFullPath($OutputDirectory)) 'D:\TSDuck\logs'
 $reportRoot=Assert-B5PrivatePath ([IO.Path]::GetFullPath($ReportDirectory)) 'D:\TSDuck\reports'
 if ((Test-Path -LiteralPath $root) -or (Test-Path -LiteralPath $reportRoot)) { throw 'Fresh private fake evidence directories required' }
@@ -140,7 +148,7 @@ function Challenge {
         control_mirror=$true;explicit_set_interface_alt0=$false;sony_ts_output_readback=$false;retry=0;max_upload_per_attachment=1;max_reload_per_physical_epoch=1;
         max_session_ms=300000;heartbeat_ms=2000;fx2_reload_option='B2_RELOAD_AFTER_SET_CONFIG';fx2_reload_plan_sha256=$ExpectedReloadPlanSha256;
         bootstrap_proof='SAME_SESSION_ORIGINAL132_APP_BOUNDARIES_DRAIN_REQUIRED';b3_queue_depth=$B5QueueDepth;b3_urb_bytes=16384;b3_max_bytes=268435456;b3_duration_ms=$B5DurationMillis;
-        b5_enabled=$true;b5_rssi_sequence='WINDOWS_88_00_87_C0';b5_allow_k25_auto=($FrontendExperiment -ceq 'B5_K25_MANUAL_PLP0');b5_layout=$layout;b5_stale_prefix_bytes=2048;b5_monitor_period_ms=100;b5_monitor_jitter_ms=20;b5_rssi_samples_per_off=3;attachment_history_sha256=$null;fx2_reload_store_sha256=$h;
+        b5_ts_drive=$B5TsDrive;b5_enabled=$true;b5_rssi_sequence='WINDOWS_88_00_87_C0';b5_allow_k25_auto=($FrontendExperiment -ceq 'B5_K25_MANUAL_PLP0');b5_layout=$layout;b5_stale_prefix_bytes=2048;b5_monitor_period_ms=100;b5_monitor_jitter_ms=20;b5_rssi_samples_per_off=3;attachment_history_sha256=$null;fx2_reload_store_sha256=$h;
         fx2_reload_anchor_sha256=(Get-B5Hash ([Text.Encoding]::UTF8.GetBytes("TBS5530-FX2-RELOAD-ANCHOR/v1`n$h`n")));source_git_sha=$card.source_git_sha}
 }
 $v=Challenge
@@ -285,6 +293,7 @@ function Invoke-B5Adb([string[]]$DeviceArguments,[string]$InputText='',[string]$
         }
         '^shell am start .*Tbs5530AutonomousDiagnosticActivity' {
             if($DeviceArguments -ccontains 'b4_enabled' -or $DeviceArguments[[Array]::IndexOf($DeviceArguments,'b5_enabled')+1] -cne 'true') {throw 'Fake B5 launch mismatch'}
+            if ($DeviceArguments[[Array]::IndexOf($DeviceArguments,'b5_ts_drive')+1] -cne [string]$B5TsDrive) { throw 'Fake launch drive mismatch' }
             $script:launch=$DeviceArguments[[Array]::IndexOf($DeviceArguments,'launch_token')+1];return 'Success'
         }
         'autonomous-v1-challenge.json' { $v=Challenge;$v.launch_token=$script:launch;return ($v|ConvertTo-Json -Depth 15 -Compress) }
@@ -295,6 +304,8 @@ function Invoke-B5Adb([string[]]$DeviceArguments,[string]$InputText='',[string]$
                 $script:grantCalls++
                 if ($script:fakeFault -ceq 'grant-uncertain') { throw 'B5_FAKE_GRANT_PUBLISH_UNCERTAIN' }
                 $g=$InputText|ConvertFrom-Json
+                if ($g.b5_ts_drive -isnot [long] -and $g.b5_ts_drive -isnot [int]) { throw 'Fake grant drive type mismatch' }
+                if ($g.b5_ts_drive -ne $B5TsDrive -or $g.golden_sha256 -cne $ExpectedFrontendGoldenSha256) { throw 'Fake grant drive/plan mismatch' }
                 if ($g.b5_card_sha256 -cne $ExpectedB5CardSha256 -or $g.b5_budget_id -cne $card.budget_id -or $g.b5_attempt_ordinal -ne $B5AttemptOrdinal -or
                     $g.b5_layout -cne $layout -or $g.b5_stale_prefix_bytes -ne 2048 -or $g.b3_queue_depth -ne 16 -or $g.b3_urb_bytes -ne 16384 -or
                     $g.expires_elapsed_ms -ne 301000 -or $g.physical_recovery_epoch -cne $PhysicalRecoveryEpoch) { throw 'Fake grant binding mismatch' }
@@ -302,8 +313,15 @@ function Invoke-B5Adb([string[]]$DeviceArguments,[string]$InputText='',[string]$
             }
             $r=Report;$r|Add-Member b5_k25_auto_fallback_used $false;$r|Add-Member b5_manual_demod_lock $true;$r|Add-Member b5_actual_frontend_experiment $FrontendExperiment;$r.raw_received_bytes=2*$raw.Length;$r.ts_bytes=2*$raw.Length
             $r|Add-Member launch_token $script:launch;$r|Add-Member frontend_experiment $FrontendExperiment;$r|Add-Member ts_variant 'NATIVE_USBFS_STREAM';$r|Add-Member control_plane_only $false
-            foreach($p in @{b5_enabled=$true;b5_rssi_sequence='WINDOWS_88_00_87_C0';b5_allow_k25_auto=($FrontendExperiment -ceq 'B5_K25_MANUAL_PLP0');b5_layout=$layout;b5_stale_prefix_bytes=2048;b5_monitor_period_ms=100;b5_monitor_jitter_ms=20;b5_rssi_samples_per_off=3}.GetEnumerator()){$r|Add-Member $p.Key $p.Value}
+            foreach($p in @{b5_ts_drive=$B5TsDrive;b5_enabled=$true;b5_rssi_sequence='WINDOWS_88_00_87_C0';b5_allow_k25_auto=($FrontendExperiment -ceq 'B5_K25_MANUAL_PLP0');b5_layout=$layout;b5_stale_prefix_bytes=2048;b5_monitor_period_ms=100;b5_monitor_jitter_ms=20;b5_rssi_samples_per_off=3}.GetEnumerator()){$r|Add-Member $p.Key $p.Value}
             switch ($script:fakeFault) { 'status75' {$r.last_errno=75};'status71' {$r.last_errno=71};'detach' {$r.fx2_reload.detach_ns=123};'drain' {$r.b5_phases[1].drained=$false};'report-layout' {$r.b5_layout='bad'} }
+            switch ($script:fakeFault) {
+                'drive-report-missing' {$r.PSObject.Properties.Remove('b5_ts_drive')}
+                'drive-report-string' {$r.b5_ts_drive=[string]$B5TsDrive}
+                'drive-report-mismatch' {$r.b5_ts_drive=169-$B5TsDrive}
+                'drive-report-bool' {$r.b5_ts_drive=$true}
+                'drive-report-fraction' {$r.b5_ts_drive=[double]$B5TsDrive}
+            }
             $script:fakeTerminal=$true
             return (@{elapsed_ms=1003;expired=$false;report=$r;permission=$null}|ConvertTo-Json -Depth 15 -Compress)
         }
@@ -378,7 +396,153 @@ foreach ($fault in @('permission','foreground','model','serial','grant-uncertain
         Refuse {Assert-B5Ledger ([IO.File]::ReadAllBytes((Join-Path $B5SessionDirectory 'b5-session-manifest.jsonl'))) $ExpectedB5CardSha256 $card 2} ('no replay '+$fault)
     }
 }
-$Serial='offline-fixture'
+$Serial='offline-fixture';$script:fakeFault=''
+
+function P4Card([string]$Name) {
+    $c=Card $Name;$c.schema='TBS5530-P4-CARD/v1';$c.approval='OK P4';$c.max_attempts=3;$c.max_android=3;$c.max_windows=0;$c.attempts=$c.attempts[0..2]
+    foreach ($pin in @{model='GM1900';manufacturer='OnePlus';api=30;phase4_scope='K25_DEBUG_ONLY';max_oneplus=10;max_samsung=2;max_android_debug=3;windows_authorized=$false}.GetEnumerator()) { $c|Add-Member $pin.Key $pin.Value -Force }
+    for ($i=0;$i -lt 3;$i++) {
+        $c.attempts[$i]|Add-Member ts_drive @(85,84,85)[$i] -Force
+        $c.attempts[$i]|Add-Member optional ($i -eq 2) -Force
+        $c.attempts[$i]|Add-Member ferrite_only ($i -eq 2) -Force
+        $c.attempts[$i].golden_sha256=(@('d','f','d')[$i]*64)
+    }
+    return ($c|ConvertTo-Json -Depth 20|ConvertFrom-Json)
+}
+$p4=P4Card 'p4-unit'
+Assert-B5Card $p4 @{} 1 $epoch 16 16384 85;Check $true 'serialized P4 accepts OK P4 and drive55'
+Assert-B5Card $p4 @{} 2 $epoch2 16 16384 84;Check $true 'serialized P4 drive54 second attempt'
+Assert-B5Card $p4 @{} 3 $p4.attempts[2].physical_recovery_epoch 16 16384 85;Check $true 'P4 optional ferrite drive55 third'
+$c=P4Card 'p4-two';$c.max_attempts=2;$c.attempts=$c.attempts[0..1]
+Assert-B5Card $c @{} 2 $epoch2 16 16384 84;Check $true 'P4 two mandatory attempts without optional'
+foreach ($fault in @('approval','schema','phase','model','manufacturer','api','api-string','windows','windows-auth','windows-capture','oneplus','samsung','debug','android','fourth','k36','order','missing-drive','string-drive','bool-drive','fraction-drive','optional','ferrite','carry','migration','extension')) {
+    $c=P4Card ('p4-'+$fault)
+    switch ($fault) {
+        'approval' {$c.approval='OK B5'}
+        'schema' {$c.schema='TBS5530-B5-CARD/v1'}
+        'phase' {$c.phase4_scope='PRODUCTION'}
+        'model' {$c.model='SM-X926B'}
+        'manufacturer' {$c.manufacturer='Other'}
+        'api' {$c.api=36}
+        'api-string' {$c.api='30'}
+        'windows' {$c.max_windows=1}
+        'windows-auth' {$c.windows_authorized=$true}
+        'windows-capture' {$c|Add-Member windows_capture ([pscustomobject]@{authorized=$true})}
+        'oneplus' {$c.max_oneplus=11}
+        'samsung' {$c.max_samsung=3}
+        'debug' {$c.max_android_debug=4}
+        'android' {$c.max_android=4}
+        'fourth' {$c.max_attempts=4}
+        'k36' {$c.attempts[0].frontend_experiment='B5_K36_MANUAL_PLP0';$c.attempts[0].allow_k25_auto=$false}
+        'order' {$c.attempts[0].ts_drive=84}
+        'missing-drive' {$c.attempts[0].PSObject.Properties.Remove('ts_drive')}
+        'string-drive' {$c.attempts[0].ts_drive='85'}
+        'bool-drive' {$c.attempts[0].ts_drive=$true}
+        'fraction-drive' {$c.attempts[0].ts_drive=85.0}
+        'optional' {$c.attempts[1].optional=$true}
+        'ferrite' {$c.attempts[2].ferrite_only=$false}
+        'carry' {$c|Add-Member carry_forward $null}
+        'migration' {$c|Add-Member target_migration $null}
+        'extension' {$c|Add-Member one_extra_extension $null}
+    }
+    Refuse {Assert-B5Card $c @{} 1 $epoch 16 16384 85} ('P4 scope refuses '+$fault)
+}
+Refuse {Assert-B5Approval $p4 'OK B5'} 'P4 does not manufacture OK B5'
+Refuse {Assert-B5Approval (Card 'approval-b5') 'OK P4'} 'OK P4 cannot authorize B5 schema'
+Refuse {Assert-B5Card $p4 @{} 2 $epoch2 16 16384 85} 'P4 second drive mismatch'
+Refuse {Assert-B5Card $p4 @{} 2 $epoch2 16 16384 '84'} 'card drive argument string refused'
+Refuse {Assert-B5Card (Card 'legacy54') @{} 1 $epoch 16 16384 84} 'legacy absent drive permits only85'
+foreach ($drive in @(84,85)) {
+    $B5TsDrive=$drive;$c=Card ('drive'+$drive);$c.attempts[0]|Add-Member ts_drive $drive
+    Assert-B5Card $c @{} 1 $epoch 16 16384 $drive;Check $true ('explicit numeric drive '+$drive)
+    $v=Challenge;Assert-B5Challenge $v $epoch 1001;Check $true ('challenge exact drive '+$drive)
+    foreach ($bad in @('missing','string','bool','fraction','mismatch')) {
+        $v=Challenge
+        switch ($bad) {
+            'missing' {$v.PSObject.Properties.Remove('b5_ts_drive')}
+            'string' {$v.b5_ts_drive=[string]$drive}
+            'bool' {$v.b5_ts_drive=$true}
+            'fraction' {$v.b5_ts_drive=[double]$drive}
+            'mismatch' {$v.b5_ts_drive=169-$drive}
+        }
+        Refuse {Assert-B5Challenge $v $epoch 1001} ('challenge drive '+$drive+' '+$bad)
+    }
+}
+$B5TsDrive=85
+# Ledger tests use synthetic rows and a review stub, never historical state.
+$reviewOriginal=${function:Read-B5Review}
+function Read-B5Review { return [pscustomobject]@{sha256=('c'*64);result='B5_REVIEWED'} }
+function TamperedLedgerRow([byte[]]$Prefix,[object]$Row) {
+    $Row|Add-Member previous_sha256 (Get-B5Hash $Prefix)
+    return ,[byte[]]($Prefix+[Text.Encoding]::UTF8.GetBytes(($Row|ConvertTo-Json -Compress -Depth 8)+"`n"))
+}
+$ledgerPath=Join-Path $root 'p4-fake-ledger.jsonl'
+$stream=[IO.FileStream]::new($ledgerPath,[IO.FileMode]::CreateNew,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+try {
+    $prefix=Add-B5ManifestRecord $stream ([byte[]]@()) ([pscustomobject]@{event='HEADER';card_sha256=$hash;budget_id=$p4.budget_id;max_attempts=3;max_windows=0})
+    foreach ($ordinal in 1..3) {
+        $a=$p4.attempts[$ordinal-1];$null=Assert-B5Ledger $prefix $hash $p4 $ordinal
+        $before=$prefix
+        foreach ($bad in @('missing','string','mismatch','golden')) {
+            $row=[pscustomobject]@{event='CONSUME';ordinal=$ordinal;epoch=$a.physical_recovery_epoch;ts_drive=$a.ts_drive;queue_depth=16;urb_bytes=16384;frontend_experiment=$a.frontend_experiment;golden_sha256=$a.golden_sha256;reload_plan_sha256=$a.reload_plan_sha256;previous_offline_validation_sha256=('c'*64)}
+            switch ($bad) {'missing' {$row.PSObject.Properties.Remove('ts_drive')};'string' {$row.ts_drive=[string]$a.ts_drive};'mismatch' {$row.ts_drive=169-$a.ts_drive};'golden' {$row.golden_sha256='0'*64}}
+            $tampered=TamperedLedgerRow $before $row
+            try { Assert-B5Ledger $tampered $hash $p4 ($ordinal+1)|Out-Null;throw 'bad row accepted' } catch { Check ($_.Exception.Message -in @('B5_TS_DRIVE_BINDING_MISMATCH','B5_FRONTEND_CARD_BINDING_MISMATCH')) ('P4 consume rejects '+$ordinal+' '+$bad) }
+        }
+        $prefix=Add-B5ManifestRecord $stream $before ([pscustomobject]@{event='CONSUME';ordinal=$ordinal;epoch=$a.physical_recovery_epoch;ts_drive=$a.ts_drive;queue_depth=16;urb_bytes=16384;frontend_experiment=$a.frontend_experiment;golden_sha256=$a.golden_sha256;reload_plan_sha256=$a.reload_plan_sha256;previous_offline_validation_sha256=('c'*64)})
+        Refuse {Assert-B5Ledger $prefix $hash $p4 $ordinal} ('P4 consumed replay '+$ordinal)
+        $wrong=TamperedLedgerRow $prefix ([pscustomobject]@{event='RECEIPT';ordinal=$ordinal;ts_drive=(169-$a.ts_drive);session_closed=$false;drained=$true;result='REVIEW_REQUIRED';queue_depth=16;urb_bytes=16384})
+        Refuse {Assert-B5Ledger $wrong $hash $p4 ($ordinal+1)} ('P4 receipt drive mismatch '+$ordinal)
+        $prefix=Add-B5ManifestRecord $stream $prefix ([pscustomobject]@{event='RECEIPT';ordinal=$ordinal;ts_drive=$a.ts_drive;session_closed=$false;drained=$true;result='REVIEW_REQUIRED';queue_depth=16;urb_bytes=16384})
+    }
+    Refuse {Assert-B5Ledger $prefix $hash $p4 4} 'P4 no fourth debug attempt'
+} finally { $stream.Dispose();Set-Item Function:Read-B5Review $reviewOriginal }
+
+# Main-path checks pin the serialized card before any fake transport call.
+$Approval='OK P4';$B5TsDrive=85;SetupIntegration 'p4-main'
+$c=P4Card 'p4-main'
+foreach ($key in @('schema','approval','max_attempts','max_android','max_windows','phase4_scope','max_oneplus','max_samsung','max_android_debug','windows_authorized','attempts')) { $card|Add-Member $key $c.$key -Force }
+$card.attempts[0].golden_sha256=$ExpectedFrontendGoldenSha256
+foreach ($a in $card.attempts) { $a.reload_plan_sha256=$ExpectedReloadPlanSha256 }
+Write-B5NewJson ($B5CardPath+'.p4') $card;$B5CardPath+='.p4';$ExpectedB5CardSha256=HashFile $B5CardPath
+$calls=$script:fakeCalls;$Approval='OK B5'
+Refuse {& {Invoke-Expression $main}} 'main mismatched approval refused'
+Check ($script:fakeCalls -eq $calls) 'wrong P4 approval causes no transport'
+$Approval='OK P4'
+$result=& {Invoke-Expression $main}
+Check ($result[-1] -eq 1 -and $script:grantCalls -eq 1) 'P4 main OK P4 only fake launch/grant/report'
+$rows=@([IO.File]::ReadAllLines((Join-Path $B5SessionDirectory 'b5-session-manifest.jsonl'))|ForEach-Object {$_|ConvertFrom-Json})
+Check ($rows[1].ts_drive -eq 85 -and $rows[2].ts_drive -eq 85) 'P4 consume and receipt carry drive'
+$calls=$script:fakeCalls
+Refuse {& {Invoke-Expression $main}} 'P4 main replay refused'
+Check ($script:fakeCalls -eq $calls) 'P4 replay no transport'
+$B5AttemptOrdinal=2;$PhysicalRecoveryEpoch=$epoch2;$B5TsDrive=84
+$savedGolden=$ExpectedFrontendGoldenSha256;$ExpectedFrontendGoldenSha256=$card.attempts[1].golden_sha256
+$reviewOriginal=${function:Read-B5Review}
+function Read-B5Review { return [pscustomobject]@{sha256=('c'*64);result='B5_REVIEWED'} }
+try {
+    $result=& {Invoke-Expression $main}
+    Check ($result[-1] -eq 1 -and $script:grantCalls -eq 2) 'P4 second54 uses distinct pinned golden and one grant'
+    $rows=@([IO.File]::ReadAllLines((Join-Path $B5SessionDirectory 'b5-session-manifest.jsonl'))|ForEach-Object {$_|ConvertFrom-Json})
+    Check ($rows[3].ts_drive -eq 84 -and $rows[3].golden_sha256 -cne $rows[1].golden_sha256 -and $rows[4].ts_drive -eq 84) 'P4 drive54 consume and receipt bind separate golden'
+} finally { Set-Item Function:Read-B5Review $reviewOriginal }
+$calls=$script:fakeCalls;$B5TsDrive=85;$ExpectedFrontendGoldenSha256=$savedGolden
+$B5AttemptOrdinal=3;$PhysicalRecoveryEpoch=$card.attempts[2].physical_recovery_epoch;$ApproveP4OptionalFerrite=$false
+Refuse {& {Invoke-Expression $main}} 'optional ferrite not autoexecuted'
+Check ($script:fakeCalls -eq $calls) 'optional not selected no transport'
+$B5AttemptOrdinal=1;$PhysicalRecoveryEpoch=$epoch;$Approval='OK B5'
+foreach ($fault in @('none','missing','string','mismatch','bool','fraction')) {
+    $B5TsDrive=84;$script:fakeFault=$(if($fault -eq 'none'){''}else{'drive-report-'+$fault})
+    SetupIntegration ('drive54-'+$fault)
+    $card.attempts[0]|Add-Member ts_drive 84 -Force
+    Write-B5NewJson ($B5CardPath+'.drive') $card;$B5CardPath+='.drive';$ExpectedB5CardSha256=HashFile $B5CardPath
+    $threw=$false
+    try {$result=& {Invoke-Expression $main}} catch {$threw=$true}
+    $rows=@([IO.File]::ReadAllLines((Join-Path $B5SessionDirectory 'b5-session-manifest.jsonl'))|ForEach-Object {$_|ConvertFrom-Json})
+    if ($fault -eq 'none') { Check (-not $threw -and $script:grantCalls -eq 1 -and $rows[1].ts_drive -eq 84 -and $rows[2].ts_drive -eq 84 -and $rows[2].capture_complete) 'drive54 launch/challenge/grant/terminal/consume/receipt bound' }
+    else { Check ($threw -and $rows[2].session_closed) ('terminal drive fails closed '+$fault) }
+}
+$B5TsDrive=85
 foreach ($scriptPath in @($path,$PSCommandPath,$b3)) {
     $b=[IO.File]::ReadAllBytes($scriptPath);$text=[Text.Encoding]::UTF8.GetString($b)
     Check (($b[0..2]-join ',') -ceq '239,187,191' -and -not [regex]::IsMatch($text,'(?<!\r)\n')) 'BOM/CRLF preserved'

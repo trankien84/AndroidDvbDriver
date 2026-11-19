@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="snr_db">SNR: %1$.2f dB</string>
+    <string name="snr_unavailable">SNR: chưa có số đo</string>
+    <string name="ber_unavailable">BER trước BCH: chưa có số đo</string>
+    <string name="ber_pre_bch">BER trước BCH: %1$.3e</string>
+    <string name="recording_diagnostics_full">Hãy dừng rồi mở lại thiết bị trước khi ghi thêm; hàng đợi thông tin chẩn đoán đã đầy.</string>
+</resources>

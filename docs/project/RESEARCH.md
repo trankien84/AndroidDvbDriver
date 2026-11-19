@@ -1,5 +1,63 @@
 # Research log (append-only)
 
+## 2026-11-19 — P4 lượt 1 chưa tới đo; tách tác dụng bố trí khỏi drive
+
+**RUNTIME-OBSERVED:** HEAD `285ba0b`, pin APK/source/helper không đổi. Lượt K25/drive `0x55` bootstrap đủ 132 A0/4693 ms rồi dừng ATTACH_PERMISSION_UI_TIMEOUT tại WAIT_REENUMERATION. Journal có detach/attach operational nhưng chưa permission-request/descriptor seal/owner; reload null, OFF–ON rỗng, TS 0 byte. Dọn USB được xác nhận và người dùng rút tuner. Không suy lỗi firmware hoặc URB từ timeout UI; người dùng thấy hộp chọn app và app mất focus khoảng 64 giây, là evidence điều phối cần xử lý.
+
+### Quy tắc so sánh đã duyệt ngày 19/11
+
+Tác dụng **cả bố trí mới** = bước 2 drive `0x54` so B5 cũ drive `0x54`; tác dụng drive = bước 1 `0x55` so bước 2 `0x54`, cùng ngày/bố trí. TS sạch vẫn xét bước 1/6/7 là production `0x55`; chỉ bước 2 sạch thì `EMI_MITIGATED_AT_0x54_ONLY`, không tự đổi production. Dump không có timestamp ghi tỷ lệ thời gian N/A, không suy từ TS thuần; khi đó cần đủ CC/TEI sau 5 giây, PCR liên tục và bitrate trung bình so mux/PCR mới xét sạch. Bố trí nhiều biện pháp không tách được RG6/đường cáp riêng; chỉ ferrite có thể đối chứng tự nguyện khi đủ điều kiện.
+
+B5 thật dùng target 10/30/10/10 giây, monitor 100 ms ±20 ms; thời lượng observed gồm overhead 10,0969/30,5142/10,0293/10,1901 giây, không biến overhead thành target mới. Khoảng monitor trung vị OFF1/ON1/OFF2/ON2 là 103,92/99,89/112,77/104,80 ms. Đây là đọc lại dữ liệu cũ, không phép RF mới.
+
+| Lượt | BER zero OFF / ON | SNR median OFF / ON, dB | RSSI OFF | Duty tổng ON1/ON2 | CC/phút; TEI/phút ON1/ON2 | OFF so được? |
+| --- | --- | --- | --- | --- | --- | --- |
+| B5 cũ 0x54 | 100% / 2,4814% | 24,7495 / 18,8976 | −64,85 dBm | 23,4919% / 23,7173% | 5467,854; 31,204 / 5233,573; 0 | Mốc |
+| P4 bước 1 0x55 | N/A / N/A | N/A / N/A | N/A | N/A | N/A, chưa TS | Không đủ số đo |
+| P4 bước 2 0x54 | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | Chưa so |
+| Ferrite / release 6/7/11 | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | Chưa so |
+
+**Kết luận mới:** EMI INCONCLUSIVE, tác dụng drive UNKNOWN, chưa PHASE4_FUNCTIONAL_PASS/TS sạch. Không hỏi mở ferrite vì chưa đủ điều kiện, không tạo ADR kết luận nhiễu đã giảm. Giữ receipt ordinal 1, không chạy lại hoặc chuyển release sau lỗi. Cần kế hoạch tiếp nối hữu hạn có kế thừa số lượt và xử lý hộp chọn app trước khi lặp đúng bước 1; card helper hiện chỉ ràng ba ordinal 55/54/55 tùy chọn.
+
+## 2026-11-18 — Đính chính kết luận B5 và chuẩn bị Phase 4
+
+**Phạm vi:** đọc lại bundle `phase31-b5-20261113-124425-302b54cb`, không chạy tuner mới. Baseline Android `285ba0ba1c148af221ba42a475dc4fd7f44c7764`; references đo lại không đổi: official `2ce787de9f6e81b4294692a45de15596ae2e1322`, CoreELEC `072f8e99e0ac66d88d7278784e922e08e8253210`, community C `c5fa27eecbe80633cbb365cc44656daea1c0e2e3`, Go `6aaa1899991c875ba0482fa9098adc6c83b01fd8`. Không sync hoặc sửa references.
+
+### Đính chính
+
+Tiêu chí cũ yêu cầu OFF−ON ít nhất 6 dB theo trung vị chọn không tốt: pha ON chứa cả đợt dữ liệu và khoảng nghỉ giữa các T2-frame, nên trung vị trộn hai trạng thái. Chênh 7,015 rồi 1,755 dB không đủ để bác bỏ liên hệ với lưu lượng USB. Bằng chứng pre-BCH BER mạnh hơn: OFF1 93/93 và OFF2 88/88 mẫu bằng 0; ON1/ON2 có BER khác 0 khoảng 96–98%, trung vị lần lượt `1,09086e-4` và `4,98409e-5`. SNR giảm ngay sau bắt đầu nhận và lặp lại ở hai cặp pha.
+
+**Kết luận đã điều chỉnh:** nhiễu liên quan tới stream USB được **ủng hộ mạnh**, nhưng vị trí ghép nhiễu tại hộp/cáp RF vẫn là giả thuyết, chưa `ROOT_CAUSE_CONFIRMED`. Thay đổi RG6, ferrite và đường cáp mới được áp dụng cùng nhau; chưa có phép đo Phase 4 để gán mức cải thiện hoặc tác dụng riêng. Các kết luận thận trọng trong ADR-062 và các mục cũ được giữ làm lịch sử; mục này thay cách diễn giải tiêu chí B5, không sửa số liệu/raw hoặc cấp thêm lượt B5.
+
+ADR-056 đã xác nhận nguyên nhân lỗi USB `-75` sau SET_CONFIGURATION và bản sửa reload ảnh gốc; không cần tạo lại ADR cho cùng phát hiện. Kết luận `ROOT_CAUSE_CONFIRMED` của lỗi USB và kết luận chưa xác nhận của nhiễu RF là hai vấn đề khác nhau.
+
+### Tính lại B5 bằng công cụ so sánh Phase 4
+
+Công cụ `tools/ts/analyze_phase4_comparison.py` đọc bundle cũ, không sửa raw; focused 24 và regression 117 tests PASS theo lần chạy riêng của worker. Bảng đầy đủ/JSON và lệnh ở bundle `phase4-20261118-214528-0c6f76f6` ngoài Git. Kết quả chỉ là tính lại dữ liệu lịch sử, không phải lượt hardware mới.
+
+| Chỉ số B5 | OFF1 / OFF2 | ON1 / ON2 |
+| --- | --- | --- |
+| BER bằng 0 | 93/93; 88/88 | 6/303; 4/100 |
+| BER khác 0 | 0%; 0% | 98,0198%; 96% |
+| BER trung vị | 0; 0 | 0,000109085648; 0,0000498408565 |
+| SNR trung vị, dB | 25,475; 22,087 | 18,460; 20,332 |
+| RSSI trung vị, dBm | −64,85; −64,85 | UNKNOWN, không đo trong ON |
+| Mbps sau 5 giây | Không Bulk | 8,78285; 8,52212 |
+| Tỷ lệ thời gian có dữ liệu theo completion | Không Bulk | Tổng 23,4919%; 23,7173%; trung vị các bin 240 ms 29,1344%; 29,1549% |
+| Độ dài đợt trung vị | Không Bulk | 69,9774 ms; 70,0091 ms |
+| CC/phút; TEI/phút sau 5 giây | Không áp dụng | 5467,854; 31,204 và 5233,573; 0 |
+| Mất demod lock / lỗi URB dữ liệu | 0 / không Bulk | 0 / 0 ở cả hai ON |
+
+Tỷ lệ thời gian có dữ liệu dùng khoảng completion đầu–cuối mỗi burst, ngưỡng tách đợt 15 ms, các bin đầy đủ 240 ms có tính cả bin im lặng; không phải thời gian chiếm bus đo bằng thiết bị điện. Giữ riêng trung vị bin và tổng theo thời gian, không đổi thành FULL% frame RF. Dữ liệu thiếu timestamp ở bản Dump TS thuần phải giữ UNKNOWN cho chỉ số này. SNR p10 gộp OFF/ON lần lượt 21,8885/17,5151 dB, trung vị gộp 24,7495/18,8976 dB; bảng JSON vẫn giữ từng pha để tránh lặp sai lầm trộn trung vị của B5.
+
+### Phase 4: câu hỏi và kiểm chứng
+
+Đưa bootstrap → re-enumerate → permission mới → reload → frontend/native stream vào main theo [ADR-063](DECISIONS.md). Firmware nhập bằng SAF, không nằm trong APK/Git. Cấu hình production dùng MANUAL PLP0 và drive `0x55`; debug có đối chứng `0x54/0x55` nhưng không thay thứ tự firmware.
+
+Phần D dùng B5 cũ làm mốc, cùng OnePlus/K25/cáp UGREEN C→B và bố trí mới, không yêu cầu tháo RG6 hoặc dựng lại bố trí cũ. Kiểm SNR và RSSI trung vị OFF lệch không quá 2 dB trước khi kết luận so sánh khác ngày. Giữ bốn pha 10/30/10/10 giây và monitor 100 ms ±20 ms. TS sau năm giây phải có tỷ lệ thời gian có dữ liệu ít nhất 90%, BER ON ít nhất 90% bằng 0, SNR tụt không quá 2 dB, CC+TEI không quá 1/phút, không mất demod lock/lỗi URB mới được gọi sạch. Plain TS không chứa timestamp USB thì không tự tính tỷ lệ thời gian có dữ liệu từ bitrate.
+
+Đo chức năng release và nhiễu cùng một phiên sau card/`OK P4`; chưa chạy ở mốc ghi mục này. So hai drive để báo bằng chứng; không tự đổi drive production nếu `0x55` xấu hơn. Đối chứng mở ferrite chỉ hỏi một lần khi lượt đầu tốt lên rõ và người dùng tự nguyện. Không Windows, không thử thêm vượt trần 10 OnePlus/2 Samsung; không dùng lượt dư cho giả thuyết mới.
+
 ## 2026-11-13, OnePlus K25 B5 thực — ON làm SNR/BER xấu hơn nhưng chưa đạt ngưỡng lặp để kết luận USB EMI
 
 **RUNTIME-OBSERVED:** Ordinal 4 theo card `0aad1b96…f217c5` được người dùng duyệt riêng, OnePlus GM1900/API 30/boot 408, OTG trực tiếp/không nguồn phụ, K25 506 MHz/8 MHz/MANUAL PLP0, bố trí khoảng 33 cm. Bootstrap 132/132/image 8192 byte/payload 8196 byte đầy đủ; reload sau SET_CONFIGURATION 132/132 COMPLETE, detach_ns=-1. Đủ bốn pha, ON1 34340864 byte và ON2 11141120 byte, first status/errno 0, data errors 0, writer drop 0/failure null, outstanding 0/quarantine false và DRAIN_CONFIRMED. Đây là lần đầu OnePlus được kiểm thật với reload; không có `-75`/`-71` trong lượt này.

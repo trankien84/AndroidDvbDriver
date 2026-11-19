@@ -1,5 +1,37 @@
 # Port TBS5530 sang Android — trạng thái hiện tại
 
+## 2026-11-19 — P4 lượt 1 bootstrap đủ, dừng tại hộp chọn app sau re-enumeration
+
+**Chưa hoàn tất Phần D.** Sau kiểm pin và duyệt successor target ADB, candidate debug được install-r đúng một lần. Lượt 1 K25/drive `0x55` bootstrap 132/132 A0, sau đó terminal `ATTACH_PERMISSION_UI_TIMEOUT` tại WAIT_REENUMERATION; chưa reload/frontend/OFF–ON/TS. Dọn USB `RUNTIME_DRAIN_CONFIRMED`, người dùng đã rút tuner. Không tự retry hoặc chuyển release sau lỗi.
+
+HEAD vẫn `285ba0b`; manifest 499 tệp/SHA và hai APK/helper/chứng chỉ khớp hoàn toàn. Target ADB đổi được người dùng duyệt riêng trước I/O, UUID/ngân sách giữ nguyên. Người dùng xác nhận bố trí mới đúng card. Hộp USB hai lựa chọn main/Debug là hai Activity của cùng app; attach-only debug cố ý đóng, không tự tạo grant. Đã gỡ đúng gói instrumentation thừa theo yêu cầu, không gỡ app chính, history không đổi.
+
+Journal ghi detach rồi attach operational nhưng không tới permission-request/owner; người dùng thấy hộp chọn app, log app mất focus khoảng 64 giây. Đây là bằng chứng vấn đề điều phối/quyền cần xử lý, chưa phải lỗi URB hoặc firmware nạp dở. Ordinal 1/receipt được giữ nguyên; không gọi là pre-grant refusal. Card máy đọc chưa có lịch lặp bước 1 ngoài chuỗi `55/54/55 tùy chọn`; cần kế hoạch tiếp nối có kế thừa lượt đã dùng, không xóa budget hoặc lách chốt.
+
+`PHASE4_FUNCTIONAL_PASS` chưa đạt, nhiễu `INCONCLUSIVE`, tác dụng drive UNKNOWN, `TS_SMOKE_PASS=false`. Bước 2–11 NOT RUN, không hỏi mở ferrite khi chưa đủ điều kiện. Báo cáo/bằng chứng đã lọc ở bundle `phase4-preflight-20261119` ngoài Git; xem [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md). Không stage/commit/push, không đổi source/helper/APK/pins phần mềm.
+
+## 2026-11-18 — Phase 4 production đã tích hợp và kiểm offline; người dùng chọn giữ card chờ
+
+**Chốt sau khi trình card:** người dùng chọn chưa chạy, chưa cấp `OK P4`. Không install candidate trên điện thoại hoặc chạy tuner. Card chung và card debug đã khóa pin/validator PASS, nhưng phải kiểm lại ngày và thiết bị rồi trình lại trước phiên thật nếu đã sang ngày khác. Không tự dùng trần 10/2 làm quyền chạy.
+
+**Đường TBS5530 đã có trong release**, gồm nhập firmware SAF/no_backup, hai giai đoạn USB, reload mỗi open operational, DVB-T2 MANUAL PLP0/AUTO một lần, drive `0x55`, SNR/BER/lock và nguồn TS native nối app/service. Không grant/ledger/helper trong production; debug vẫn giữ và thêm đối chứng `0x54/0x55`. Kiến trúc/kiểm kê ở [ADR-063 đến ADR-066](DECISIONS.md), hướng dẫn ở [docs/user/tbs5530.md](../user/tbs5530.md).
+
+Gate v4 build/app lint PASS; JVM app 122, driver 548 PASS + 5 SKIP, service 15, usbxfer 86. Native host/Python/helper fake, 17 instrumentation cuối và store 1/1 PASS; hồi quy emulator 43/43 trên candidate trước chốt DEFAULT hash. Release isolation/bốn ABI/ELF64 16 KiB PASS tĩnh. **Driver lint vẫn FAIL lịch sử một lỗi receiver flag**, không gọi mọi gate xanh. Release cài/mở Welcome emulator được, nhưng kiểm UI tiếp bị system/launcher ANR; xem [TEST-MATRIX.md](TEST-MATRIX.md) cho phạm vi và lỗi trung gian.
+
+APK release thử nghiệm được ký cục bộ bằng debug key theo người dùng duyệt, không debuggable; cùng applicationId/chứng chỉ nên chỉ cần cập nhật APK một lần từ debug sang release, không phải gỡ app. Không dùng key này để phát hành. APK/raw/firmware/card thực ở ngoài Git.
+
+Bố trí người dùng xác nhận đổi từ **18/11/2026**: RG6 IEC kim loại dài 1,5 m, mối IEC nhựa xa hộp; UGREEN C→B OnePlus và cáp chữ Y Samsung đều có hai ferrite sát hai đầu, không vòng; USB dự định ngược chiều coax/không cuộn, OnePlus 1–1,5 m và Samsung 0,5 m. Chưa đo hiệu quả; [RESEARCH.md](RESEARCH.md) đã đính chính B5 bằng BER và có bảng mốc tính lại.
+
+OnePlus chỉ đọc đã xác minh GM1900/API30/boot408/Awake; chưa cài candidate hoặc chạy tuner. **Phần D NOT RUN**, chưa `PHASE4_FUNCTIONAL_PASS`, kết luận EMI mới hoặc `TS_SMOKE_PASS=true`. Card chung vẫn phải khóa pin và nhận `OK P4`; không Windows/không dựng lại bố trí cũ, trần 10 OnePlus/2 Samsung. Giữ minSdk 21/Java 8/toolchain; không stage/commit/push. GitNexus không xác minh được index hiện hành, dùng source/diff/tests độc lập.
+
+## 2026-11-18 — Phase 4 đang triển khai offline; chưa chạy phiên đo mới
+
+**Đã kiểm đúng baseline `285ba0b`/nhánh `chore/modernize-android-build`, working tree sạch đầu phiên.** Đã đọc bundle B5 và ghi kiến trúc production trong [ADR-063 đến ADR-066](DECISIONS.md): firmware nhập SAF, bootstrap/handoff/reload có kiểm kỹ thuật, DVB-T2 MANUAL PLP0, drive 0x55, native main ByteSource và service không phụ thuộc helper/grant/ledger. Đang tích hợp và kiểm offline; chưa chứng nhận build/gate mới hoặc release trên tuner.
+
+Đã thêm mục **Đính chính** trong [RESEARCH.md](RESEARCH.md): BER OFF 181/181 bằng 0 và BER tăng ON ủng hộ mạnh nhiễu liên quan stream USB; ngưỡng trung vị SNR giảm 6 dB không phù hợp để bác bỏ liên hệ. Vị trí ghép nhiễu chưa `ROOT_CAUSE_CONFIRMED`. ADR-056 vẫn xác nhận riêng nguyên nhân lỗi USB `-75`, không đồng nghĩa TS sạch.
+
+Người dùng báo đã lắp RG6/ferrite/đi lại cáp; chi tiết và ngày thay còn chờ khi lập card, xem [ENVIRONMENT.md](ENVIRONMENT.md). Phần D **NOT RUN**, chưa card/`OK P4`, chưa `PHASE4_FUNCTIONAL_PASS` hoặc trạng thái EMI mới. Không Windows, không dựng lại bố trí cũ; giới hạn đã cho là 10 lượt OnePlus/2 Samsung sau card chung. Không stage/commit/push, không phần cứng/driver/ownership/toolchain thay đổi. GitNexus status chưa hoàn tất; dùng source/diff/tests, không chứng nhận graph hiện hành.
+
 ## 2026-11-13, B5 chốt — OnePlus K25 hoàn tất bốn pha/drain; TS còn lỗi, chưa xác nhận nhiễu USB
 
 **Đã chạy đủ OFF1/ON1/OFF2/ON2 trên OnePlus; `TS_SMOKE_PASS=false`.** Ordinal 4 được OK B5 riêng sau kế thừa ba refusal trước grant. Bootstrap/reload đều 132/132, không detach sau reload/`-75`/`-71`; ON1 nhận 34340864 byte, ON2 11141120 byte, data errors 0/writer drop 0/outstanding 0/quarantine false, DRAIN_CONFIRMED. Đây là kết quả debug đúng một lượt K25, chưa production hoặc Phase 4.

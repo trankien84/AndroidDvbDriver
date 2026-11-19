@@ -34,8 +34,9 @@ class TransferThread extends Thread {
     private final ServerSocket serverSocket;
     private final OnClosedCallback callback;
 
-    private IOException lastException = null;
-    private InputStream transportStream;
+    private volatile IOException lastException = null;
+    private volatile InputStream transportStream;
+    private volatile Socket activeSocket;
 
     TransferThread(DvbDevice dvbDevice, ServerSocket serverSocket, OnClosedCallback callback) {
         this.dvbDevice = dvbDevice;
@@ -47,6 +48,7 @@ class TransferThread extends Thread {
     public void interrupt() {
         super.interrupt();
         quietClose(serverSocket);
+        quietClose(activeSocket);
         quietClose(transportStream);
     }
 
@@ -59,6 +61,8 @@ class TransferThread extends Thread {
         Socket socket = null;
         try {
             socket = serverSocket.accept();
+            activeSocket = socket;
+            if (isInterrupted()) return;
             socket.setTcpNoDelay(true);
 
             byte[] buf = new byte[5 * 188];

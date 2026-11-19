@@ -32,12 +32,18 @@ import info.martinmarinov.usbxfer.ByteSource;
 import static info.martinmarinov.drivers.DvbException.ErrorCode.BAD_API_USAGE;
 
 public abstract class DvbDevice implements Closeable {
-    private final DvbDemux dvbDemux;
+    private DvbDemux dvbDemux;
 
     private DataPump dataPump;
 
     protected DvbDevice(DvbDemux dvbDemux) {
         this.dvbDemux = dvbDemux;
+    }
+
+    /** Reopenable drivers may replace their closed pipe only after the previous pump has joined. */
+    protected final void resetClosedDemux() {
+        if (dataPump != null && dataPump.isAlive()) throw new IllegalStateException("Data stream is still running");
+        dvbDemux = DvbDemux.DvbDmxSwfilter();
     }
 
     public abstract void open() throws DvbException;
@@ -78,13 +84,16 @@ public abstract class DvbDevice implements Closeable {
 
     @Override
     public void close() throws IOException {
+        boolean interrupted = false;
         while (dataPump != null && dataPump.isAlive()) {
             dataPump.interrupt();
+            if (Thread.currentThread() == dataPump) break;
             try {
                 dataPump.join();
-            } catch (InterruptedException ignored) {}
+            } catch (InterruptedException ignored) { interrupted = true; }
         }
-        dvbDemux.close();
+        try { dvbDemux.close(); }
+        finally { if (interrupted) Thread.currentThread().interrupt(); }
     }
 
     public InputStream getTransportStream(StreamCallback streamCallback) throws DvbException {
@@ -126,9 +135,10 @@ public abstract class DvbDevice implements Closeable {
             setName(DataPump.class.getSimpleName());
             setPriority(MAX_PRIORITY);
 
-            ByteSource tsSource = createTsSource();
+            ByteSource tsSource = null;
 
             try {
+                tsSource = createTsSource();
                 tsSource.open();
 
                 dvbDemux.reset();
@@ -136,19 +146,21 @@ public abstract class DvbDevice implements Closeable {
                     try {
                         tsSource.readNext(dvbDemux);
                     } catch (IOException e) {
-                        // Pipe is closed from other end
+                        if (!isInterrupted()) callback.onStreamException(e);
                         interrupt();
                     }
                 }
             } catch (InterruptedException ignored) {
                 // interrupted is ok
             } catch (IOException e) {
-                callback.onStreamException(e);
+                if (!isInterrupted()) callback.onStreamException(e);
+            } catch (RuntimeException e) {
+                if (!isInterrupted()) callback.onStreamException(new IOException("Cannot create or run TS source", e));
             } finally {
                 try {
-                    tsSource.close();
+                    if (tsSource != null) tsSource.close();
                 } catch (IOException e) {
-                    e.printStackTrace();
+                    callback.onStreamException(e);
                 }
                 callback.onStoppedStreaming();
             }

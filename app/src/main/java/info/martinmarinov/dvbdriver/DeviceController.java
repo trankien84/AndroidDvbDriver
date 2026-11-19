@@ -58,14 +58,20 @@ class DeviceController extends Thread {
 
     @Override
     public void run() {
+        DvbDevice dvbDevice = null;
         try {
             List<DvbDevice> availableFrontends = DvbUsbDeviceRegistry.getUsbDvbDevices(dvbFrontendActivity.getApplicationContext());
             if (availableFrontends.isEmpty())
                 throw new DvbException(NO_DVB_DEVICES_FOUND, dvbFrontendActivity.getString(R.string.no_devices_found));
 
-            DvbDevice dvbDevice = availableFrontends.get(0);
+            dvbDevice = availableFrontends.get(0);
+            for (int i = 1; i < availableFrontends.size(); i++) availableFrontends.get(i).close();
             dvbDevice.open();
-            dvbFrontendActivity.announceOpen(true, dvbDevice.getDebugString());
+            dvbDevice.tune(desiredFreq, desiredBand, desiredDelSystem);
+            dvbDevice.disablePidFilter();
+            currFreq = desiredFreq;
+            currBand = desiredBand;
+            currDelSystem = desiredDelSystem;
 
             dataHandler = new DataHandler(dvbFrontendActivity, dvbDevice.getTransportStream(new DvbDevice.StreamCallback() {
                 @Override
@@ -77,8 +83,10 @@ class DeviceController extends Thread {
                 public void onStoppedStreaming() {
                     interrupt();
                 }
-            }));
+            }), dvbDevice instanceof info.martinmarinov.drivers.usb.tbs5530.Tbs5530DvbDevice);
+            dataHandler.setFreqAndBandwidth(currFreq, currBand);
             dataHandler.start();
+            dvbFrontendActivity.announceOpen(true, dvbDevice.getDebugString());
 
             try {
                 while (!isInterrupted()) {
@@ -103,27 +111,42 @@ class DeviceController extends Thread {
                     boolean hasCarrier = status.contains(DvbStatus.FE_HAS_CARRIER);
                     boolean hasSync = status.contains(DvbStatus.FE_HAS_SYNC);
                     boolean hasLock = status.contains(DvbStatus.FE_HAS_LOCK);
-                    dvbFrontendActivity.announceMeasurements(snr, qualityPercentage, droppedUsbFps, rfStrength, hasSignal, hasCarrier, hasSync, hasLock);
+                    boolean tbs5530 = dvbDevice instanceof info.martinmarinov.drivers.usb.tbs5530.Tbs5530DvbDevice;
+                    Double preBchBer = tbs5530
+                            ? ((info.martinmarinov.drivers.usb.tbs5530.Tbs5530DvbDevice) dvbDevice).readPreBchBitErrorRate() : null;
+                    dvbFrontendActivity.announceMeasurements(snr, qualityPercentage, droppedUsbFps, rfStrength,
+                            hasSignal, hasCarrier, hasSync, hasLock, tbs5530, preBchBer);
 
                     Thread.sleep(1_000);
                 }
             } catch (InterruptedException ie) {
                 // Interrupted exceptions are ok
-            } finally {
-                dataHandler.interrupt();
-                //noinspection ThrowFromFinallyBlock
-                dataHandler.join();
-
-                try {
-                    dvbDevice.close();
-                } catch (IOException e) {
-                    dvbFrontendActivity.handleException(e);
-                }
             }
         } catch (Exception e) {
             dvbFrontendActivity.handleException(e);
         } finally {
+            boolean interrupted = Thread.interrupted();
+            if (dataHandler != null) {
+                dataHandler.interrupt();
+                try {
+                    dataHandler.join();
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                }
+            }
+            if (dvbDevice != null) {
+                try {
+                    dvbDevice.close();
+                    if (dataHandler != null && dvbDevice instanceof info.martinmarinov.drivers.usb.tbs5530.Tbs5530DvbDevice) {
+                        dataHandler.exportTbs5530Diagnostics(
+                                ((info.martinmarinov.drivers.usb.tbs5530.Tbs5530DvbDevice) dvbDevice).receptionSnapshot());
+                    }
+                } catch (IOException e) {
+                    dvbFrontendActivity.handleException(e);
+                }
+            }
             dvbFrontendActivity.announceOpen(false, null);
+            if (interrupted) Thread.currentThread().interrupt();
         }
     }
 }

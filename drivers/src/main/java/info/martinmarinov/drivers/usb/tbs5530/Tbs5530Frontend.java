@@ -25,6 +25,11 @@ public final class Tbs5530Frontend {
         READY_FOR_TUNE, DVBT2_LOCKED, UNCERTAIN
     }
     public enum Operation { PROBE, INITIALIZE, TUNE, STATUS, POLL_STATUS }
+    public enum DriveStrength {
+        RAW_54(0x54), RAW_55(0x55);
+        public final int registerValue;
+        DriveStrength(int value) { registerValue = value; }
+    }
     public enum Kind { WRITE, READ, DELAY, CHECK_ID, CHECK_TUNER, CHECK_ZERO, CHECK_PARALLEL, CHECK_TS, STATUS }
     public enum Metric { NOT_AVAILABLE }
 
@@ -278,11 +283,28 @@ public final class Tbs5530Frontend {
     }
 
     public synchronized Plan planInitialize() throws TransferException {
+        return planInitialize(DriveStrength.RAW_55);
+    }
+
+    public synchronized Plan planInitialize(DriveStrength drive) throws TransferException {
         requireState(State.DEMOD_IDENTIFIED);
+        if (drive == null) throw new IllegalArgumentException("Explicit TS drive required");
         if (chipId != 0x197) throw new UnsupportedOperationException("Freia 0x19c/0x39a init/tune is not ported");
         Builder b = new Builder();
-        Tbs5530Cxd2878Sequences.initialize(b);
+        Tbs5530Cxd2878Sequences.initialize(b, drive);
         return new Plan(this, Operation.INITIALIZE, b, null);
+    }
+
+    /** Production supports source-bounded terrestrial frequencies, not debug channel allowlists. */
+    public synchronized Plan planTerrestrialTune(Tbs5530DvbT2TuneParameters parameters) throws TransferException {
+        if (parameters == null || parameters.bandwidthHz < 6_000_000
+                || parameters.bandwidthHz > 8_000_000
+                || parameters.selection.mode == Tbs5530DvbT2TuneParameters.Mode.MONITOR_RESOLVED)
+            throw new IllegalArgumentException("Production DVB-T2 requires 6/7/8 MHz and MANUAL or AUTO PLP");
+        requireState(State.READY_FOR_TUNE, State.DVBT2_LOCKED);
+        Builder b = new Builder();
+        Tbs5530Cxd2878Sequences.tune(b, parameters, tuned);
+        return new Plan(this, Operation.TUNE, b, parameters);
     }
 
     /** Only a completed initialization can reach this milestone; never a descriptor or ID probe. */

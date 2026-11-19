@@ -1,5 +1,64 @@
 # TBS5530 test matrix
 
+## 2026-11-19 — P4 lượt 1 dừng chờ quyền, chưa số đo bố trí mới
+
+| Kiểm thật | Kết quả | Evidence / giới hạn |
+| --- | --- | --- |
+| Ngày/HEAD/source/APK | PASS | HEAD `285ba0b` giữ nguyên; 499 tệp/0 mismatch, manifest và hai APK/ba helper đúng pin cũ. Không rebuild hoặc gọi gate cũ là chạy lại. |
+| Chứng chỉ/version | PASS tĩnh | Hai APK cùng certificate `f848b8e4…0fb3`, versionCode 30; release không debuggable trong APK, chưa cài thật. |
+| Target ADB | Đã duyệt successor | Target đổi nên dừng trước I/O, trình lại rồi người dùng OK P4 riêng; model/API/boot khớp 30/408. Validator RequireBoundPins PASS. |
+| Cài debug / gỡ app phụ | PASS | Install-r đúng một lần/hash installed đúng; gỡ instrumentation info.martinmarinov.drivers.test theo yêu cầu, không gỡ main/history. |
+| Debug attach-only tự đóng | SOURCE-CONFIRMED | onCreate USB_DEVICE_ATTACHED gọi finish trước beginSession; không thấy crash mới DVB trong buffer/exit-info. Không chứng nhận mọi lần thoát đều bình thường. |
+| Permission đầu / grant / bootstrap | PASS có phạm vi | OS permission verified; grant accepted; A0 attempted/completed/full-length 132, image 8192/payload 8196 byte, 4693 ms, stop/cleanup NONE. |
+| Handoff / quyền operational | FAIL điều phối | DETACH → bootstrap drained → ATTACH_BROADCAST; không tới permission-request/descriptor admission. Terminal ATTACH_PERMISSION_UI_TIMEOUT, user thấy hộp chọn app; focus mất khoảng 64 giây, chưa chứng minh crash. |
+| Reload/frontend/OFF–ON/TS | NOT RUN | fx2_reload null, b5_phases rỗng, native null, 0 byte. Không có cơ sở gọi transport -75/-71 tái phát vì chưa Bulk. |
+| Drain / cleanup | PASS | RUNTIME_DRAIN_CONFIRMED; người dùng xác nhận rút tuner. Export những tệp hiện hữu đã đối soát SHA/size, không nạp/receive lại. |
+| Ngân sách | Giữ nguyên 1 đã dùng | Ordinal 1 có grant/132 A0, không PRE_GRANT_REFUSAL; receipt drained=true/session_closed=false giữ nguyên. Không lặp bằng sửa UUID hoặc xóa sổ. |
+| Release UI/chức năng 5–11 | NOT RUN | Chưa SAF, cắm lạnh release, K25/K36 Dump, reopen/detach/client/Samsung. Không thay LIMITED emulator bằng PASS điện thoại. |
+| EMI/TS sạch | INCONCLUSIVE / chưa đạt | Chưa đủ dữ liệu bước 1/2, không so OFF hoặc drive; không mở ferrite tùy chọn. PHASE4_FUNCTIONAL_PASS chưa đạt, TS_SMOKE_PASS=false. |
+
+Đây là một lượt lỗi điều phối sau bootstrap sạch, không hoàn thành Phần D. Giữ raw/card/receipt và zip đã lọc ngoài Git; không tự dùng bước 2/3 cho thử lại chưa ràng vào card.
+
+## 2026-11-18 — Phase 4 phần mềm đã qua gate liên quan; Phần D chưa chạy
+
+| Gate đã chạy thật | Kết quả | Evidence / giới hạn |
+| --- | --- | --- |
+| JVM cuối | PASS có SKIP giữ nguyên | App 122/122, drivers 548 PASS + 5 SKIP (553 tổng), dvbservice 15/15, usbxfer 86/86. XML Gradle hiện hành, không cộng các lượt chạy để tăng số test. |
+| Build debug/release/AndroidTest | PASS | Gate v4 exit 0/13m13s/387 tasks sau exact DEFAULT hash, UI và sidecar; service AndroidTest/native release bốn ABI đã PASS ở gate v2. APK cuối được đối soát riêng. |
+| App lint debug/release | PASS | 0 errors sau bổ sung đầy đủ VI và tài nguyên NB liên quan, không baseline/suppress/disable. |
+| Driver lint debug/release | FAIL lịch sử | Mỗi variant còn 1 `UnspecifiedRegisterReceiverFlag` tại UsbPermissionObtainer:105, ngoài đường permission TBS mới. 11/8 warnings. Không sửa unrelated guard hoặc gọi toàn bộ lint PASS. |
+| Native host production | PASS fake | Hai preset 16/32 ×16384 ở 27,5/35,6 Mbps; stop concurrent, telemetry publication, ring/trace overflow, lỗi/drain. Timestamp userspace không chứng minh lịch completion kernel hoặc RF. |
+| Native firmware/debug regression | PASS fake | FX2 397 tình huống, debug core 87 ca; không gửi firmware lên tuner. Syntax NDK bốn ABI/API21 PASS theo worker. Logs đã giữ ngoài Git. |
+| Golden/descriptor | PASS offline | K25/K36 drive 0x54/0x55 pin riêng; DEFAULT 189 byte SHA `e2887bad…52de` đối soát B5 thật, operational 50 byte SHA `22e2f1df…add5`; mutation tại trường cấu trúc bỏ qua bị chặn hash. |
+| Python comparison | PASS 39 focused/132 regression | Adapter B5 và Dump sidecar, marker sau ít nhất 5 giây, UNKNOWN khi thiếu clock/mapping; B5 raw/hash/CC/TEI không đổi. |
+| Helper B5/P4 | PASS fake | 174/174, export 23/23, carry 49/49, migration 37/37, one-extra 43/43. Hai fixture ngày cũ hết hạn đã được sửa clock test, guard hết hạn vẫn kiểm; không đổi card/ledger lịch sử. |
+| Emulator trên APK cuối v4 | PASS 17/17 | Firmware UI, drive challenge/report, Dump sidecar và real JNI negative-fd; không USB thật. Store atomic import/thay/xóa 1/1 PASS ở lượt riêng. |
+| Emulator hồi quy B5/lifecycle/handoff | PASS 43/43 | Chạy trên APK v2 trước chốt DEFAULT hash; thuật toán liên quan không đổi sau đó, v4 focused bổ sung drive/sidecar. Không giả toàn bộ 43 đã chạy lại trên APK cuối. |
+| Release isolation / ELF | PASS tĩnh | 12 ELF ở debug + release, đủ bốn ABI, ELF64 LOAD ≥16 KiB; release có production TBS/firmware/native source, không autonomous/ledger/debug JNI. Không phải runtime 16 KiB. |
+| Chữ ký APK cục bộ | PASS kiểm chứng | Người dùng duyệt debug keystore chỉ để ký release thử nghiệm; applicationId giống debug, certificate SHA-256 `f848b8e4…0fb3`, release không debuggable. Có thể cập nhật debug → release bằng install-r một lần, không cần gỡ và không xóa firmware. Không dùng khóa này để phát hành công khai. |
+| Release UI emulator | LIMITED | Cài release và mở Welcome PASS, không debuggable. Gọi trực tiếp firmware Activity từ shell bị từ chối đúng vì không exported. Kiểm UI tiếp gặp launcher/system ANR của emulator; không quy thành crash app hoặc chứng nhận UI đầy đủ. |
+| OnePlus chỉ đọc trước card | PASS metadata | GM1900/API30/boot408/Awake, tuner người dùng xác nhận rút. Chưa install/launch candidate hoặc tuner I/O trên điện thoại. Định danh ngoài Git. |
+| Phase 4 chức năng / nhiễu | NOT RUN | Chưa `OK P4` cho card cuối, chưa `PHASE4_FUNCTIONAL_PASS`, `EMI_MITIGATED/REDUCED/UNCHANGED` hoặc `TS_SMOKE_PASS=true`. |
+
+**Lỗi trung gian giữ nguyên:** JVM đầu usbxfer có 1 FAIL guard interface khi test/source đang được chốt, lượt sau 86/86 PASS; gate v2 app lint FAIL do ngôn ngữ mới cần dịch đầy đủ, đã sửa và v3/v4 app lint PASS. Driver lint cũ không bị che. Log ở `phase4-production-20261118`; không đổi toolchain hoặc cài package để ép PASS.
+
+
+## 2026-11-18 — Phase 4: kiểm offline đang chạy, hardware chưa mở
+
+| Phép kiểm | Kết quả quan sát | Phạm vi / giới hạn |
+| --- | --- | --- |
+| Baseline Git | PASS | HEAD `285ba0ba1c148af221ba42a475dc4fd7f44c7764`, đúng nhánh/tree sạch đầu phiên. Không stage/commit/push. |
+| Build debug tích hợp đầu | PASS | `:app:assembleDebug --console plain --no-daemon --max-workers=1`, exit 0, 3m01s/96 tasks. Có thay đổi telemetry/UI sau mốc này nên chưa gọi đây là APK khóa cuối. |
+| Công cụ so sánh B5 | PASS offline | Worker chạy 24 focused/117 regression Python; 181/181 BER OFF bằng 0, ON1 297/303 và ON2 96/100 khác 0. Không lượt hardware mới. |
+| Driver trực tiếp Java 8 | PASS có phạm vi | Worker báo 535 tests PASS trước chỉnh callback cuối, 14 focused PASS sau đó. Full Gradle đang chạy, chưa thay kết quả bằng PASS mới. |
+| Native host | PASS có phạm vi | Worker báo mô phỏng 27,5/35,6 Mbps ở hai preset, stop/publication/overflow; FX2 397 và debug 87 ca. JNI startup đang được chốt bỏ SET_INTERFACE thừa trước gate cuối. |
+| Firmware UI helper | PASS 8 focused | Worker chạy JUnit Java 8; ba instrumentation mới chưa chạy ở mốc này. Store validation/atomic replacement có tests riêng, đang chờ gate. |
+| JVM đầy đủ / release / AndroidTest / lint / ABI / release isolation | ĐANG KIỂM | Không gọi PASS trước khi đọc kết quả thật và đối soát APK cuối. Giữ FAIL lịch sử chưa chạy lại. |
+| Emulator instrumentation | NOT RUN Phase 4 | AVD hiện có được discovery chỉ đọc, chưa boot trong mốc ghi bảng. |
+| OnePlus/Samsung Phase 4 | NOT RUN | Chưa card/`OK P4`, chưa nạp RAM, tune hoặc nhận TS mới. Chưa `PHASE4_FUNCTIONAL_PASS`, `TS_SMOKE_PASS` hoặc kết luận EMI mới. |
+
+Evidence build ở bundle log `phase4-production-20261118` ngoài Git. Công cụ so sánh có báo cáo `phase4-20261118-214528-0c6f76f6`; raw B5 cũ giữ nguyên. Các hàng lịch sử bên dưới không bị ghi đè.
+
 ## 2026-11-13, B5 ordinal 4 OnePlus K25 — Runtime/drain PASS; TS quality FAIL, không root cause
 
 | Phép kiểm thật | Kết quả | Evidence / giới hạn |

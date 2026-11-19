@@ -28,7 +28,11 @@ $env:ANDROID_AVD_HOME = 'D:\Android\AVD'
 
 Lệnh release dùng một worker vì đã quan sát lỗi khóa thư mục native output trên Windows khi chạy nhiều worker. Đây là cấu hình lệnh đã kiểm chứng, không phải kết luận đã xác định nguyên nhân khóa. Release APK hiện chưa ký để phát hành.
 
-Các lệnh trên chỉ build/kiểm thử phần mềm, không tải firmware, không ghi USB hoặc kiểm chứng tuner thật. TBS5530 chưa được triển khai. Kết quả và giới hạn mới nhất nằm trong [STATUS.md](docs/project/STATUS.md) và [TEST-MATRIX.md](docs/project/TEST-MATRIX.md).
+Các lệnh trên chỉ build/kiểm thử phần mềm, không tải firmware, không ghi USB hoặc kiểm chứng tuner thật. Đường TBS5530 production đang được triển khai/kiểm offline trong Phase 4, chưa chứng nhận release trên tuner hoặc TS sạch. Kết quả và giới hạn mới nhất nằm trong [STATUS.md](docs/project/STATUS.md) và [TEST-MATRIX.md](docs/project/TEST-MATRIX.md).
+
+## TBS5530 production — Phase 4
+
+Xem [hướng dẫn tiếng Việt](docs/user/tbs5530.md) để nhập firmware gốc bằng hộp chọn tệp Android, xử lý hai quyền USB, chọn tần số DVB-T2, ghi TS và dùng app client. Firmware không nằm trong Git hoặc APK; production không cần grant, ledger hay helper PC. Các quy trình debug bên dưới vẫn được giữ để chẩn đoán, không phải hướng dẫn dùng release. Hiệu quả bố trí RG6/ferrite/đi lại cáp mới còn chờ phép đo Phần D, không được coi là đã khắc phục nhiễu.
 
 ## Chẩn đoán Android: chọn lại interface 0/alt 0
 

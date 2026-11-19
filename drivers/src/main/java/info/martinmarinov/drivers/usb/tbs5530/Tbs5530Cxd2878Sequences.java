@@ -23,7 +23,7 @@ final class Tbs5530Cxd2878Sequences {
 
     private Tbs5530Cxd2878Sequences() {}
 
-    static void initialize(Builder b) {
+    static void initialize(Builder b, Tbs5530Frontend.DriveStrength drive) {
         b.source("cxd2878.c:cxd2878_init:3182-3223; cxd2878.h:SONY_DEMOD_XTAL_24000KHz=1");
         b.bank(X, 0);
         b.write(X, 0x02, 0);
@@ -86,8 +86,8 @@ final class Tbs5530Cxd2878Sequences {
         b.bankMasked(T, 0x60, 0x52, 1, 0x1f);
         b.bankMasked(T, 0, 0x95, 1, 3);
         b.bankMasked(T, 0, 0x95, 0x14, 0x3c);
-        b.bankMasked(T, 0, 0x96, 0x54, 255);
-        b.bankMasked(T, 0, 0x97, 0x54, 255);
+        b.bankMasked(T, 0, 0x96, drive.registerValue, 255);
+        b.bankMasked(T, 0, 0x97, drive.registerValue, 255);
     }
 
     private static void repeater(Builder b, boolean enable) {

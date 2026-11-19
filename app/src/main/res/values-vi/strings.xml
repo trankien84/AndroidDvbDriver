@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DVB-T Driver</string>
+    <string name="no_devices_found">Không tìm thấy thiết bị</string>
+    <string name="start">Bắt đầu</string>
+    <string name="stop">Dừng</string>
+    <string name="tune">Chọn tần số</string>
+    <string name="defaultFreqMhz">506</string>
+    <string name="hardware_ready">Thiết bị đã sẵn sàng</string>
+    <string name="has_signal">Có tín hiệu</string>
+    <string name="carrier">Có sóng mang</string>
+    <string name="sync">Đồng bộ</string>
+    <string name="lock">Đã khóa tín hiệu</string>
+    <string name="more_info">- - - - -</string>
+    <string name="no_error">Không có lỗi</string>
+    <string name="rf_strength">Cường độ tín hiệu</string>
+    <string name="snr">SNR: %1$d</string>
+    <string name="quality">Chất lượng</string>
+    <string name="dropped_fps">USB bỏ gói: %1$d FPS</string>
+    <string name="mux_speed">Tốc độ %1$.2f MB/s</string>
+    <string name="rec_size">Đang ghi vào %1$s (%2$.2f MB)</string>
+    <string name="no_device_open">Chưa mở thiết bị</string>
+    <string name="dump">Ghi TS</string>
+    <string name="dump_stop">Dừng ghi</string>
+    <string name="mHz">MHz</string>
+    <string name="thanks">Cảm ơn bạn đã cài DVB-T Driver. Ứng dụng thường được app xem truyền hình gọi tự động để điều khiển bộ thu USB DVB-T, chẳng hạn RTL2832U. Bạn có thể đóng cửa sổ này và mở app truyền hình tương thích. Chế độ chẩn đoán cho phép chọn tần số và ghi TS thủ công.</string>
+    <string name="btn_advanced_mode">Chẩn đoán (chế độ nâng cao)</string>
+    <string name="btn_license">Giấy phép</string>
+    <string name="btn_source_code">Mã nguồn</string>
+    <string name="btn_close">Đóng</string>
+    <string name="cannot_send_email">Không tìm thấy ứng dụng email. Không gửi được email.</string>
+    <string name="send_email">Báo lỗi</string>
+    <string name="email_feedback_address">driver@aerialtv.eu</string>
+    <string name="email_subject">Báo cáo lỗi DVB-T Driver</string>
+    <string name="email_body">Hãy mô tả thêm về lỗi ở đây. Không thể bảo đảm trả lời mọi email, nhưng thông tin của bạn giúp cải thiện trình điều khiển.\n\nThông tin lỗi (KHÔNG SỬA): %1$s\n\n%2$s\n\n---------------------------\n</string>
+</resources>

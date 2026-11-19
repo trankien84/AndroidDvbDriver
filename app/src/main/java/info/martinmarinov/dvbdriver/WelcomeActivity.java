@@ -37,6 +37,9 @@ public class WelcomeActivity extends Activity {
 
         findViewById(R.id.btn_close).setOnClickListener(v -> finish());
 
+        findViewById(R.id.tbs5530_firmware_settings).setOnClickListener(v ->
+                startActivity(new Intent(WelcomeActivity.this, Tbs5530FirmwareActivity.class)));
+
         findViewById(R.id.btn_advanced_mode).setOnClickListener(v -> startActivity(new Intent(WelcomeActivity.this, DvbFrontendActivity.class)));
 
         findViewById(R.id.btn_source_code).setOnClickListener(v -> startActivity(new Intent(Intent.ACTION_VIEW, SOURCE_URL)));

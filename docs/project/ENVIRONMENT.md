@@ -1,5 +1,25 @@
 # Kiểm kê môi trường
 
+## 2026-11-19 — OnePlus xác nhận bố trí mới, P4 dừng sau bootstrap và tuner đã rút
+
+Người dùng xác nhận trước lượt: RG6 IEC kim loại 1,5 m, mối IEC nhựa xa hộp; UGREEN USB-C→USB-B có hai ferrite sát hai đầu/không vòng; USB ngược chiều coax/không cuộn, OnePlus cách hộp 1–1,5 m và không sạc. Bố trí bắt đầu 18/11, không dựng lại bố trí cũ. Samsung chưa chạy trong ngày này.
+
+Kiểm chỉ đọc OnePlus GM1900/API30/boot408/Awake. Target ADB khác card cũ được trình lại và người dùng duyệt successor ngày 19/11, không tự đổi pin ngầm. APK debug candidate đã cài install-r một lần/hash cài đặt khớp; history trước–sau cài và sau gỡ instrumentation không đổi. Đã gỡ riêng info.martinmarinov.drivers.test theo yêu cầu, giữ app chính. Hai mục main/Debug trong hộp USB là hai Activity của cùng APK. Release chưa cài, firmware chưa nhập SAF.
+
+Lượt 1 bootstrap 132/132, hộp chọn app xuất hiện khi re-enumerate, dừng chờ quyền/foreground trước operational owner/reload. DRAIN_CONFIRMED và người dùng xác nhận rút tuner sau terminal. Chỉ đọc app log sau đó, không receive/reload mới. Raw/định danh/ADB target và APK ngoài Git. Không Windows/VM/WSL/driver/USB owner software/toolchain thay đổi; không disconnect ADB do người dùng nối.
+
+## 2026-11-18 — Phase 4 đang kiểm offline; bố trí RG6/ferrite mới chưa có số đo
+
+**USER-REPORTED trong nhiệm vụ:** đã lắp đoạn coax RG6 IEC đực–cái đầu kim loại giữa đầu IEC nhựa cũ và cổng RF IN của hộp TBS5530; đã kẹp ferrite và đi lại cáp. Bố trí cũ có coax mảnh, đầu IEC vỏ nhựa, USB-B sát cổng anten và cáp USB từng cuộn cạnh hộp. Mốc Windows B5 dùng UGREEN A→B để thẳng; OnePlus B5 dùng UGREEN C→B; các lượt Windows/Samsung trước có dùng cáp chữ Y. Không đồng nhất các cáp này khi so khác host.
+
+Chưa biết số lượng/vị trí ferrite, khoảng cách tới đầu cắm, có vòng qua lõi hay không, chiều dài RG6, vị trí nối với đầu IEC cũ, đường USB so với coax, khoảng cách điện thoại–hộp và ferrite trên cáp chữ Y Samsung. Ngày thực thay bố trí cũ cũng chưa được cung cấp; ngày 18/11 là ngày nhận mô tả, không tự ghi là ngày lắp. Cần người dùng bổ sung khi lập card chung Phần D. Không yêu cầu tháo RG6 hoặc dựng lại bố trí cũ.
+
+**Bổ sung USER-REPORTED cùng phiên:** bố trí mới bắt đầu ngày **18/11/2026**. RG6 dài **1,5 m**, mối nối với đầu IEC nhựa cũ khá xa hộp TBS. Người dùng kẹp sát hai đầu của sợi cáp, không vòng cáp qua lõi; cáp chữ Y Samsung cũng có ferrite ở cả hai đầu: một đầu là nhánh hai USB-A (một nhánh gắn OTG USB-C), đầu kia USB-B. Người dùng xác nhận hai ferrite đầu tiên nằm trên **UGREEN USB-C→USB-B của OnePlus**, không phải RG6. USB **dự định** đi ngược chiều coax, không cuộn; OnePlus có thể cách hộp **1–1,5 m**, Samsung khoảng **0,5 m**. Đây là bố trí người dùng mô tả/dự định, không phải khoảng cách đã đo trong một lượt runtime. Card cần chốt đúng cáp và vị trí thực trước đo; không yêu cầu thay lại bố trí cũ.
+
+Baseline đã kiểm đúng HEAD `285ba0ba1c148af221ba42a475dc4fd7f44c7764`, nhánh `chore/modernize-android-build`, tree sạch trước sửa. Đọc build hiện hành xác nhận AGP 9.5.0, Gradle Wrapper 9.8.2, compileSdk 37.2/targetSdk 37/minSdk 21, Java 8. JAVA_HOME Machine trỏ JDK 25.0.5.0.3, executable đã chạy `-version`; source.properties hiện có NDK 30.0.16248370/CMake 4.1.2/Build-Tools 37.0.0/platform-tools 37.0.1/emulator 37.2.13. Không cài/nâng/xóa package hoặc sửa môi trường bền. Đây là declared/installed, chưa phải gate mới PASS của Phase 4.
+
+GitNexus CLI 1.6.12 có `status --json`, nhưng lần kiểm hiện tại chỉ in banner và không hoàn tất trong cửa sổ chờ; đã dừng đúng process tree của lệnh. Không retry/rebuild/repair hoặc chứng nhận graph/FTS hiện hành. MCP discovery không có GitNexus phù hợp; dùng source/diff/tests độc lập. References bốn SHA được đo lại, không sync/sửa. Chưa cài APK hoặc gửi I/O tới tuner/ADB thật, không Windows BDA/USBPcap/VM/WSL hoặc chuyển owner trong Phase 4.
+
 ## 2026-11-13, B5 OnePlus K25 thực đã đóng — OTG trực tiếp, không nguồn phụ; candidate export hậu kiểm chưa chạy hardware
 
 OnePlus `GM1900`/API 30/boot 408 dùng APK debug `90c7c616ba34dc8b891051203aa2d00805cd8195d987ccb2c3cd5fc0da6bf7e4`, install-r đúng một lần và history 581 byte/SHA `556f248a…98d128` trước–sau cài nguyên. Lượt nhận thật ordinal 4 sau ba refusal trước grant được duyệt riêng theo card `0aad1b96…f217c5`. Bố trí thực do người dùng báo khoảng 33 cm, cáp 1 m, anten thụ động RF IN/không DC, OTG cấp nguồn trực tiếp, không pin dự phòng hoặc phụ kiện khác. Đây là lần đầu OnePlus chạy reload sau SET_CONFIGURATION: bootstrap/reload đều 132/132, không detach sau reload hoặc `-75`/`-71`, đủ bốn pha và drain sạch.

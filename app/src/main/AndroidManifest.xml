@@ -38,6 +38,9 @@
         </activity>
         <activity android:name=".DvbFrontendActivity" />
         <activity android:name=".GplLicenseActivity" />
+        <activity android:name=".Tbs5530FirmwareActivity"
+            android:exported="false"
+            android:label="@string/tbs5530_firmware_title" />
     </application>
 
 </manifest>

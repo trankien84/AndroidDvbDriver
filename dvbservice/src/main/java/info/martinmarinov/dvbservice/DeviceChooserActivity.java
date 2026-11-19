@@ -60,6 +60,10 @@ public class DeviceChooserActivity extends FragmentActivity implements ListPicke
     private final static String CONTRACT_USB_VENDOR_IDS = "VendorIds";
 
     private final Intent response = new Intent();
+    private final DvbServiceResponseReceiver serviceReceiver = new DvbServiceResponseReceiver();
+    private Thread discovery;
+    private boolean discoveryStarted;
+    private volatile boolean destroyed;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -68,32 +72,53 @@ public class DeviceChooserActivity extends FragmentActivity implements ListPicke
 
         // Set to receive info from the DvbService
         IntentFilter statusIntentFilter = new IntentFilter(DvbService.BROADCAST_ACTION);
-        LocalBroadcastManager.getInstance(this).registerReceiver(new DvbServiceResponseReceiver(), statusIntentFilter);
+        LocalBroadcastManager.getInstance(this).registerReceiver(serviceReceiver, statusIntentFilter);
     }
 
     @Override
     protected void onStart() {
         super.onStart();
-        try {
-            List<DvbDevice> dvbDevices = DvbUsbDeviceRegistry.getUsbDvbDevices(this);
-            List<DvbDevice> dvbFileDevices = TsDumpFileUtils.getDevicesForAllRecordings(this); // these are only for debugging purposes
-            dvbDevices.addAll(dvbFileDevices);
-
-            if (dvbDevices.isEmpty()) throw new DvbException(NO_DVB_DEVICES_FOUND, getString(info.martinmarinov.drivers.R.string.no_devices_found));
-
-            List<DeviceFilter> deviceFilters = new ArrayList<>(dvbDevices.size());
-            for (DvbDevice dvbDevice : dvbDevices) {
-                deviceFilters.add(dvbDevice.getDeviceFilter());
+        if (discoveryStarted) return;
+        discoveryStarted = true;
+        discovery = new Thread(() -> {
+            List<DvbDevice> devices = new ArrayList<>();
+            try {
+                devices.addAll(DvbUsbDeviceRegistry.getUsbDvbDevices(getApplicationContext()));
+                List<DvbDevice> files = TsDumpFileUtils.getDevicesForAllRecordings(this);
+                devices.addAll(files);
+                if (devices.isEmpty()) throw new DvbException(NO_DVB_DEVICES_FOUND,
+                        getString(info.martinmarinov.drivers.R.string.no_devices_found));
+                List<DeviceFilter> filters = new ArrayList<>(devices.size());
+                for (DvbDevice device : devices) filters.add(device.getDeviceFilter());
+                boolean showPicker = filters.size() > 1 || !files.isEmpty();
+                runOnUiThread(() -> {
+                    if (destroyed || isFinishing()) return;
+                    if (showPicker) ListPickerFragmentDialog.showOneInstanceOnly(getSupportFragmentManager(), filters);
+                    else DvbService.requestOpen(this, filters.get(0));
+                });
+            } catch (DvbException e) {
+                runOnUiThread(() -> {
+                    if (!destroyed && !isFinishing()) handleException(e);
+                });
+            } finally {
+                for (DvbDevice device : devices) {
+                    try {
+                        device.close();
+                    } catch (IOException e) {
+                        android.util.Log.w("DvbChooser", "Discovery cleanup failed", e);
+                    }
+                }
             }
+        }, "DvbDeviceDiscovery");
+        discovery.start();
+    }
 
-            if (deviceFilters.size() > 1 || !dvbFileDevices.isEmpty()) {
-                ListPickerFragmentDialog.showOneInstanceOnly(getSupportFragmentManager(), deviceFilters);
-            } else {
-                DvbService.requestOpen(this, deviceFilters.get(0));
-            }
-        } catch (DvbException e) {
-            handleException(e);
-        }
+    @Override
+    protected void onDestroy() {
+        destroyed = true;
+        if (discovery != null) discovery.interrupt();
+        LocalBroadcastManager.getInstance(this).unregisterReceiver(serviceReceiver);
+        super.onDestroy();
     }
 
     @Override

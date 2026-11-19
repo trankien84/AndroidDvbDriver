@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/tbs5530_firmware_title"
+            android:textAppearance="?android:attr/textAppearanceLarge" />
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/tbs5530_firmware_source" />
+        <TextView
+            android:id="@+id/tbs5530_firmware_identity"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:textIsSelectable="true" />
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/tbs5530_firmware_storage" />
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/tbs5530_firmware_usb_permissions" />
+        <TextView
+            android:id="@+id/tbs5530_firmware_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:accessibilityLiveRegion="polite" />
+        <TextView
+            android:id="@+id/tbs5530_firmware_message"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:accessibilityLiveRegion="polite" />
+        <Button
+            android:id="@+id/tbs5530_firmware_select"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/tbs5530_firmware_select" />
+        <Button
+            android:id="@+id/tbs5530_firmware_delete"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/tbs5530_firmware_delete" />
+        <Button
+            android:id="@+id/tbs5530_firmware_close"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/tbs5530_firmware_close" />
+    </LinearLayout>
+</ScrollView>

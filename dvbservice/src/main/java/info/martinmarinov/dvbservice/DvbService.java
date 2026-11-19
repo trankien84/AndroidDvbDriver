@@ -57,12 +57,24 @@ public class DvbService extends Service {
     private final static String DEVICE_FILTER = "DeviceFilter";
     private final static String STATUS_MESSAGE = "StatusMessage";
 
-    private static Thread worker;
+    private static volatile Thread worker;
+    private volatile DvbServer activeServer;
+
+    @Override
+    public void onDestroy() {
+        Thread current = worker;
+        if (current != null) current.interrupt();
+        DvbServer server = activeServer;
+        if (server != null) server.cancel();
+        stopForeground(true);
+        super.onDestroy();
+    }
 
     static void requestOpen(Activity activity, DeviceFilter deviceFilter) {
         Intent intent = new Intent(activity, DvbService.class)
                 .putExtra(DEVICE_FILTER, deviceFilter);
-        activity.startService(intent);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) activity.startForegroundService(intent);
+        else activity.startService(intent);
     }
 
     static StatusMessage parseMessage(Intent intent) {
@@ -71,11 +83,18 @@ public class DvbService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        if (intent == null || !intent.hasExtra(DEVICE_FILTER)) {
+            stopSelf(startId);
+            return START_NOT_STICKY;
+        }
+        startForeground(false);
         final DeviceFilter deviceFilter = (DeviceFilter) intent.getSerializableExtra(DEVICE_FILTER);
 
         // Kill existing connection
         if (worker != null && worker.isAlive()) {
             worker.interrupt();
+            DvbServer previous = activeServer;
+            if (previous != null) previous.cancel();
             try {
                 worker.join(15_000L);
             } catch (InterruptedException ignored) {}
@@ -90,23 +109,26 @@ public class DvbService extends Service {
                 DvbServer dvbServer = null;
                 try {
                     dvbServer = new DvbServer(getDeviceFromFilter(deviceFilter));
+                    activeServer = dvbServer;
+                    if (isInterrupted()) throw new java.io.InterruptedIOException("Service stopped during USB open");
                     DvbServerPorts dvbServerPorts = dvbServer.bind(InetAddressTools.getLocalLoopback());
                     dvbServer.open();
                     // Device was opened! Tell client it's time to connect
                     broadcastStatus(new StatusMessage(null, dvbServerPorts, deviceFilter));
 
-                    startForeground();
+                    startForeground(deviceFilter.getVendorId() == 0x734c && deviceFilter.getProductId() == 0x5530);
                     dvbServer.serve();
                 } catch (Exception e) {
                     e.printStackTrace();
                     broadcastStatus(new StatusMessage(e, null, deviceFilter));
                 } finally {
                     if (dvbServer != null) dvbServer.close();
+                    if (activeServer == dvbServer) activeServer = null;
                 }
 
                 Log.d(TAG, "Finished");
-                worker = null;
-                stopSelf();
+                if (worker == Thread.currentThread()) worker = null;
+                stopSelf(startId);
             }
         };
 
@@ -114,7 +136,7 @@ public class DvbService extends Service {
         return START_NOT_STICKY;
     }
 
-    private void startForeground() {
+    private void startForeground(boolean connectedDevice) {
         NotificationManager notificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         String NOTIFICATION_CHANNEL_ID = "DvbDriver";
 
@@ -143,7 +165,9 @@ public class DvbService extends Service {
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(ONGOING_NOTIFICATION_ID, builder.build(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
+            int type = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK;
+            if (connectedDevice) type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE;
+            startForeground(ONGOING_NOTIFICATION_ID, builder.build(), type);
         } else {
             startForeground(ONGOING_NOTIFICATION_ID, builder.build());
         }
@@ -153,9 +177,19 @@ public class DvbService extends Service {
         List<DvbDevice> dvbDevices = DvbUsbDeviceRegistry.getUsbDvbDevices(this);
         dvbDevices.addAll(TsDumpFileUtils.getDevicesForAllRecordings(this));
 
+        DvbDevice selected = null;
         for (DvbDevice dvbDevice : dvbDevices) {
-            if (dvbDevice.getDeviceFilter().equals(deviceFilter)) return dvbDevice;
+            if (selected == null && dvbDevice.getDeviceFilter().equals(deviceFilter)) {
+                selected = dvbDevice;
+            } else {
+                try {
+                    dvbDevice.close();
+                } catch (java.io.IOException e) {
+                    Log.w(TAG, "Unused device cleanup failed", e);
+                }
+            }
         }
+        if (selected != null) return selected;
         throw new DvbException(CANNOT_OPEN_USB, getString(R.string.device_no_longer_available));
     }
 
