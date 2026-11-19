@@ -394,7 +394,9 @@ public final class Tbs5530DvbDevice extends DvbDevice {
                 opened = false; tuned = false; demuxClosed = true;
                 Tbs5530StreamGate gate = stream;
                 if (gate != null && !gate.drained()) {
-                    failure = append(failure, new IOException("USB drain is unconfirmed; production ownership retained"));
+                    Tbs5530ProductionAttachment current = attachment;
+                    if (current != null) current.retainUndrained();
+                    failure = new IOException(context.getString(R.string.tbs5530_drain_unconfirmed), failure);
                 } else {
                     IOException cleanup = cleanupControl();
                     if (cleanup != null) failure = append(failure, cleanup);

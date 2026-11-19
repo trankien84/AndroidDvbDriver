@@ -1,5 +1,35 @@
 # Architecture decision record (ADR)
 
+## ADR-068 — Card phiên có tham số, trần debug cố định và báo lỗi giữ khóa an toàn
+
+**Date:** 2026-11-19, baseline `c39541f83c2103d5f20c2083abf59756ee0ac3c9`, nhánh `chore/modernize-android-build`, working tree sạch trước sửa.
+
+**Status:** Đã triển khai và kiểm offline theo phạm vi được duyệt. Gate JVM/build/app lint PASS, helper fake 324/324 PASS, validator thật `Assert-B5LocalPins` PASS trước live. Sau ba xác nhận, đã chạy đúng một lượt P4b/bước 1: nhận đủ pha/drain nhưng helper đóng receipt do enum snapshot bootstrap và last completion drain chưa được mô hình hóa đúng. Giữ nguyên receipt, không mở lại budget hoặc chuyển release; xem RESEARCH/TEST-MATRIX. Chưa coi helper đã tương thích đầy đủ phần cứng chỉ từ fake PASS. Driver lint chỉ lỗi lịch sử đã biết.
+
+### Context / Evidence
+
+P4b trước đây bị chặn đúng vì helper chỉ nhận B5/P4 với lịch cố định. Không đổi schema card để giả làm P4 hoặc kế thừa câu duyệt của card khác. App debug hiện kiểm `b5_max_attempts` trong 1–6, ordinal không vượt maximum và cold ít nhất năm giây; giới hạn này khớp trần debug mới nên không cần nới app.
+
+Khi dọn luồng USB chưa được xác nhận, production giữ owner để không đóng tài nguyên còn hoạt động. Thông báo BUSY thông thường chưa giải thích được cách thoát trạng thái này. Đây là kết luận từ source và fake tests, không phải lỗi drain mới quan sát trên điện thoại.
+
+### Decision
+
+- Thêm `TBS5530-SESSION-CARD/v1` với `card_id` và câu duyệt chính xác, phân biệt hoa thường `OK <card_id>`. Card chọn lịch trong allowlist, không cấp quyền mở rộng firmware, frontend hoặc USB.
+- `debug_steps` ràng step, drive 84/85, thí nghiệm B5 K25/K36 hiện có và optional kiểu boolean. Trần cứng: sáu lượt debug kể cả retry; tối đa hai retry mỗi bước và hai retry toàn phiên; `max_android` không quá 12, Windows bằng 0. Không dùng retry để vượt ngân sách hoặc đổi drive.
+- Chỉ lặp lỗi UI/quyền trước reload, firmware rõ trạng thái và đã `DRAIN_CONFIRMED`. Firmware dở dang/không chắc chắn, lỗi USB, detach sau reload hoặc drain chưa xác nhận đều đóng phiên. B5/P4 cũ và các tests lịch sử giữ nguyên hành vi.
+- P4b giữ tên và bước 1–11: OnePlus tối đa chín lượt gồm debug/release; Samsung thêm hai lượt release; không Windows. Helper chỉ chạy debug OnePlus; ngân sách release phải được theo dõi riêng khi thực thi, không coi trần documentary là cơ chế chặn trong app production.
+- Không thay đổi công thức 10/30/10/10 giây, monitor 100 ms ±20 ms, queue 16 ×16384, K25/K36, firmware ảnh gốc hoặc cold ít nhất năm giây. Chỉ chạy khi pin và validator thật PASS theo phê duyệt có điều kiện của người dùng.
+- Production đánh dấu owner khi drain chưa xác nhận, giữ khóa và tài nguyên; báo resource EN/VI ngay lúc close lỗi và khi mở owner mới. Hướng dẫn rút tuner, đóng hẳn app rồi mở lại; không tự nhả khóa hoặc force-close USB để che lỗi.
+- Không đổi code hộp `requestPermission`. Hướng dẫn nêu OK/Hủy hộp còn dư không thu hồi quyền đã được OS cấp; số hộp thật phải được ghi trên điện thoại. Firmware nhập qua SAF cần bản gốc trên điện thoại; chỉ `adb push` vào Download sau đồng ý riêng, hỏi xóa bản Download sau khi nhập.
+
+### Alternatives / Trade-offs
+
+Không tạo schema riêng cho từng tên card vì sẽ lặp sửa helper và dễ lệch guard. Card có tham số vẫn không được chọn thanh ghi, độ dài thu hay thí nghiệm tùy ý. Không tự sửa app để tăng maximum vì sáu lượt đã đủ lịch P4b cùng hai retry toàn phiên. Phải build lại và khóa cả hai APK vì resource/logic production đã đổi, dù hợp đồng grant debug không đổi.
+
+### Reopen trigger
+
+Cần prompt duyệt riêng trước khi tăng trần, thêm Windows hoặc thí nghiệm frontend khác, đổi firmware hay mở lại phiên bị chốt do lỗi USB/firmware/drain. Không stage/commit/push; không thay driver, owner USB, VM hoặc toolchain.
+
 ## ADR-067 — Một đích USB cho debug; quyền OS và một chủ sở hữu trong production
 
 **Date:** 2026-11-19, baseline `f0a654ff94b7d0ff8fe00516f0fec3837c88238a`, nhánh `chore/modernize-android-build`, working tree sạch trước sửa.

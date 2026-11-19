@@ -15,12 +15,13 @@ public class Tbs5530ProductionFailureTest {
     @Test public void localizedPermissionAndTimeoutAndReloadRemainDistinctThroughTransportWrappers() {
         Context context=mock(Context.class);
         when(context.getString(anyInt())).thenAnswer(a -> "resource-"+a.getArgument(0));
-        Tbs5530ProductionFailure.Kind[] kinds={Tbs5530ProductionFailure.Kind.BUSY,Tbs5530ProductionFailure.Kind.PERMISSION,
+        Tbs5530ProductionFailure.Kind[] kinds={Tbs5530ProductionFailure.Kind.BUSY,Tbs5530ProductionFailure.Kind.DRAIN_UNCONFIRMED,
+                Tbs5530ProductionFailure.Kind.PERMISSION,
                 Tbs5530ProductionFailure.Kind.PERMISSION_TIMEOUT,Tbs5530ProductionFailure.Kind.HANDOFF_TIMEOUT,
                 Tbs5530ProductionFailure.Kind.FIRMWARE,Tbs5530ProductionFailure.Kind.DESCRIPTOR,
                 Tbs5530ProductionFailure.Kind.BOOTSTRAP,Tbs5530ProductionFailure.Kind.RELOAD,
                 Tbs5530ProductionFailure.Kind.REMOVED};
-        int[] texts={R.string.tbs5530_busy,R.string.tbs5530_permission_denied,R.string.tbs5530_permission_timeout,
+        int[] texts={R.string.tbs5530_busy,R.string.tbs5530_drain_unconfirmed,R.string.tbs5530_permission_denied,R.string.tbs5530_permission_timeout,
                 R.string.tbs5530_handoff_timeout,R.string.tbs5530_firmware_failed,R.string.tbs5530_descriptor_failed,
                 R.string.tbs5530_bootstrap_failed,R.string.tbs5530_reload_failed,R.string.tbs5530_removed};
         for(int i=0;i<kinds.length;i++) {

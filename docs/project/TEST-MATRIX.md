@@ -1,5 +1,26 @@
 # TBS5530 test matrix
 
+## 2026-11-19 — P4b schema phiên mới: gate production drain đã kiểm lại
+
+| Kiểm mới | Kết quả | Evidence / giới hạn |
+| --- | --- | --- |
+| Baseline | PASS | `c39541f83c2103d5f20c2083abf59756ee0ac3c9`, branch yêu cầu, tree sạch đầu phiên. Không stage/commit/push. |
+| App grant debug | SOURCE-CONFIRMED | Maximum 1–6, ordinal không vượt maximum, cold ≥5 giây; không xung đột lịch ba bước và hai retry toàn phiên. Không nới app debug. |
+| Lỗi giữ owner do drain | PASS offline | Bổ sung kiểm resource trên IOException/RuntimeException của native source; owner/observer giữ nguyên, mở mới nhận DRAIN_UNCONFIRMED, chỉ nhả sau drain thật. Mapping lỗi riêng EN/VI được kiểm qua transport wrapper. |
+| JVM | PASS có SKIP giữ nguyên | App debug 132, release 13; drivers 567 tổng/562 PASS + 5 SKIP; dvbservice 17; usbxfer 86. Gate exit 0, XML không có failure/error. Mở rộng assertions trong test cũ, không tăng số test giả. |
+| Build debug/release/AndroidTest app và app lint hai variant | PASS | Một gate 7m58s, 374 tasks/119 executed/255 up-to-date. Không đổi dependencies/toolchain. Driver lint chạy riêng sau gate vẫn FAIL đúng một `UnspecifiedRegisterReceiverFlag` tại `UsbPermissionObtainer:105` mỗi variant, 11/8 warnings; không có lỗi mới, không gọi toàn bộ lint PASS. |
+| APK mới | PASS tĩnh | Debug SHA `5c13d6522c2a8155a8eb7bf8edf821a9e25d2f75f062fdd337bd5929593ca19f`, release thử nghiệm `b923054cb791e1e4731e56021576b665b4e8323e0a818b4aa2084918a1b3fdb1`; signature verify và zipalign `-c -P 16 -v 4` exit 0. Certificate không đổi, versionCode 30, release không debuggable. |
+| Firmware gốc trên host | PASS chỉ đọc | 8192 byte/SHA `b97cf208bb586f706b26aa5450de6bb97375a3e3eabe833cddb0ae3a4f69d0dc`; chưa push/nhập SAF mới. |
+| Helper fake / validator card mới | PASS offline | 324/324 fake PASS, giữ ca B5/P4 lịch sử, không ADB thật. `Assert-B5LocalPins` thật PASS bước 1/2/4 trên card P4b/schema SESSION và 504 source/helper/APK/firmware thật, không hash override. Card SHA `0a9e343fb9ef217824553be23a41e64f2b40534e00b7c783d0e355bf523ee471`, manifest SHA `34b02b4c073c585ab91a3e92cbd071f48e67ca60d4e41afb1d0fbea795ace04b`; validator không grant hoặc consume. |
+| Hardware P4b bước 1 | PASS nhận đủ pha, phiên đóng sau lượt | Bootstrap/reload 132/132; K25 MANUAL0 lock; ON1 133414912 byte/ON2 44466176 byte, đủ bốn pha; drain xác nhận, không quarantine/drop/outstanding. Helper exit 1/session_closed do guard enum snapshot bootstrap TRANSITIONING khác OPERATIONAL_CANDIDATE; -2 lúc drain bị bác độc lập, không tự chạy tiếp. |
+| Data audit / completion drain | PASS kiểm offline, không chứng nhận helper cho chạy tiếp | Data completions 8143/2714, data errors 0/0, failed reap 0/0; 16 drain completions mỗi ON. Không có -75/-71 mới. Mỗi ON một DISCARD errno 22, sau đó reap đủ. Terminal receive_error KNOWN_COMPLETED_USB_ERROR cần phân biệt với completion hủy lúc drain. Fake success fixture thiếu snapshot TRANSITIONING đủ 132/132 và cleanup last_status -2; receipt giữ nguyên, không sửa guard để mở lại. |
+| Hộp USB / install / cleanup | RUNTIME-OBSERVED | Người dùng xác nhận đủ ba điều, debug install-r một lần/hash đúng/history nguyên; hai hộp tổng cộng, không Luôn mở. Người dùng đã rút tuner sau DRAIN_CONFIRMED. Không helper live còn chạy. |
+| BER/SNR/duty | Đo được, EMI INCONCLUSIVE | BER OFF 181/181 và ON 406/406 bằng 0; SNR OFF/ON 27,5890/27,5996 dB, duty 100%/100%. OFF so B5 lệch 2,3701/5,2604 dB >2 nên không tách bố trí/drive. |
+| TS quality / TSDuck | Chưa sạch | B5 analyzer CC/phút 91,208/84,057, TEI 0/0; ON2 normalized quality UNKNOWN vì ts_bytes vượt payload 8 byte. Crop toàn gói độc lập CC 37/7, TEI 0/0, 13 dịch vụ/PCR khoảng 35,580 Mbps; vượt ngưỡng 1 lỗi/phút. TSDuck auto-detect raw FAIL dù exit 0; mẫu dẫn xuất đọc được, không xóa raw/break. |
+| Export nguyên vẹn | PASS | 22 tệp có mặt/368155813 byte SHA/size khớp, 8 mục absent; includes raw trùng nên không gọi là lượng TS độc lập. |
+| Bước 2–11 / release / Dump | NOT RUN | Dừng đúng receipt đóng; không retry lỗi không phải UI abort. Số hộp release UNKNOWN, chưa SAF/push/xóa firmware. Không PHASE4_FUNCTIONAL_PASS, TS_SMOKE_PASS=false, drive UNKNOWN. |
+
+
 ## 2026-11-19 — P4b: gate sửa quyền/owner PASS, card live bị chặn
 
 | Kiểm đã chạy | Kết quả | Evidence / giới hạn |

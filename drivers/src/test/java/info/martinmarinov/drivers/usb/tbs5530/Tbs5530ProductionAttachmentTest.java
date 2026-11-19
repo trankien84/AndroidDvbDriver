@@ -313,7 +313,14 @@ public class Tbs5530ProductionAttachmentTest {
             if (drainFailure != null) {
                 assertTrue(Tbs5530ProductionSession.isActive());
                 verify(f.observer, never()).close();
-                assertThrows(Tbs5530ProductionFailure.class, Tbs5530ProductionSession::acquire);
+                assertEquals("resource-" + info.martinmarinov.drivers.R.string.tbs5530_drain_unconfirmed,
+                        result.get().getMessage());
+                Tbs5530ProductionFailure blocked = assertThrows(Tbs5530ProductionFailure.class,
+                        Tbs5530ProductionSession::acquire);
+                assertEquals(Tbs5530ProductionFailure.Kind.DRAIN_UNCONFIRMED, blocked.kind);
+                DvbException localized = Tbs5530ProductionFailure.localized(f.context,
+                        DvbException.ErrorCode.CANNOT_OPEN_USB, 0, blocked);
+                assertEquals(result.get().getMessage(), localized.getMessage());
                 // A later successful close is the proof that outstanding transfers are gone.
                 doNothing().when(nativeSource).close();
                 assertThrows(IOException.class, dvb::close); // Preserve the original cleanup error.

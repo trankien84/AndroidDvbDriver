@@ -1,5 +1,43 @@
 # Research log (append-only)
 
+## 2026-11-19 — P4b bước 1: TS liên tục nhưng helper đóng phiên do guard snapshot/drain quá hẹp
+
+**RUNTIME-OBSERVED:** card P4b/schema SESSION SHA `0a9e343fb9ef217824553be23a41e64f2b40534e00b7c783d0e355bf523ee471`, manifest source đã dùng 504 tệp SHA `34b02b4c073c585ab91a3e92cbd071f48e67ca60d4e41afb1d0fbea795ace04b`, helper `5ac346d1…56119`, APK debug `5c13d652…3ca19f`. Sau fake 324/324, gate và validator thật PASS, người dùng xác nhận bố trí/cold/sẵn sàng, một install-r/history nguyên, rồi chạy đúng ordinal 1/bước 1/K25/drive 85. Hai hộp USB tổng cộng, không Luôn mở, không hộp chọn hai Activity được báo.
+
+Bootstrap/reload đủ 132/132, MANUAL PLP0 lock, không AUTO fallback. ON1 133414912 byte/ON2 44466176 byte, đủ bốn pha, DRAIN_CONFIRMED, writer drop/outstanding 0, không quarantine. Data audit có 8143/2714 completion, không data error/failed reap hoặc -75/-71. Mỗi ON có 16 DISCARD và 16 completion drain, trong đó 15 status -2 và một status 0; mỗi ON một DISCARD errno 22 (EINVAL). Đây là cleanup quan sát được, không được lược bỏ vì dữ liệu đã nhận.
+
+### Nguyên nhân đóng phiên và giới hạn fake tests
+
+**SOURCE-CONFIRMED + OFFLINE-REPRODUCED:** `Test-B5SessionTransportSafe` tại `Invoke-TBS5530-B5Session.ps1:289` trả false đầu tiên vì đòi firmware snapshot `OPERATIONAL_CANDIDATE`, trong khi report thật là `TRANSITIONING` với attempted/completed/full-length 132 và NONE/NONE. Reload riêng là COMPLETE, detach_ns=-1; enum snapshot này không tự chứng minh firmware dở dang. Điều kiện tại dòng 302 còn bác last URB status -2 độc lập. Main dòng 1299–1302 append receipt `session_closed=true`, capture_complete vẫn true. Exit code mặc định 1 không chứng nhận riêng lỗi data hoặc chất lượng TS.
+
+Native `reap_one` cập nhật last_status cả khi drain sau DEADLINE/DISCARD; first_status của cả hai pha là 0. Trong `Tbs5530AutonomousSession`, đường B5 có native_stream=null nên nhãn receive_error xét native_urb last_status<0 và thành KNOWN_COMPLETED_USB_ERROR. Record -2 cuối ON2 nằm sau DISCARD, actual 1024/outstanding 0. Đây là cancellation lúc dọn trong trace đã kiểm, không phải data completion -75/-71. Không coi mọi status -2 hoặc EINVAL trong tương lai là an toàn nếu thiếu toàn bộ audit/drain.
+
+Fake success fixture dùng firmware/native_urb null; fixture retry UI dùng OPERATIONAL_CANDIDATE. Không có success với bootstrap snapshot TRANSITIONING đủ 132/132/reload COMPLETE hoặc last cleanup status -2/first_status 0. Vì vậy 324 PASS chưa kiểm hai trường hợp runtime này. Phiên đã đóng được giữ nguyên; không sửa guard, receipt, UUID, review hoặc budget để chạy bước 2. Người dùng xác nhận rút tuner sau drain, không chuyển release.
+
+### Số đo và cách đọc thận trọng
+
+| Phép đo | BER zero OFF / ON | SNR OFF / ON, dB | RSSI OFF | Duty ON1 / ON2 | CC/phút; TEI/phút sau 5 giây |
+| --- | --- | --- | --- | --- | --- |
+| B5 cũ, drive 0x54 | 100% / 2,4814% | 24,7495 / 18,8976 | −64,85 dBm | 23,4919% / 23,7173% | 5467,854; 31,204 / 5233,573; 0 |
+| P4b bước 1, drive 0x55 | 100% / 100% | 27,5890 / 27,5996 | −65,695 dBm | 100% / 100% | B5 analyzer: 91,208; 0 / 84,057; 0, có giới hạn biên ON2 |
+| Bước 2/4 và release 6/7/11 | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
+
+SNR drop hai cặp 0,3537/−0,6849 dB, không mất demod lock. OFF SNR so B5 lệch 2,3701/5,2604 dB >2; bước 2 cùng drive B5 chưa chạy, vì vậy nhiễu **INCONCLUSIVE** và tác dụng drive UNKNOWN dù BER/duty cải thiện mô tả. TS có PAT/PMT/SDT CRC-valid và 13 dịch vụ VTV trên hai ON, TEI 0. ON2 có sync break gần 2048 byte đầu; không xóa khỏi raw để gọi stream sạch. CC còn vượt 1/phút, chưa TS_SMOKE_PASS hoặc PHASE4_FUNCTIONAL_PASS.
+
+**Giới hạn analyzer:** ON2 sau 5 giây đếm ts_bytes 22216712 > payload 22216704 đúng 8 byte; analyzer comparison từ chối đúng, giữ normalized quality UNKNOWN, không nới guard hoặc sửa số gốc. Crop dẫn xuất toàn gói thực nằm sau threshold, lưu offset/hash và không nối/xóa lỗi ở giữa: CC 37/7, TEI 0/0; B5 analyzer dùng packet biên khác nên CC 38/7. TSDuck auto-detect raw trả thông báo không nhận format dù exit 0/JSON counters 0; không dùng đó làm PASS. TSDuck đọc được mẫu toàn gói dẫn xuất, 13 dịch vụ và PCR bitrate khoảng 35,580 Mbps, vẫn không chứng nhận PCR liên tục hoặc RF sạch.
+
+Chỉ một lượt đã dùng, còn 8 OnePlus + 2 Samsung về số học nhưng budget hiện tại đã đóng. Bước tiếp là sửa/kiểm mô hình guard offline theo một phạm vi được duyệt, không tự chạy tuner mới. Raw/report/receipt ở bundle `phase4-p4b-session-20261119-1325` ngoài Git; 22 tệp export hiện hữu SHA/size khớp, không ghi đè bằng chứng. Bản test helper sửa bảy dòng prose sau phiên không phải source đã dùng trên tuner, cần manifest candidate riêng.
+
+## 2026-11-19 — P4b mở helper theo card phiên; giữ nguyên trần grant của app debug
+
+**SOURCE-CONFIRMED tại baseline `c39541f`:** `Tbs5530AutonomousSession` đọc `b5_attempt_ordinal`/`b5_max_attempts` rồi gọi `Tbs5530AutonomousLaunch.requireB5Budget`. Hàm này nhận maximum 1–6, ordinal 1–maximum, cold ít nhất năm giây và UUID/hash hợp lệ. Lịch ba bước debug với tối đa hai retry toàn phiên không vượt trần này, không cần nới app. Chín lượt OnePlus là ngân sách chung debug/release, không phải giá trị đưa vào `b5_max_attempts`.
+
+**OFFLINE-TESTED:** production close giữ owner khi `Tbs5530StreamGate.drained()` false. Bản sửa thêm trạng thái drain chưa xác nhận trên owner, thông báo resource EN/VI khi close và từ chối mở mới bằng lỗi riêng thay vì BUSY chung. Fake test kiểm cả IOException và RuntimeException của nguồn nhận, giữ observer/owner và chỉ nhả khi close sau đã drain. Gate JVM/build/app lint PASS ngày 19/11; chưa phải tái hiện lỗi phần cứng.
+
+**Phạm vi không đổi:** ảnh gốc 8192 byte/SHA `b97cf208bb586f706b26aa5450de6bb97375a3e3eabe833cddb0ae3a4f69d0dc` được kiểm lại trên host; chưa push vào điện thoại. Không sửa RAM plan, frontend, drive production, native receive hoặc references. SHA chỉ đọc đo lại: official `2ce787de9f6e81b4294692a45de15596ae2e1322`, CoreELEC `072f8e99e0ac66d88d7278784e922e08e8253210`, C `c5fa27eecbe80633cbb365cc44656daea1c0e2e3`, Go `6aaa1899991c875ba0482fa9098adc6c83b01fd8`.
+
+**NOT RUN ở checkpoint này:** lượt đo P4b, hộp quyền thực tế và Dump release. Chưa thay kết luận nhiễu `INCONCLUSIVE`, drive `UNKNOWN` hoặc `TS_SMOKE_PASS=false` bằng kết quả mới. ADR-068 ghi phạm vi có tham số và các điều kiện chạy.
+
 ## 2026-11-19 — Đính chính P4: hai Activity gây hộp chọn app, không phải lỗi firmware
 
 **SOURCE-CONFIRMED trên baseline `f0a654ff94b7d0ff8fe00516f0fec3837c88238a`:** filter chính của `UsbDelegate` có `734c:5530`; manifest debug đăng ký thêm `Tbs5530AutonomousDiagnosticActivity` cho cùng thiết bị. Hai Activity trong cùng APK sinh hộp chọn app của Android, thay vì hộp xác nhận một ứng viên như B2–B5. Nếu chọn `UsbDelegate`, intent `DVB_DEVICE_ATTACHED` còn có thể mở client khác giữa lúc handoff; đây là rủi ro điều phối, chưa phải bằng chứng client khác đã tranh thiết bị trong lượt 1.

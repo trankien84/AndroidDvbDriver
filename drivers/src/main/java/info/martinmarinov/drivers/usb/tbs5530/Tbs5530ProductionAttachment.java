@@ -224,6 +224,8 @@ final class Tbs5530ProductionAttachment implements AutoCloseable {
     private static String identity(UsbDevice d) { return d.getDeviceName() + "|" + d.getDeviceId(); }
     private static String identity(Tbs5530UsbBinding.Device d) { return d.path + "|" + d.id; }
 
+    void retainUndrained() { ownership.retainUndrained(); }
+
     /** The operational owner calls this only after streaming and control cleanup have drained. */
     @Override public synchronized void close() throws IOException {
         synchronized (events) { if (closed) return; closed = true; epoch.close(); events.notifyAll(); }

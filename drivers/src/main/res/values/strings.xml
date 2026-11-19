@@ -51,6 +51,7 @@
     <string name="tbs5530_open_failed">Cannot initialize TBS5530. The RAM transfer will not be retried automatically.</string>
     <string name="tbs5530_already_open">TBS5530 is already open.</string>
     <string name="tbs5530_busy">TBS5530 is already in use or stopping. Stop the active app or client and wait for USB cleanup before opening it again.</string>
+    <string name="tbs5530_drain_unconfirmed">The device has not been safely released. Unplug the tuner, fully close the app, then reopen it.</string>
     <string name="tbs5530_no_retry">TBS5530 stopped after an uncertain USB operation. Reconnect the tuner before trying again.</string>
     <string name="tbs5530_interrupted">TBS5530 operation was interrupted.</string>
     <string name="tbs5530_dvbt2_only">TBS5530 currently supports DVB-T2 only.</string>

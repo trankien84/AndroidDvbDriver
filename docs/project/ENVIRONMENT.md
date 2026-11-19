@@ -1,5 +1,23 @@
 # Kiểm kê môi trường
 
+## 2026-11-19 — P4b bước 1 thực: OnePlus giữ bố trí đã xác nhận, tuner đã rút
+
+Người dùng xác nhận lại bố trí card, tuner rút ít nhất năm giây và sẵn sàng. OnePlus GM1900/API30/boot408 dùng target tường minh đã kiểm, không sạc. Cài debug mới bằng install-r đúng một lần, installed SHA `5c13d652…3ca19f`, history trước/sau nguyên. Người dùng báo một hộp USB trước helper và một sau bootstrap, tổng hai; không tích Luôn mở, không lỗi UI khác được báo. Đây là số hộp quan sát trên OnePlus, không suy số hộp release.
+
+Một lượt K25/drive 85 nhận đủ bốn pha, 177881088 byte và DRAIN_CONFIRMED. Helper đã thoát, receipt đóng; người dùng xác nhận rút tuner. Không cài release hoặc nhập SAF/push/xóa firmware, không hỏi mở ferrite vì phiên chưa tới bước 3. Samsung, Windows, VM, WSL và USB ownership software không thay đổi. Không emulator/native instrumentation mới; TSDuck 3.45-4798 chỉ đọc TS offline, không BDA capture. Python hệ thống `C:\Python312\python.exe` 3.12.2, dùng `-X utf8` sau help đầu gặp UnicodeEncodeError từ console cp1252; không đổi encoding hệ thống hoặc cài package.
+
+Bằng chứng source/card/helper đã dùng giữ nguyên ngoài Git. Sau phiên chỉ test helper có bảy dòng prose được sửa spacing, main helper/APK không đổi; snapshot bản live và manifest candidate tách riêng. Không coi candidate text-only là source đã chạy phần cứng hoặc mở lại budget.
+
+## 2026-11-19 — P4b phiên helper mới: baseline đúng, build không đổi toolchain
+
+Đầu phiên xác minh HEAD `c39541f83c2103d5f20c2083abf59756ee0ac3c9`, nhánh `chore/modernize-android-build`, tree sạch. Không stage/commit/push. AGP hiện khai báo 9.5.0/Gradle Wrapper 9.8.2, compileSdk 37.2, targetSdk 37/minSdk 21/Java 8 giữ nguyên. JDK thực `25.0.5.0.3`, Build-Tools `37.0.0` và NDK `30.0.16248370` đối chiếu bằng executable/source.properties; CMake khai báo `4.1.2`. Không cài, nâng, xóa package, sửa PATH hoặc môi trường bền.
+
+Kiểm ADB chỉ đọc thấy hai alias cùng OnePlus GM1900/API30, manufacturer OnePlus, boot 408, màn hình Awake/ON, app đang cài versionCode 30. Chọn một target tường minh để lập card; alias cũ đã đổi cổng nên không tự dùng pin target lịch sử. Định danh và raw chỉ ngoài Git. Chưa install lên điện thoại, hỏi xác nhận cắm hoặc gửi I/O tuner ở checkpoint này. Bộ đếm `num_connects` trong dumpsys là lịch sử, không dùng nó một mình để kết luận tuner đang cắm.
+
+GitNexus MCP liệt kê đúng path/branch/HEAD và index thời điểm 19/11 13:11 +07, có context cho khóa production. Tuy nhiên CLI 1.6.12 `status --json` chỉ in banner, đã dừng đúng process riêng; không chứng nhận toàn vẹn FTS hoặc coverage các sửa chưa commit. Không rebuild/repair hoặc đổi cấu hình. Chứng cứ chính là source, diff và gate Gradle mới.
+
+Gate JVM/build/app lint mới PASS trong 7m58s, hai APK được khóa lại vì thông báo/logic drain production thay đổi. Certificate vẫn `f848b8e4680bd6fb5e099969078aa4a6c649186c7f8c7df286d2111d3be60fb3`; release ký debug key chỉ thử cục bộ, không debuggable. Không chạy emulator/native/Windows BDA/USBPcap/VM/WSL trong checkpoint này. Bundle riêng `phase4-p4b-session-20261119-1325` dưới reports/logs của `D:\TSDuck`, không ghi đè bundle P4b cũ.
+
 ## 2026-11-19 — P4b: kiểm chỉ đọc mặc định USB và toolchain không đổi
 
 Đã xác minh baseline `f0a654ff94b7d0ff8fe00516f0fec3837c88238a`, nhánh `chore/modernize-android-build`, tree sạch trước sửa. Build khai báo AGP 9.5.0/Gradle 9.8.2, compileSdk 37.2/targetSdk 37/minSdk 21, Java 8, Build-Tools 37.0.0/NDK 30.0.16248370/CMake 4.1.2. JDK thực chạy 25.0.5.0.3; Build-Tools và NDK đối chiếu `source.properties` khớp khai báo. Không cài/nâng/xóa package hoặc đổi môi trường bền.

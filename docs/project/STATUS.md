@@ -1,5 +1,17 @@
 # Port TBS5530 sang Android — trạng thái hiện tại
 
+## 2026-11-19 — P4b bước 1 nhận đủ TS; phiên đã đóng an toàn, tuner đã rút
+
+**Đã chạy đúng một lượt debug bước 1/K25/drive `0x55`, nhận 177881088 byte và đủ bốn pha; chưa hoàn tất Phase 4.** Bootstrap/reload 132/132, MANUAL PLP0 lock, không AUTO fallback, writer drop/outstanding 0, không quarantine, DRAIN_CONFIRMED. Helper exit 1 và receipt đã đóng phiên: guard SESSION bác snapshot bootstrap `TRANSITIONING` dù đủ 132/132/reload COMPLETE; completion cuối `-2` lúc drain còn là căn cứ bác độc lập. Audit offline không có data error/failed reap, 16 completion drain mỗi ON, nhưng mỗi ON có một DISCARD errno 22 trong cleanup. Hai tình huống runtime này chưa có trong fake success fixture, không coi helper đã tương thích đầy đủ hardware chỉ từ 324 PASS. Không sửa hoặc mở lại receipt, không chạy bước 2 hoặc release. Người dùng xác nhận đã rút tuner sau drain.
+
+**Số đo cải thiện nhưng chưa được kết luận giảm nhiễu:** BER OFF/ON 100% bằng 0, SNR OFF/ON 27,5890/27,5996 dB, duty ON1/ON2 100%/100%. OFF so B5 lệch 2,3701/5,2604 dB nên theo card vẫn `INCONCLUSIVE`; chưa có bước 2 cùng drive B5. CC sau 5 giây còn cao hơn 1/phút, TEI 0; `TS_SMOKE_PASS=false`, drive `UNKNOWN`, `PHASE4_FUNCTIONAL_PASS` chưa đạt. Xem [RESEARCH.md](RESEARCH.md) cho phân biệt lỗi drain/data và giới hạn packet biên analyzer.
+
+Thông báo giữ khóa khi drain chưa xác nhận đã có EN/VI, xuất hiện khi đóng lỗi và khi mở owner mới; không tự nhả khóa. Gate mới PASS 7m58s: JVM app 132/13, drivers 562 PASS + 5 SKIP, service 17, usbxfer 86; build debug/release/AndroidTest app và app lint hai variant PASS. Hai APK mới: debug `5c13d652…3ca19f`, release thử nghiệm `b923054c…b3fdb1`; certificate/versionCode không đổi, alignment 16 KiB tĩnh PASS. Driver lint chạy riêng vẫn đúng một lỗi receiver flag lịch sử mỗi variant, không có lỗi lint mới được phát hiện.
+
+**Helper fake 324/324 và validator thật PASS trước live.** Card P4b/schema SESSION SHA `0a9e343f…ee471`, source đã dùng 504 tệp SHA `34b02b4c…ce04b`, HEAD `c39541f` và tree sạch đầu phiên. Đã nhận ba xác nhận đầu phiên, install-r debug một lần/hash cài khớp/history nguyên; người dùng báo **hai hộp USB debug tổng cộng**, không hộp chọn hai Activity. Release/hộp quyền release/SAF/bước 2–11 NOT RUN; chưa tới chốt hỏi push/xóa firmware. Còn 8 OnePlus + 2 Samsung chỉ về số học, phiên đã đóng nên không tự dùng tiếp.
+
+Schema SESSION, ADR-068 và hướng dẫn đã cập nhật, không nới grant app debug. Bước tiếp chỉ kiểm offline cách phân loại completion hủy lúc drain, không chạy lại tuner. Bundle `phase4-p4b-session-20261119-1325` giữ ngoài Git; không stage/commit/push, đổi driver/USB owner/VM/toolchain.
+
 ## 2026-11-19 — P4b sửa hộp chọn app đã qua gate; dừng vì validator helper không hỗ trợ card mới
 
 **Đã hoàn tất sửa offline trong phạm vi mục 3; chưa chạy phần cứng P4b.** Debug chỉ còn một Activity nhận `734c:5530`, cửa sổ operational 90 giây và nhận quyền OS thật dù callback riêng chưa về. Production giữ 60 giây, nhận quyền từ hộp hệ thống, khóa một owner cùng tiến trình từ bootstrap đến drain; `UsbDelegate` không chuyển tiếp TBS5530 khi production đang giữ khóa. Có lỗi EN/VI và hướng dẫn quyền/mặc định, không đổi filter release hoặc firmware.
