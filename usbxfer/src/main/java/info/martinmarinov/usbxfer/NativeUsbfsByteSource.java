@@ -62,6 +62,7 @@ public final class NativeUsbfsByteSource implements ByteSource {
     private final AlternateUsbInterface usbInterface;
     private final Configuration configuration;
     private final byte[] buffer = new byte[BUFFER_SIZE];
+    private final Tbs5530TsPrefixFilter prefix = new Tbs5530TsPrefixFilter(BUFFER_SIZE);
     private Backend backend;
     private long handle;
     private Thread worker;
@@ -78,12 +79,18 @@ public final class NativeUsbfsByteSource implements ByteSource {
     public static final class CompletionSnapshot {
         public static final int CAPACITY = 65536;
         private final long[] values;
-        private CompletionSnapshot(long[] values) throws IOException {
+        private final long discardedPrefixBytes;
+        private final boolean prefixLocked;
+        private CompletionSnapshot(long[] values, long discardedPrefixBytes, boolean prefixLocked) throws IOException {
             if (values == null || values.length < 8 || values[0] != CAPACITY
                     || values[1] < 0 || values[1] > CAPACITY || values.length != 8 + values[1] * 3)
                 throw new IOException("Invalid native TS completion snapshot");
             this.values = values;
+            this.discardedPrefixBytes = discardedPrefixBytes;
+            this.prefixLocked = prefixLocked;
         }
+        public long getDiscardedPrefixBytes() { return discardedPrefixBytes; }
+        public boolean isPrefixLocked() { return prefixLocked; }
         public int getRecordCount() { return (int) values[1]; }
         public int getCapacity() { return CAPACITY; }
         public boolean isOverflow() { return values[2] != 0; }
@@ -113,10 +120,14 @@ public final class NativeUsbfsByteSource implements ByteSource {
     /** Bounded copy outside the producer loop; callable during run or after close. */
     public CompletionSnapshot snapshotCompletions() throws IOException {
         synchronized (lifecycle) {
-            if (handle != 0) return new CompletionSnapshot(backend.completions(handle));
+            if (handle != 0) return captureSnapshot(backend.completions(handle));
             if (finalSnapshot != null) return finalSnapshot;
-            return new CompletionSnapshot(new long[] {CompletionSnapshot.CAPACITY, 0, 0, 0, 0, 0, -1, -1});
+            return captureSnapshot(new long[] {CompletionSnapshot.CAPACITY, 0, 0, 0, 0, 0, -1, -1});
         }
+    }
+
+    private CompletionSnapshot captureSnapshot(long[] values) throws IOException {
+        return new CompletionSnapshot(values, prefix.discardedBytes(), prefix.isLocked());
     }
 
     public NativeUsbfsByteSource(UsbDeviceConnection ownedConnection, AlternateUsbInterface usbInterface) {
@@ -196,11 +207,13 @@ public final class NativeUsbfsByteSource implements ByteSource {
             reading = true;
             try {
                 int count;
+                int filtered = 0;
                 Thread active;
                 synchronized (lifecycle) {
                     if (failure != null) throw failure;
                     if (closed || stopping || handle == 0) throw new IOException("Native TS source is not running");
                     count = backend.read(handle, buffer);
+                    if (count > 0 && count <= BUFFER_SIZE) filtered = prefix.filter(buffer, count);
                     active = worker;
                 }
                 if (count < 0) {
@@ -213,7 +226,7 @@ public final class NativeUsbfsByteSource implements ByteSource {
                 }
                 if (count > BUFFER_SIZE) throw new IOException("Native TS receive failed (" + count + ")");
                 if (count == 0) Thread.sleep(2);
-                else sink.consume(buffer, count);
+                else if (filtered > 0) sink.consume(prefix.output(), filtered);
             } catch (IOException | InterruptedException | RuntimeException | Error e) {
                 requestStop();
                 throw e;
@@ -250,7 +263,8 @@ public final class NativeUsbfsByteSource implements ByteSource {
                 closeConnection();
                 if (handle != 0) {
                     boolean drained;
-                    try { finalSnapshot = new CompletionSnapshot(backend.completions(handle)); }
+                    prefix.discardPending();
+                    try { finalSnapshot = captureSnapshot(backend.completions(handle)); }
                     finally {
                         drained = backend.destroy(handle);
                         handle = 0;

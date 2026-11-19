@@ -1,5 +1,13 @@
 # Port TBS5530 sang Android — trạng thái hiện tại
 
+## 2026-11-19 — P4d đã đóng: K25 sạch trên hai máy, thiếu bằng chứng PCR K36
+
+Bộ lọc production qua 8/8 raw theo tiêu chí ít nhất 1 MiB hoặc hết tệp nếu ngắn hơn, với 16/16 đối chiếu theo từng byte. P4b ON1 khóa ở 2049. Bản release ký bằng chứng chỉ debug để thử cục bộ; build, JVM, cách ly release, JNI và 16 KiB tĩnh đạt. Card P4d đã qua validator thực thi; hai APK cùng `versionCode=30`, không hạ phiên bản OnePlus.
+
+Bước 2 cùng drive `0x54` với B5 sạch, đạt `EMI_MITIGATED` và `ROOT_CAUSE_CONFIRMED` theo card. Chưa tách tác dụng riêng của ferrite. Dump K25 bước 6 và 11 đạt; Dump K36 bước 7 có TS và sync từ đầu nhưng thiếu khoảng PCR đủ để chấm. Số byte tiền tố bỏ ở bước 6/7/11 là 2069/2219/2062. Bước 8 BLOCKED vì mở lại thiết bị sẽ nạp lại RAM; bước 9 cắm lại có TS, nhưng ghi nhận nhiều hộp thông báo, chưa xác định nguyên nhân.
+
+Không `PHASE4_FUNCTIONAL_PASS`; `TS_SMOKE_PASS=false`. Bước 4 và 10 bỏ qua theo lựa chọn người dùng. Tuner đã rút; đã dùng 5/8 lượt OnePlus, 1/2 Samsung, 0 Windows, 0 lần lặp giao diện. Không dùng lại số dư của card đã đóng. Bước tiếp an toàn là kiểm ngoại tuyến ảnh/hộp dừng và bằng chứng PCR K36; xem [TEST-MATRIX.md](TEST-MATRIX.md) và [WORKLOG.md](WORKLOG.md).
+
 ## 2026-11-19 — P4d dừng trước tuner vì một raw ngắn hơn 1 MiB
 
 Tám mẫu đều xác nhận ranh đồng bộ mới; bảy mẫu đạt đủ cửa sổ kiểm. B3 lượt 3 chỉ có 896 KiB dù đã quét hết tệp, nên không triển khai bộ lọc production, không cấp quyền thực thi card P4d và không chạy bước 2–11. Cần raw đủ độ dài hoặc quyết định rõ ràng của người dùng về mẫu ngắn trước khi tiếp tục.

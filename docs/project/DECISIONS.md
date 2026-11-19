@@ -1,5 +1,59 @@
 # Architecture decision record (ADR)
 
+## ADR-074 — Chốt đối chứng nhiễu P4d, không thay tiêu chí TS khi thiếu PCR
+
+**Date:** 2026-11-19, baseline `5ca4cb2`.
+
+**Status:** `ROOT_CAUSE_CONFIRMED` theo card P4d; chức năng và TS release chưa đủ chốt.
+
+### Context / Evidence
+
+Ở bước 2, OnePlus chạy K25 với cùng drive `0x54` như B5 nhưng với bố trí mới. Cả hai pha ON đạt các ngưỡng BER, SNR và thời gian có dữ liệu, đồng thời TS debug sạch theo tiêu chí. Người dùng bỏ qua bước 4, không mở ferrite.
+
+### Decision
+
+Giữ `EMI_MITIGATED` cho bố trí mới và `ROOT_CAUSE_CONFIRMED` cho phép đối chứng cùng drive. Không suy kết luận về tác dụng riêng của ferrite, cáp, khoảng cách hoặc nguồn gây nhiễu vật lý. Không đánh dấu TS release đạt toàn bộ khi K36 không có khoảng PCR đủ để chấm.
+
+### Validation / Reopen trigger
+
+Bước 8 bị chặn vì nút mở thiết bị luôn nạp lại ảnh gốc vào RAM, còn nút Dump không đóng luồng. Người dùng đồng ý ghi BLOCKED rồi tiếp bước 9–11. Một lần kiểm lại cần tách mở luồng khỏi mở thiết bị, và có bằng chứng PCR K36 đủ để chấm; không tự mở lại ngân sách P4d.
+
+## ADR-073 — Áp dụng tiêu chí theo mục đích khi ngưỡng không thể áp dụng nguyên văn
+
+**Date:** 2026-11-19, baseline `5ca4cb2`.
+
+**Status:** Được người dùng chấp thuận cho P4d và các lần sau.
+
+### Context / Evidence
+
+B3 lượt 3 chỉ có 917.504 byte nên không thể quét 1 MiB. Quét hết tệp vẫn kiểm được 4.869 gói liên tiếp, đạt mục đích kiểm một đoạn dài thay vì chỉ 64 KiB đầu.
+
+### Decision
+
+Khi một ngưỡng do người dùng đặt không thể áp dụng nguyên văn vì lý do hiển nhiên, dùng dữ liệu thật để kiểm mục đích, ghi cách hiểu và bằng chứng trong báo cáo rồi tiếp tục. Dừng nếu liên quan quy tắc an toàn phần cứng tuyệt đối, dữ liệu trái mục đích, hoặc phải đổi phạm vi code, công cụ hay ngân sách đã duyệt.
+
+### Validation / Reopen trigger
+
+Riêng P4d, quét ít nhất 1 MiB hoặc hết tệp nếu ngắn hơn. Việc áp dụng tiêu chí theo mục đích không thay phê duyệt hay xác nhận phần cứng.
+
+## ADR-072 — Bỏ dữ liệu FX2 cũ khi mở luồng TBS5530 production
+
+**Date:** 2026-11-19, baseline `5ca4cb2`.
+
+**Status:** Đã triển khai đường production; kết quả kiểm được ghi riêng trong [TEST-MATRIX.md](TEST-MATRIX.md).
+
+### Context / Evidence
+
+Theo tiêu chí đã sửa, cả tám raw giữ nhịp 188 byte tới hết tệp kể từ khóa mới. ADR này thực thi phương án đã ghi ở ADR-070; giữ nguyên kết quả lịch sử.
+
+### Decision
+
+Mỗi nguồn production bỏ 2048 byte đầu, tìm điểm đầu tiên có năm byte sync tại khoảng cách 188 byte, rồi chuyển nguyên byte kể từ điểm đó. Chỉ giữ tối đa 752 byte chờ qua ranh giới hai lần đọc. Không dò lại sau khóa, không đổi vòng nhận USB gốc và không lọc raw debug. Tệp thông tin Dump ghi `prefix_locked` và `discarded_prefix_bytes` theo lần mở; việc căn gói đầu mỗi lần bắt đầu ghi Dump không tính vào số byte này.
+
+### Validation / Reopen trigger
+
+Đối chiếu theo từng byte trên tám raw, gồm P4b ON1 khóa 2049. Dump release bước 6, 7 và 11 vẫn phải kiểm trên thiết bị: bắt đầu đúng gói, tiền tố bỏ nằm trong `[2048, 2236)` và đạt tiêu chí chất lượng đã duyệt.
+
 ## ADR-071 — Dùng bản vá Oracle JDK 25.0.5.1 cho Gradle
 
 **Date:** 2026-11-19, baseline `930ac05`.

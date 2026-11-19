@@ -54,9 +54,14 @@ public class NativeUsbfsByteSourceTest {
         }
         @Override public void stop(long handle) { assertEquals(123, handle); stops.incrementAndGet(); stop.countDown(); }
         @Override public int read(long handle, byte[] data) {
-            if (firstBuffer == null) firstBuffer = data;
+            boolean first = firstBuffer == null;
+            if (first) firstBuffer = data;
             else assertSame(firstBuffer, data);
             assertEquals(NativeUsbfsByteSource.BUFFER_SIZE, data.length);
+            if (first && count == 188) {
+                for (int i = 0; i < 5; i++) data[2049 + i * 188] = 0x47;
+                return 2049 + 5 * 188;
+            }
             data[0] = 0x47;
             return count;
         }
@@ -83,11 +88,16 @@ public class NativeUsbfsByteSourceTest {
         Fake fake = new Fake(); NativeUsbfsByteSource source = source(fake);
         source.open(); assertTrue(fake.running.await(1, TimeUnit.SECONDS));
         AtomicInteger calls = new AtomicInteger();
-        ByteSink sink = (data, length) -> { assertEquals(188, length); assertEquals(0x47, data[0]); calls.incrementAndGet(); };
+        ByteSink sink = (data, length) -> {
+            assertEquals(calls.getAndIncrement() == 0 ? 5 * 188 : 188, length);
+            assertEquals(0x47, data[0]);
+        };
         source.readNext(sink); source.readNext(sink);
         assertEquals(2, calls.get());
         source.close(); source.close();
         assertEquals(1, fake.destroyed.get()); assertEquals(1, fake.connectionCloses.get());
+        assertTrue(source.snapshotCompletions().isPrefixLocked());
+        assertEquals(2049, source.snapshotCompletions().getDiscardedPrefixBytes());
         assertTrue(source.snapshotCompletions().isComplete());
         assertFalse(source.snapshotCompletions().isTruncated());
         assertIo(source::open); assertIo(() -> source.readNext(sink));

@@ -20,9 +20,10 @@ public class Tbs5530DumpDiagnosticsTest {
             Tbs5530RecordingTimeline timeline = new Tbs5530RecordingTimeline(100);
             timeline.observe(1000, 188, true);
             Constructor<NativeUsbfsByteSource.CompletionSnapshot> constructor = NativeUsbfsByteSource.CompletionSnapshot.class
-                    .getDeclaredConstructor(long[].class);
+                    .getDeclaredConstructor(long[].class, long.class, boolean.class);
             constructor.setAccessible(true);
-            NativeUsbfsByteSource.CompletionSnapshot snapshot = constructor.newInstance((Object) new long[]{65536, 1, 0, 0, 1, 1, 0, 2000, 500, 0, 188});
+            NativeUsbfsByteSource.CompletionSnapshot snapshot = constructor.newInstance(
+                    new long[]{65536, 1, 0, 0, 1, 1, 0, 2000, 500, 0, 188}, 2049L, true);
             Tbs5530DumpDiagnostics.write(ts, 100, 1000, 506000000, 8000000, snapshot, timeline);
             byte[] bytes = new byte[(int) sidecar.length()];
             try (FileInputStream input = new FileInputStream(sidecar)) {
@@ -37,6 +38,8 @@ public class Tbs5530DumpDiagnosticsTest {
             assertTrue(json.getBoolean("completions_complete"));
             assertTrue(json.getBoolean("consumer_offsets_complete"));
             assertEquals(188, json.getLong("ts_size"));
+            assertTrue(json.getBoolean("prefix_locked"));
+            assertEquals(2049, json.getLong("discarded_prefix_bytes"));
             assertEquals(1, json.getJSONArray("completions").length());
             assertEquals(188, json.getJSONArray("consumer_offsets").getJSONObject(1).getLong("byte_offset"));
             assertTrue(json.isNull("metrics"));

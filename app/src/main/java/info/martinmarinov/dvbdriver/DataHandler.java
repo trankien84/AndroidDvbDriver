@@ -39,6 +39,7 @@ class DataHandler extends Thread {
     private File file;
     private FileOutputStream fos;
     private int recordedSize = 0;
+    private int tsPacketOffset;
 
     private long readB = 0;
     private long currFreq;
@@ -103,14 +104,22 @@ class DataHandler extends Thread {
                 int read = is.read(b);
                 if (read > 0) {
                     synchronized (recordingLock) {
-                        if (recording) {
+                        int skip = 0;
+                        if (collectDiagnostics) {
+                            // The demux writes whole TS packets, but reads from its pipe can split them.
+                            if (recording && recordedSize == 0 && tsPacketOffset != 0) {
+                                skip = Math.min(read, 188 - tsPacketOffset);
+                            }
+                            tsPacketOffset = (tsPacketOffset + read) % 188;
+                        }
+                        if (recording && skip < read) {
                             try {
-                                fos.write(b, 0, read);
+                                fos.write(b, skip, read - skip);
                             } catch (IOException e) {
                                 recordingTimeline.invalidate();
                                 throw e;
                             }
-                            recordedSize += read;
+                            recordedSize += read - skip;
                             recordingTimeline.observe(System.nanoTime(), recordedSize, false);
                         }
                     }

@@ -1,5 +1,13 @@
 # Kiểm kê môi trường
 
+## 2026-11-19 — P4d tiếp nối: công cụ giữ nguyên, hai thiết bị thật đã xác minh
+
+Nhánh `chore/modernize-android-build`, HEAD `5ca4cb2a5fee1a519436a8bc76ef22b14d277971`, ngay sau `930ac05`; cây Git sạch lúc bắt đầu. PowerShell dùng Oracle JDK `25.0.5.1+4-LTS-20`, Gradle Wrapper `9.8.2`, AGP `9.5.0`, SDK `37.2` revision 2, Build-Tools `37.0.0`, NDK `30.0.16248370`, CMake `4.1.2` và Platform-Tools `37.0.1`. Không đổi minSdk 21, Java 8, AVD, driver, chủ USB hay VM.
+
+Lần đầu ADB báo 0 kết nối; sau khi người dùng kết nối lại, xác minh OnePlus GM1900/API 30 và Samsung SM-X926B/API 36 đều đang cài `versionCode=30`. Cài đè debug rồi release trên OnePlus, cài đè cùng APK release trên Samsung; đối chiếu hash APK đang cài. Hai alias OnePlus ban đầu trỏ cùng máy. Giữa bước 6 và 7, kết nối ADB đổi; xác minh lại qua phiên khởi động, hash APK và hash tệp K25 đã ghi trước khi đọc bản K36. Không sửa pin card đã dùng cho debug.
+
+Hai bản firmware Download được chép sau khi người dùng đồng ý riêng trên từng máy, hash khớp bản gốc, rồi người dùng chọn qua hộp tệp Android. Không xóa bản Download. TSDuck `3.45-4798` và Python `3.12.2` chỉ dùng để đọc tệp đã có; không dùng tuner với Windows, không chạy emulator hoặc VM. Tuner đã rút sau bước 11.
+
 ## 2026-11-19 — P4d: vá Oracle JDK lên 25.0.5.1
 
 Baseline nhánh `chore/modernize-android-build`, HEAD `930ac0562afffca5c36e9cb6348d12d8ad05d7c5`, cây làm việc sạch lúc bắt đầu. `java -version`, Java dưới `JAVA_HOME`, Gradle launcher và JVM test cùng dùng Oracle JDK `25.0.5.1+4-LTS-20`. `JAVA_HOME` do người dùng đặt qua `C:\Program Files\Java\latest\jdk-25`; Gradle phân giải sang thư mục `C:\Program Files\Java\jdk-25.0.5.1`. Đã dừng daemon cũ bằng `gradlew.bat --stop` trước build.

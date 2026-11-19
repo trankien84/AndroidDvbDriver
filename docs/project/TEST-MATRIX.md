@@ -1,5 +1,27 @@
 # TBS5530 test matrix
 
+## 2026-11-19 — P4d tiếp nối: kiểm bộ lọc production và APK ký thử
+
+| Hạng mục | Kết quả | Bằng chứng hoặc giới hạn |
+| --- | --- | --- |
+| Kiểm ngưỡng tiền tố đã sửa | PASS 8/8 | Quét hết tám raw khớp SHA-256. B3 lượt 3 quét hết 917.504 byte; khóa 2052, giữ 4.869 gói trọn vẹn. |
+| Hồi quy bộ lọc production | PASS 16/16 | Tám raw với hai cách chia khối, so đầu ra theo từng byte tới cuối. P4b ON1 khóa tại 2049. |
+| JVM | PASS | Drivers 562 PASS và 5 SKIP; usbxfer 90 PASS; app debug 132 và release 13 PASS. Không lặp lại 10 lượt test hủy dvbservice. |
+| Build và lint app | PASS | APK debug/release, APK AndroidTest debug và lint app hai bản; Gradle exit 0. Không chạy instrumentation; driver lint lịch sử không chạy lại. |
+| Chữ ký, release isolation, JNI và 16 KiB | PASS tĩnh | Hai APK cùng chứng chỉ debug và `versionCode=30`. Kiểm 8 ELF debug và 4 ELF release trên bốn ABI; release không debuggable, không có firmware hoặc thành phần chẩn đoán. Chưa kiểm trên thiết bị trang nhớ 16 KiB. |
+| Card P4d | PASS | `Assert-B5LocalPins` và kiểm pin/phạm vi thật của helper chấp nhận card thực thi. OnePlus đang cài `versionCode=30`, bằng bản release. Helper fake 373/373. |
+| Bước 2, OnePlus debug K25 `0x54` | PASS | MANUAL PLP0, không AUTO; bootstrap/reload 132/132; đủ bốn pha và dọn USB. Hai hộp quyền; 405/405 BER ON bằng 0, TS sạch sau 5 giây. Helper exit 1 vì kết quả chờ chấm; phân tích sau đó PASS. |
+| Bước 3, đối chứng nhiễu | PASS | B5 cũ và bước 2 cùng drive `0x54`; đạt `ROOT_CAUSE_CONFIRMED` theo card. |
+| Bước 4, ferrite | SKIP | Người dùng chọn bỏ qua; không tách hiệu quả riêng ferrite. |
+| Bước 5, cài release / nhập firmware | PASS | OnePlus cài đè một lần và hash khớp; nhập ảnh gốc qua hộp chọn tệp. |
+| Bước 6, OnePlus K25 | PASS TS | 265.535.524 byte; bỏ 2069 byte và bắt đầu đúng gói; CC nội dung/TEI bằng 0, không có khoảng PCR thiếu từ 94 byte. Hai hộp quyền USB, thêm hộp `Stream Closed` khi dừng. |
+| Bước 7, OnePlus K36 | Chưa đạt chốt TS | 205.151.264 byte; bỏ 2219 byte và bắt đầu đúng gói; CC nội dung/TEI bằng 0, CRC bảng đạt. PCR `UNKNOWN`: 0 khoảng đủ điều kiện ở 14 PID. Không cắm mới; có hộp `Stream Closed` khi dừng. |
+| Bước 8, mở lại luồng không nạp RAM | BLOCKED | Giao diện chỉ mở lại cả thiết bị và sẽ nạp lại RAM. Người dùng đồng ý bỏ bước này để tiếp tục. |
+| Bước 9, rút và cắm lại | PASS phục hồi; có hộp lỗi | App vẫn chạy sau khi rút; ba hộp thông báo theo người dùng. Khi cắm lại, hai hộp quyền, K25 lock và có TS theo người dùng. |
+| Bước 10, client ngoài | SKIP | Người dùng chọn bỏ qua. |
+| Bước 11, Samsung K25 | PASS TS | 264.634.252 byte; bỏ 2062 byte và bắt đầu đúng gói; CC nội dung/TEI bằng 0, không có khoảng PCR thiếu từ 94 byte. Hai hộp quyền USB; một hộp khi dừng chưa rõ nội dung. |
+| Chốt chung P4d | Chưa đạt | Bước 8 BLOCKED, PCR K36 thiếu bằng chứng; `TS_SMOKE_PASS=false`. |
+
 ## 2026-11-19 — P4d: JDK và JVM đạt, phiên phần cứng vẫn bị chặn
 
 | Hạng mục | Kết quả | Bằng chứng hoặc giới hạn |

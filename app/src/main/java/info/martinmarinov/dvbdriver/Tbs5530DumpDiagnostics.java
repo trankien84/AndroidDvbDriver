@@ -28,7 +28,9 @@ final class Tbs5530DumpDiagnostics {
                     && end <= snapshot.getWindowEndMonotonicNanos();
             json.put("completions_complete", complete);
             if (snapshot != null) {
-                json.put("native_window_start_ns", snapshot.getWindowStartMonotonicNanos())
+                json.put("prefix_locked", snapshot.isPrefixLocked())
+                        .put("discarded_prefix_bytes", snapshot.getDiscardedPrefixBytes())
+                        .put("native_window_start_ns", snapshot.getWindowStartMonotonicNanos())
                         .put("native_window_end_ns", snapshot.getWindowEndMonotonicNanos())
                         .put("native_finished", snapshot.isFinished()).put("overflow", snapshot.isOverflow())
                         .put("clock_invalid", snapshot.isClockInvalid()).put("stop_reason", snapshot.getStopReason());

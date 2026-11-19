@@ -4,6 +4,7 @@
 
 ### Đính chính
 
+- Cập nhật P4d sau `5ca4cb2`: quét ít nhất 1 MiB hoặc toàn bộ tệp nếu tệp ngắn hơn. B3 lượt 3 được quét hết 917.504 byte, khóa ở byte 2052 khác nhịp cũ và giữ sync qua 4.869 gói trọn vẹn tới hết tệp (`full_scan_pass: true`). Theo tiêu chí đã sửa, cả 8/8 raw đạt. Cột và kết luận bên dưới ghi lại cách chấm cũ, không phải điểm chặn hiện tại.
 - Điểm thiếu sync đầu tiên bị kiểm sai ở P4c: nếu gói cuối của nhịp cũ bắt đầu trước byte 2048 nhưng vắt qua ranh này, điểm thiếu sync theo nhịp cũ phải nằm trong `[2048, 2236)`, không phải trước 2048. Vị trí đó không phải độ dài vùng dữ liệu cũ.
 - P4b ON1 khóa đúng ở 2049, cùng nhịp 188 byte với 2237. Gói 2049–2236 nằm trọn trong nhịp mới; phép dò trước đó đã bỏ sót gói này. Theo đối chiếu của người dùng, cụm lỗi CC “đầu pha” từng báo xuất phát từ việc so số thứ tự liên tục của gói cũ với gói mới. Không dùng số lỗi ở vùng nối để chấm nhịp mới; kết quả đo ở cửa sổ sau 5 giây của P4c không đổi.
 - Hai log P4c đặt điểm hết 5000 ms tại lần `mock(DvbDevice.class)` đầu tiên, trước khi luồng truyền chạy. Trên Oracle JDK 25.0.5.1, test chưa sửa chạy riêng với `--info` đạt trong 2,426 giây và Mockito báo tự gắn Java agent động. Đo riêng bằng classpath JVM của Gradle với tiến trình mới: mock `DvbDevice` đầu 1950,138 ms, `ServerSocket` 118,658 ms, `Socket` 148,844 ms và `DvbDevice` lần sau 1,273 ms. Chi phí khởi động nằm trong timeout cũ; lần này không treo nên không cần `jstack`. Không tái hiện timeout cũ và không có bằng chứng lỗi chờ trong production.
@@ -24,6 +25,28 @@
 | P4b ON2 | 44.466.176 | 1973 | 2161 | 2227 | 236.510 | PASS |
 
 Cả tám khóa khác nhịp cũ. B3 lượt 3 chỉ có 896 KiB, thiếu 131.072 byte so với mức tối thiểu; không coi hết tệp là ngoại lệ. Trên raw ON1 gốc, số gói trọn vẹn là 709.642, không phải 354.860. ON2 có 236.511 vị trí bắt đầu gói nếu tính cả gói dở cuối tệp. Không triển khai bộ lọc hoặc test hồi quy bộ lọc khi chốt raw chưa đạt.
+
+### Hồi quy bộ lọc production sau `5ca4cb2`
+
+Đối chiếu lại SHA-256 của cả tám raw. Chạy đúng bộ lọc Java trong production theo hai cách: đọc khối 16.384 byte, và chia đầu luồng thành khối 97 byte để sync vắt qua ranh giới đọc. Cả 16 lượt cho đầu ra đúng từng byte với `raw[vị trí khóa:]`, số byte bỏ đúng bằng vị trí khóa và không mất sync tới hết tệp. Các vị trí theo thứ tự bảng trên là 2048, 2064, 2052, 2068, 2154, 2228, 2049, 2227. Không sửa raw hoặc đưa raw vào Git.
+
+Bộ lọc nằm ở phía đọc Java, trước bộ tách gói; không sửa vòng USB/JNI hay đường raw debug. Khi bắt đầu Dump giữa một luồng đã chạy, chỉ căn qua phần gói đang đọc dở ở đầu tệp ghi; số `discarded_prefix_bytes` trong thông tin USB vẫn là tiền tố lúc mở luồng, không cộng phần căn tệp Dump.
+
+### P4d trên thiết bị: đối chứng cùng drive và kiểm Dump release
+
+| Lượt | Mẫu BER bằng 0 khi ON | SNR OFF → ON | Thời gian có dữ liệu ON1 / ON2 | Chất lượng TS debug |
+| --- | ---: | ---: | ---: | --- |
+| B5 cũ (`0x54`) | 10/403 | 24,75 → 18,90 dB | 23,49% / 23,72% | FAIL |
+| P4b bước 1 (`0x55`), lịch sử | 406/406 | 27,59 → 27,60 dB | 100% / 100% | PASS |
+| P4d bước 2 (`0x54`) | 405/405 | 29,28 → 29,37 dB | 99,93% / 100% | PASS |
+
+Bước 2 khóa K25 bằng MANUAL PLP0, không cần AUTO. Bootstrap/reload đều hoàn thành 132/132; hai pha ON nhận tổng 177.881.088 byte. Terminal báo `DRAIN_CONFIRMED`. Receipt chấp nhận đủ dữ liệu nhưng helper thoát 1 với `PENDING_ANALYSIS`; chấm ngoại tuyến sau đó đạt cả hai pha, với 0 lỗi CC nội dung, TEI và khoảng PCR thiếu từ 94 byte. Hai raw có hash khác P4b dù số byte giống nhau. Người dùng báo hai hộp quyền USB. Không lặp do giao diện; bước 4 được người dùng bỏ qua.
+
+Đối chứng cùng drive `0x54` đạt `ROOT_CAUSE_CONFIRMED` theo card: bố trí mới đủ để loại biểu hiện nhiễu trong lượt K25 này, không cần `0x55`. Không xác định riêng thành phần nào của bố trí tạo ra khác biệt vì không mở ferrite để đo đối chứng.
+
+Dump release K36 bắt đầu đúng gói và bỏ 2219 byte tiền tố, không có TEI, lỗi CC nội dung, lỗi CRC bảng hoặc completion USB lỗi. Tuy nhiên cả 14 PID được khai báo mang PCR không có khoảng đủ điều kiện trong cửa sổ xem xét. Không diễn giải số khoảng thiếu bằng 0 khi không có khoảng nào để kiểm. TSDuck thấy 0 lỗi sync/TEI nhưng số bitrate suy từ PCR không đủ làm đối chứng cho tiêu chí này. Giữ PCR `UNKNOWN` và chưa chứng nhận `TS_SMOKE_PASS`.
+
+OnePlus báo hộp `Stream Closed` khi chủ động dừng bước 6 và 7 dù tệp thông tin USB ghi mã dừng bình thường. Sau khi rút giữa luồng ở bước 9, người dùng báo ba hộp thông báo; ADB xác nhận tuner không còn trong danh sách hiện tại, app vẫn ở phía trước và không thấy crash trong phần log đã kiểm. Người dùng cắm lại, báo K25 lock và có TS. Chưa xác nhận nguyên nhân hộp thoại từ ảnh hoặc stack trace.
 
 ## 2026-11-19 — P4c: đính chính tiêu chí và kiểm ranh đầu luồng
 

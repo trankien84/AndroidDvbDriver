@@ -37,6 +37,7 @@
 - Add factual evidence with Git SHA, environment, exact commands, actual test results and PASS/FAIL/BLOCKED/NOT RUN; never change previous PASS into a new PASS without rerunning. Do not overwrite historical sections to reflect newer conditions.
 - Preserve each `docs/project/` file's current headings/tables/ADR conventions. Write readable Vietnamese with correct word spacing, Markdown separators and concise paragraphs; inspect `git diff --check` and manually review new text for run-together words. See `.github/instructions/project-records.instructions.md`.
 - **Current branch/runtime phase must be discovered from Git and the top of STATUS.md**, not from this file. After the validated Phase 1.1 baseline, plan toolchain updates as separate, reversible tasks before porting USB hardware logic.
+- If a user-defined threshold cannot literally apply for an obvious reason (for example, the file is shorter than the scan window or a sample cannot exist by design), continue when verified evidence still satisfies its purpose. Record the literal requirement, the reason it cannot apply, and the evidence supporting that interpretation. Stop if an absolute hardware safety rule is involved, the evidence contradicts the purpose, or continuing would change the approved code scope, tools, or budget.
 
 ## Hardware and repository safety
 
