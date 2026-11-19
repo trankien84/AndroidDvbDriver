@@ -35,6 +35,58 @@ public class Tbs5530PermissionStateTest {
         assertFalse(permission.pending()); assertFalse(permission.mayPause(false));
         permission.confirmFresh(device, true); permission.requireReady(device);
     }
+    @Test public void systemGrantWithoutCallbackCompletesOnlyCurrentAttempt() throws Exception {
+        Attempt attempt = pending(); permission.dispatched(attempt);
+        assertFalse(permission.reconcileOsPermission(attempt, device, false));
+        assertTrue(permission.pending()); assertThrows(IOException.class, () -> permission.requireReady(device));
+        assertTrue(permission.reconcileOsPermission(attempt, device, true));
+        assertSame(attempt, permission.attempt()); assertEquals(attempt.generation, permission.generation());
+        assertEquals(Outcome.AUTO_PERMISSION_HANDLED_BY_OS, permission.outcome());
+        assertFalse(permission.mayPause(false));
+        permission.confirmFresh(device, true); permission.requireReady(device);
+        assertEquals(Callback.IGNORED, permission.callback(attempt.token, attempt.generation, device, false));
+        permission.requireReady(device);
+    }
+    @Test public void systemGrantWithoutCallbackCanUseVerifiedUiReceipt() throws Exception {
+        Attempt attempt = pending();
+        assertTrue(permission.uiReceipt(attempt.token, attempt.generation, device, 1000, 1001, 1002));
+        assertTrue(permission.reconcileOsPermission(attempt, device, true));
+        permission.confirmFresh(device, true); permission.requireReady(device);
+        assertEquals(Outcome.AUTO_PERMISSION_UI_HANDLED, permission.outcome());
+    }
+    @Test public void staleAttemptCannotConsumeGrantForReusedPathAfterFirmwareTransition() throws Exception {
+        Attempt old = permission.begin(device, true, 1000);
+        permission.firmwareTransition(); Attempt current = permission.begin(device, false, 2000);
+        assertFalse(permission.reconcileOsPermission(old, device, true));
+        assertTrue(permission.pending()); assertSame(current, permission.attempt());
+        assertEquals(Callback.IGNORED, permission.callback(old.token, old.generation, device, true));
+        assertTrue(permission.reconcileOsPermission(current, device, true));
+        permission.confirmFresh(device, true); permission.requireReady(device);
+    }
+    @Test public void systemGrantCannotReviveDetachedCancelledOrDeniedAttempt() throws Exception {
+        Attempt detached = pending(); permission.invalidate();
+        assertFalse(permission.reconcileOsPermission(detached, device, true));
+        assertThrows(IOException.class, () -> permission.requireReady(device));
+        Tbs5530PermissionState cancelled = new Tbs5530PermissionState();
+        Attempt old = cancelled.begin(device, false, 1000); cancelled.cancel();
+        assertFalse(cancelled.reconcileOsPermission(old, device, true));
+        assertThrows(IOException.class, () -> cancelled.requireReady(device));
+        Tbs5530PermissionState denied = new Tbs5530PermissionState();
+        Attempt refused = denied.begin(device, false, 1000);
+        denied.callback(refused.token, refused.generation, device, false);
+        assertFalse(denied.reconcileOsPermission(refused, device, true));
+        assertEquals(State.DENIED, denied.state()); assertThrows(IOException.class, () -> denied.requireReady(device));
+    }
+    @Test public void systemGrantRequiresSameFreshDeviceAndStillChecksRevocation() throws Exception {
+        Attempt attempt = pending();
+        assertThrows(IOException.class, () -> permission.reconcileOsPermission(attempt, other, true));
+        assertEquals(State.INVALIDATED, permission.state());
+        Tbs5530PermissionState fresh = new Tbs5530PermissionState();
+        Attempt current = fresh.begin(device, false, 1000);
+        assertTrue(fresh.reconcileOsPermission(current, device, true));
+        assertThrows(IOException.class, () -> fresh.confirmFresh(device, false));
+        assertThrows(IOException.class, () -> fresh.requireReady(device));
+    }
     @Test public void pendingPermissionNeverAllowsIo() throws Exception {
         pending(); assertEquals(Outcome.USER_ACTION_REQUIRED, permission.outcome());
         assertThrows(IOException.class, () -> permission.requireReady(device));

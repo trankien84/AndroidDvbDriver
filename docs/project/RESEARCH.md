@@ -1,5 +1,15 @@
 # Research log (append-only)
 
+## 2026-11-19 — Đính chính P4: hai Activity gây hộp chọn app, không phải lỗi firmware
+
+**SOURCE-CONFIRMED trên baseline `f0a654ff94b7d0ff8fe00516f0fec3837c88238a`:** filter chính của `UsbDelegate` có `734c:5530`; manifest debug đăng ký thêm `Tbs5530AutonomousDiagnosticActivity` cho cùng thiết bị. Hai Activity trong cùng APK sinh hộp chọn app của Android, thay vì hộp xác nhận một ứng viên như B2–B5. Nếu chọn `UsbDelegate`, intent `DVB_DEVICE_ATTACHED` còn có thể mở client khác giữa lúc handoff; đây là rủi ro điều phối, chưa phải bằng chứng client khác đã tranh thiết bị trong lượt 1.
+
+**RUNTIME-OBSERVED / mốc quy đổi:** handoff journal và logcat đã lọc ghi bootstrap drained khoảng 10:31:36,9, operational `ATTACH_BROADCAST` khoảng 10:31:38,6, debug mất focus 10:31:41,467, timeout khoảng 10:32:07, debug lấy lại focus 10:32:45,580. Các mốc `elapsed_ns` được quy về lúc Activity lấy focus 10:31:32,185. Cửa sổ 30 giây kết thúc trước khi người dùng xử lý xong hộp chọn. Không có reload, frontend hoặc Bulk; không quy lỗi này cho firmware, RF hoặc USB transport.
+
+**Phân loại được đính chính:** `UI_ABORT_BEFORE_RELOAD`, không tính là lượt đo. Bootstrap 132/132 và `DRAIN_CONFIRMED` vẫn là bằng chứng thật; giữ nguyên receipt, không sửa sổ consume. Theo yêu cầu P4b, card mới thay card cũ, còn 9 lượt OnePlus + 2 lượt Samsung; không thêm một kế hoạch tiếp nối ordinal riêng.
+
+**SOURCE-CONFIRMED cho production:** vòng chờ `permission()` trước sửa chỉ chấp nhận callback riêng; quyền OS được cấp từ hộp hệ thống chưa đủ thoát chờ nếu callback đó chưa về. Nguy cơ chờ hai hộp hoặc timeout 60 giây là suy từ source, chưa được quan sát trên release thật. P4b kiểm quyền OS mỗi vòng, giữ kiểm hiện diện/generation và đóng registration. Kết quả offline và phần cứng mới phải ghi riêng, không suy từ bản sửa rằng release đã chạy thành công.
+
 ## 2026-11-19 — P4 lượt 1 chưa tới đo; tách tác dụng bố trí khỏi drive
 
 **RUNTIME-OBSERVED:** HEAD `285ba0b`, pin APK/source/helper không đổi. Lượt K25/drive `0x55` bootstrap đủ 132 A0/4693 ms rồi dừng ATTACH_PERMISSION_UI_TIMEOUT tại WAIT_REENUMERATION. Journal có detach/attach operational nhưng chưa permission-request/descriptor seal/owner; reload null, OFF–ON rỗng, TS 0 byte. Dọn USB được xác nhận và người dùng rút tuner. Không suy lỗi firmware hoặc URB từ timeout UI; người dùng thấy hộp chọn app và app mất focus khoảng 64 giây, là evidence điều phối cần xử lý.
@@ -17,7 +27,7 @@ B5 thật dùng target 10/30/10/10 giây, monitor 100 ms ±20 ms; thời lượn
 | P4 bước 2 0x54 | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | Chưa so |
 | Ferrite / release 6/7/11 | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | Chưa so |
 
-**Kết luận mới:** EMI INCONCLUSIVE, tác dụng drive UNKNOWN, chưa PHASE4_FUNCTIONAL_PASS/TS sạch. Không hỏi mở ferrite vì chưa đủ điều kiện, không tạo ADR kết luận nhiễu đã giảm. Giữ receipt ordinal 1, không chạy lại hoặc chuyển release sau lỗi. Cần kế hoạch tiếp nối hữu hạn có kế thừa số lượt và xử lý hộp chọn app trước khi lặp đúng bước 1; card helper hiện chỉ ràng ba ordinal 55/54/55 tùy chọn.
+**Kết luận mới:** EMI INCONCLUSIVE, tác dụng drive UNKNOWN, chưa PHASE4_FUNCTIONAL_PASS/TS sạch. Không hỏi mở ferrite vì chưa đủ điều kiện, không tạo ADR kết luận nhiễu đã giảm. Giữ receipt ordinal 1, không chạy lại hoặc chuyển release sau lỗi. Đính chính P4b: không cần kế hoạch tiếp nối ordinal riêng; card mới thay card cũ với 9 lượt OnePlus + 2 lượt Samsung còn lại. Helper hiện chỉ ràng ba ordinal 55/54/55 tùy chọn; phải kiểm validator có thực thi được card mới trước khi cấp I/O, không tự lách bằng card cũ.
 
 ## 2026-11-18 — Đính chính kết luận B5 và chuẩn bị Phase 4
 

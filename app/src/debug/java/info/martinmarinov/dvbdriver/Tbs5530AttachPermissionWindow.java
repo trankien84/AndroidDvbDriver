@@ -3,7 +3,7 @@ package info.martinmarinov.dvbdriver;
 
 /** One bounded UI allowance after a proven, fully drained firmware transition; never I/O consent. */
 final class Tbs5530AttachPermissionWindow {
-    static final long MAX_MILLIS = 30000;
+    static final long MAX_MILLIS = 90000;
     private long opened = -1;
     private boolean closed;
 

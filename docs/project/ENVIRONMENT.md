@@ -1,5 +1,15 @@
 # Kiểm kê môi trường
 
+## 2026-11-19 — P4b: kiểm chỉ đọc mặc định USB và toolchain không đổi
+
+Đã xác minh baseline `f0a654ff94b7d0ff8fe00516f0fec3837c88238a`, nhánh `chore/modernize-android-build`, tree sạch trước sửa. Build khai báo AGP 9.5.0/Gradle 9.8.2, compileSdk 37.2/targetSdk 37/minSdk 21, Java 8, Build-Tools 37.0.0/NDK 30.0.16248370/CMake 4.1.2. JDK thực chạy 25.0.5.0.3; Build-Tools và NDK đối chiếu `source.properties` khớp khai báo. Không cài/nâng/xóa package hoặc đổi môi trường bền.
+
+OnePlus GM1900/API30 vẫn truy cập được qua target ADB đã kiểm; versionCode đang cài 30. `adb shell dumpsys usb` exit 0: phần `profile_group_settings` chỉ có `parent_user_id=0`, không thấy mặc định cho `734c:5530` hoặc package DVB-T Driver. Hai mục `device_attached_activities` là đăng ký Activity, không phải lựa chọn mặc định. Không dùng ADB xóa mặc định. Nếu cần xóa lựa chọn nhầm, dùng Cài đặt → Ứng dụng → DVB-T Driver → Mở theo mặc định → Xóa mặc định; không tự thao tác thay người dùng.
+
+AVD hiện hữu `TBS5530_Runtime_API37`/x86_64/API37 được khởi động headless để kiểm instrumentation, không USB tuner; boot completed đã kiểm. Sau 39/39 app và 1/1 store PASS, đã đóng đúng emulator của phiên bằng `adb -s emulator-5556 emu kill`; process exit 0, không đụng thiết bị OnePlus hoặc disconnect ADB người dùng. Android CLI liệt kê AVD không ra mục nào ở lần này dù emulator trực tiếp và file INI cùng nhận đúng AVD; dùng executable emulator đã cài, không tạo AVD hoặc đổi SDK. Bằng chứng/định danh riêng ở bundle `phase4-p4b-20261119` ngoài Git.
+
+GitNexus 1.6.12 báo index `stale`, commit index `e8cb2ceab7c6fd7a741fd8230381b4f59935540c`, không khớp HEAD. Đã thử `analyze --index-only` sau kiểm help; chỉ có banner, không xác nhận hoàn tất, đã dừng đúng process tree riêng. Không force/repair/skip-FTS hoặc chứng nhận graph/FTS hiện hành; kết luận P4b dựa source, diff và tests độc lập.
+
 ## 2026-11-19 — OnePlus xác nhận bố trí mới, P4 dừng sau bootstrap và tuner đã rút
 
 Người dùng xác nhận trước lượt: RG6 IEC kim loại 1,5 m, mối IEC nhựa xa hộp; UGREEN USB-C→USB-B có hai ferrite sát hai đầu/không vòng; USB ngược chiều coax/không cuộn, OnePlus cách hộp 1–1,5 m và không sạc. Bố trí bắt đầu 18/11, không dựng lại bố trí cũ. Samsung chưa chạy trong ngày này.

@@ -29,13 +29,17 @@ public final class Tbs5530DvbDeviceCreator implements DvbUsbDevice.Creator {
             close(owner, e);
             throw Tbs5530ProductionFailure.localized(context, DvbException.ErrorCode.CANNOT_OPEN_USB,
                     R.string.tbs5530_discovery_failed, e);
+        } catch (Error e) {
+            close(owner, e);
+            throw e;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt(); close(owner, e);
             throw Tbs5530ProductionFailure.localized(context, DvbException.ErrorCode.IO_EXCEPTION,
                     R.string.tbs5530_interrupted, e);
         }
     }
-    private static void close(Tbs5530ProductionAttachment owner, Exception error) {
-        if (owner != null) try { owner.close(); } catch (IOException cleanup) { error.addSuppressed(cleanup); }
+    private static void close(Tbs5530ProductionAttachment owner, Throwable error) {
+        if (owner != null) try { owner.close(); }
+        catch (IOException | RuntimeException cleanup) { error.addSuppressed(cleanup); }
     }
 }

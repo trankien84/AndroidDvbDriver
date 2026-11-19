@@ -42,6 +42,7 @@ public final class Tbs5530DvbDevice extends DvbDevice {
     private volatile boolean closing, opened;
     private volatile IOException cleanupFailure;
     private boolean demuxClosed;
+    private int closers;
     private volatile boolean poisoned;
     private volatile boolean tuned;
     private Tbs5530Session session;
@@ -73,6 +74,7 @@ public final class Tbs5530DvbDevice extends DvbDevice {
 
     @Override public void open() throws DvbException {
         synchronized (lifecycle) {
+            if (closers != 0) throw error(DvbException.ErrorCode.BAD_API_USAGE, R.string.tbs5530_busy, null);
             if (opened) throw error(DvbException.ErrorCode.BAD_API_USAGE, R.string.tbs5530_already_open, null);
             if (poisoned) throw error(DvbException.ErrorCode.HARDWARE_EXCEPTION, R.string.tbs5530_no_retry, null);
             closing = false;
@@ -133,6 +135,10 @@ public final class Tbs5530DvbDevice extends DvbDevice {
                 Thread.currentThread().interrupt();
                 IOException cleanup = cleanupControl(); if (cleanup != null) e.addSuppressed(cleanup);
                 throw error(DvbException.ErrorCode.IO_EXCEPTION, R.string.tbs5530_interrupted, e);
+            } catch (Error e) {
+                poisoned = control != null;
+                IOException cleanup = cleanupControl(); if (cleanup != null) e.addSuppressed(cleanup);
+                throw e;
             }
         }
     }
@@ -375,29 +381,40 @@ public final class Tbs5530DvbDevice extends DvbDevice {
 
     @Override public void close() throws IOException {
         closing = true;
-        IOException failure = null;
-        synchronized (streams) {
-            if (stream != null) try { stream.close(); }
-            catch (IOException | RuntimeException e) { failure = asIo(e); }
+        synchronized (lifecycle) { closing = true; closers++; }
+        try {
+            IOException failure = null;
+            synchronized (streams) {
+                if (stream != null) try { stream.close(); }
+                catch (IOException | RuntimeException e) { failure = asIo(e); }
+            }
+            // Closes the pipe to unblock a sink before joining the framework pump.
+            try { super.close(); } catch (IOException | RuntimeException e) { failure = append(failure, asIo(e)); }
+            synchronized (lifecycle) {
+                opened = false; tuned = false; demuxClosed = true;
+                Tbs5530StreamGate gate = stream;
+                if (gate != null && !gate.drained()) {
+                    failure = append(failure, new IOException("USB drain is unconfirmed; production ownership retained"));
+                } else {
+                    IOException cleanup = cleanupControl();
+                    if (cleanup != null) failure = append(failure, cleanup);
+                    stream = null;
+                }
+            }
+            if (cleanupFailure != null) failure = append(failure, cleanupFailure);
+            if (failure != null) { poisoned = true; cleanupFailure = failure; throw failure; }
+        } finally {
+            // No reopen may race the gap between native drain and framework/control cleanup.
+            synchronized (lifecycle) { closers--; }
         }
-        // Closes the pipe to unblock a sink before joining the framework pump.
-        try { super.close(); } catch (IOException | RuntimeException e) { failure = append(failure, asIo(e)); }
-        synchronized (lifecycle) {
-            opened = false; tuned = false; demuxClosed = true;
-            IOException cleanup = cleanupControl();
-            if (cleanup != null) failure = append(failure, cleanup);
-            stream = null;
-        }
-        if (cleanupFailure != null) failure = append(failure, cleanupFailure);
-        if (failure != null) { poisoned = true; cleanupFailure = failure; throw failure; }
     }
     private IOException cleanupControl() {
         IOException failure = null;
         try { if (session != null) session.close(); }
-        catch (IOException e) { failure = e; }
+        catch (IOException | RuntimeException e) { failure = asIo(e); }
         finally {
             if (session != null) try { session.drainCleanup(); }
-            catch (IOException e) { failure = append(failure, e); }
+            catch (IOException | RuntimeException e) { failure = append(failure, asIo(e)); }
             if (control != null) {
                 try { control.close(); } catch (RuntimeException e) { failure = append(failure, asIo(e)); }
                 control = null;

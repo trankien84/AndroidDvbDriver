@@ -1,5 +1,34 @@
 # Architecture decision record (ADR)
 
+## ADR-067 — Một đích USB cho debug; quyền OS và một chủ sở hữu trong production
+
+**Date:** 2026-11-19, baseline `f0a654ff94b7d0ff8fe00516f0fec3837c88238a`, nhánh `chore/modernize-android-build`, working tree sạch trước sửa.
+
+**Status:** Đã triển khai và kiểm offline/emulator; chưa kiểm phần cứng P4b. Gate liên quan đạt, trừ FAIL driver lint lịch sử đã biết; pin mới khớp nhưng validator helper không nhận schema/ngân sách P4b nên dừng theo điều kiện người dùng. Chưa hỏi bố trí/tuner rút/sẵn sàng hoặc gửi I/O mới. Không sửa helper ngoài phạm vi mục 3 để vượt blocker.
+
+### Context / Evidence
+
+P4 lượt 1 bootstrap đủ 132/132 rồi drain, nhưng chưa reload/frontend/TS. APK debug sau Phase 4 có cả `UsbDelegate` và `Tbs5530AutonomousDiagnosticActivity` nhận `734c:5530`, khiến Android mở hộp chọn app. Debug mất focus 10:31:41,467 và trở lại 10:32:45,580; cửa sổ 30 giây hết khoảng 10:32:07. Phân loại lại thành `UI_ABORT_BEFORE_RELOAD`, không phải lượt đo; giữ nguyên receipt và bằng chứng, không xóa sổ lịch sử.
+
+Production có thể nhận quyền từ hộp hệ thống trong khi callback `requestPermission` riêng chưa về. Chỉ chờ callback vừa gây chậm vừa cho phép `UsbDelegate` chuyển intent tới client khác trong handoff. Đây là rủi ro xác định từ source, chưa phải lỗi release quan sát trên điện thoại.
+
+### Decision
+
+- Debug ghi đè riêng metadata USB của `UsbDelegate` bằng `tools:replace="android:resource"`, dùng bản filter gốc trừ đúng TBS5530. Release giữ nguyên filter và đích `UsbDelegate`. Test phải đọc manifest đã merge cùng tài nguyên được tham chiếu, không chỉ đếm source manifest.
+- Cửa sổ debug cho quyền operational là 90 giây, không tự gia hạn grant I/O hoặc bỏ kiểm identity, descriptor, generation, foreground và drain. Quyền thật từ `UsbManager.hasPermission` đủ hoàn thành yêu cầu đang chờ của đúng attachment dù callback riêng chưa về. Hiện hướng dẫn tiếng Việt, không tích mặc định trong lượt debug.
+- Production giữ timeout 60 giây, kiểm quyền OS mỗi vòng và đóng registration trong mọi nhánh. Khóa tĩnh an toàn luồng bao trùm bootstrap, handoff và lifetime của owner; lần mở đồng thời bị từ chối với lỗi tài nguyên EN/VI. `UsbDelegate` chỉ bỏ chuyển tiếp cho TBS5530 khi khóa đang được giữ trong cùng tiến trình; thiết bị khác giữ hành vi cũ. Không dùng khóa này làm bằng chứng độc quyền giữa các ứng dụng khác tiến trình.
+- Hướng dẫn release cho phép dùng mặc định DVB-T Driver và chỉ rõ cách xóa mặc định khi nhầm. Thực tế Android có thể hỏi riêng thiết bị default và operational; mỗi attachment chỉ cần cấp quyền một lần. Số hộp thật phải được ghi từ phép thử release, không suy từ source.
+- P4b thay card P4 cũ theo yêu cầu mới: còn 9 lượt OnePlus + 2 lượt Samsung; tối đa hai lần lặp một bước chỉ khi lỗi UI/quyền trước reload và đã `DRAIN_CONFIRMED`, mỗi lần vẫn trừ ngân sách. Không làm thêm kế hoạch tiếp nối ordinal, không sửa receipt cũ. Nếu validator/helper không thực thi được phạm vi này thì dừng, không đổi helper ngoài phạm vi sửa đã duyệt hoặc hạ chốt bằng card cũ.
+- Giữ ảnh firmware gốc vào RAM, không EEPROM, LNB/DC, vệ tinh, firmware patch, B7 hoặc `8A 04xx`; không đổi driver, USB owner, VM hoặc toolchain; không stage/commit/push.
+
+### Alternatives / Trade-offs
+
+Không xóa TBS5530 khỏi filter release vì production vẫn cần nhận thiết bị. Không chỉ kéo dài timeout vì cách đó không loại hộp chọn app hoặc tranh chủ sở hữu. Không giữ hai đường permission bắt buộc trả lời đủ hai callback; quyền OS hiện hành mới là điều kiện truy cập, còn identity/generation vẫn phải được kiểm độc lập.
+
+### Reopen trigger
+
+Mở lại quyết định nếu test manifest merge phát hiện ứng viên debug thứ hai, khóa bị nhả trước drain, quyền hệ thống không được nhận đúng generation, hoặc phép thử release thật cho thấy vẫn phải trả lời trùng hộp cho cùng attachment. Không dùng test offline để chứng nhận `PHASE4_FUNCTIONAL_PASS` hoặc `TS_SMOKE_PASS`.
+
 ## ADR-063 — TBS5530 trong đường production: hai giai đoạn USB, kiểm tra kỹ thuật và nguồn TS native
 
 **Date:** 2026-11-18, baseline `285ba0ba1c148af221ba42a475dc4fd7f44c7764`, nhánh `chore/modernize-android-build`, working tree sạch trước sửa.

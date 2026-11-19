@@ -1,12 +1,26 @@
 # Port TBS5530 sang Android — trạng thái hiện tại
 
+## 2026-11-19 — P4b sửa hộp chọn app đã qua gate; dừng vì validator helper không hỗ trợ card mới
+
+**Đã hoàn tất sửa offline trong phạm vi mục 3; chưa chạy phần cứng P4b.** Debug chỉ còn một Activity nhận `734c:5530`, cửa sổ operational 90 giây và nhận quyền OS thật dù callback riêng chưa về. Production giữ 60 giây, nhận quyền từ hộp hệ thống, khóa một owner cùng tiến trình từ bootstrap đến drain; `UsbDelegate` không chuyển tiếp TBS5530 khi production đang giữ khóa. Có lỗi EN/VI và hướng dẫn quyền/mặc định, không đổi filter release hoặc firmware.
+
+Gate cuối PASS: app JVM debug 132/release 13, drivers 562 PASS + 5 SKIP, service 17, usbxfer 86; build debug/release/AndroidTest bốn module; app lint hai variant; 39 instrumentation app + 1 store API37/x86_64; native host/Python/helper fake; release isolation/bốn ABI/ELF64 và ZIP alignment 16 KiB tĩnh. **Driver lint vẫn FAIL lịch sử** một receiver flag tại `UsbPermissionObtainer:105` mỗi variant, không che lỗi. Test manifest đọc manifest đã merge và resource trong APK, ba ca PASS mỗi variant.
+
+Pin mới: debug `5dafa385…ad2e72`, release `52610908…e58eda`, manifest 504 tệp `772bce23…90843`, certificate không đổi `f848b8e4…0fb3`, versionCode 30 bằng bản OnePlus đang cài. `dumpsys usb` không thấy mặc định TBS5530 trong profile group; không xóa mặc định bằng ADB. Chưa install candidate trên điện thoại, chưa hỏi xác nhận cắm vì validator chưa đạt.
+
+**Điều kiện chạy thứ ba không đạt:** kiểm pin source/APK/helper PASS nhưng helper thật trả `B5_CARD_SCHEMA_INVALID` và `P4_ENVELOPE_LIMIT_INVALID` cho P4b. Helper cũ chỉ hỗ trợ `OK P4`, trần 10/2 và lịch debug cố định, chưa hỗ trợ card thay thế 9/2 hoặc retry UI có điều kiện. Không sửa helper ngoài phạm vi code mục 3, không dùng card/approval cũ thay thế. Cần một quyết định mở rộng phạm vi riêng cho helper và tests trước khi có thể thực thi card P4b; không cần kế hoạch tiếp nối ordinal.
+
+Lượt P4 đầu đã đính chính `UI_ABORT_BEFORE_RELOAD`, không phải lượt đo, giữ receipt/drain. Ngân sách được người dùng chỉ định còn 9 OnePlus + 2 Samsung; không có consume mới. Debug/release số hộp thật, bước 1/2/4/6/7/11 P4b **NOT RUN**; `PHASE4_FUNCTIONAL_PASS` chưa đạt, nhiễu `INCONCLUSIVE`, drive `UNKNOWN`, `TS_SMOKE_PASS=false`.
+
+Báo cáo/card/pin/validator và zip đã lọc ở bundle `phase4-p4b-20261119` ngoài Git; xem ADR-067, [TEST-MATRIX.md](TEST-MATRIX.md), [WORKLOG.md](WORKLOG.md). Emulator của phiên đã đóng; GitNexus index stale, không dùng graph làm chứng cứ hiện hành. Không stage/commit/push, không đổi toolchain, driver, USB owner hoặc VM.
+
 ## 2026-11-19 — P4 lượt 1 bootstrap đủ, dừng tại hộp chọn app sau re-enumeration
 
 **Chưa hoàn tất Phần D.** Sau kiểm pin và duyệt successor target ADB, candidate debug được install-r đúng một lần. Lượt 1 K25/drive `0x55` bootstrap 132/132 A0, sau đó terminal `ATTACH_PERMISSION_UI_TIMEOUT` tại WAIT_REENUMERATION; chưa reload/frontend/OFF–ON/TS. Dọn USB `RUNTIME_DRAIN_CONFIRMED`, người dùng đã rút tuner. Không tự retry hoặc chuyển release sau lỗi.
 
 HEAD vẫn `285ba0b`; manifest 499 tệp/SHA và hai APK/helper/chứng chỉ khớp hoàn toàn. Target ADB đổi được người dùng duyệt riêng trước I/O, UUID/ngân sách giữ nguyên. Người dùng xác nhận bố trí mới đúng card. Hộp USB hai lựa chọn main/Debug là hai Activity của cùng app; attach-only debug cố ý đóng, không tự tạo grant. Đã gỡ đúng gói instrumentation thừa theo yêu cầu, không gỡ app chính, history không đổi.
 
-Journal ghi detach rồi attach operational nhưng không tới permission-request/owner; người dùng thấy hộp chọn app, log app mất focus khoảng 64 giây. Đây là bằng chứng vấn đề điều phối/quyền cần xử lý, chưa phải lỗi URB hoặc firmware nạp dở. Ordinal 1/receipt được giữ nguyên; không gọi là pre-grant refusal. Card máy đọc chưa có lịch lặp bước 1 ngoài chuỗi `55/54/55 tùy chọn`; cần kế hoạch tiếp nối có kế thừa lượt đã dùng, không xóa budget hoặc lách chốt.
+Journal ghi detach rồi attach operational nhưng không tới permission-request/owner; người dùng thấy hộp chọn app, log app mất focus khoảng 64 giây. Đây là bằng chứng vấn đề điều phối/quyền cần xử lý, chưa phải lỗi URB hoặc firmware nạp dở. Đính chính P4b ngày 19/11: ordinal 1 được phân loại `UI_ABORT_BEFORE_RELOAD`, không tính là lượt đo; giữ nguyên receipt và bằng chứng drain. Người dùng thay card cũ bằng P4b, còn 9 lượt OnePlus + 2 lượt Samsung, không yêu cầu một kế hoạch tiếp nối ordinal riêng. Chỉ được lặp tối đa hai lần một bước bị lỗi UI/quyền trước reload khi đã `DRAIN_CONFIRMED`; mỗi lần vẫn trừ ngân sách còn lại.
 
 `PHASE4_FUNCTIONAL_PASS` chưa đạt, nhiễu `INCONCLUSIVE`, tác dụng drive UNKNOWN, `TS_SMOKE_PASS=false`. Bước 2–11 NOT RUN, không hỏi mở ferrite khi chưa đủ điều kiện. Báo cáo/bằng chứng đã lọc ở bundle `phase4-preflight-20261119` ngoài Git; xem [RESEARCH.md](RESEARCH.md), [TEST-MATRIX.md](TEST-MATRIX.md). Không stage/commit/push, không đổi source/helper/APK/pins phần mềm.
 

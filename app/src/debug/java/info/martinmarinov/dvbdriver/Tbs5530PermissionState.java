@@ -62,6 +62,18 @@ final class Tbs5530PermissionState {
         outcome = Outcome.UNVERIFIED;
         return Callback.ACCEPTED;
     }
+    synchronized boolean reconcileOsPermission(Attempt expected, Device fresh, boolean osPermission) throws IOException {
+        if (attempt == null || attempt != expected || state != State.PENDING
+                || attempt.generation != generation) return false;
+        if (!attempt.device.equals(fresh)) {
+            invalidate(); throw new IOException("Permission attachment changed while waiting");
+        }
+        if (!osPermission) return false;
+        // A chooser may grant access without delivering our PendingIntent callback.
+        state = State.GRANTED; dispatched = false;
+        outcome = uiProof ? Outcome.AUTO_PERMISSION_UI_HANDLED : Outcome.AUTO_PERMISSION_HANDLED_BY_OS;
+        return true;
+    }
     synchronized void confirmFresh(Device fresh, boolean osPermission) throws IOException {
         if (attempt == null || !attempt.device.equals(fresh) || attempt.generation != generation
                 || !osPermission || state != State.CALLBACK_GRANTED && state != State.GRANTED) {

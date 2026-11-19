@@ -50,6 +50,29 @@ public class Tbs5530SameSessionHandoffTest {
         admit(); handoff.requireOwnerAdmission("session", "epoch");
         permission.requireReady(device);
     }
+    @Test public void systemGrantWithoutCallbackStillRequiresDescriptorSealBeforeOwner() throws Exception {
+        pending(); duplicate(); Tbs5530PermissionState.Attempt attempt = permission.attempt();
+        assertTrue(permission.reconcileOsPermission(attempt, device, true));
+        permission.confirmFresh(device, true); permission.requireReady(device);
+        Tbs5530SameSessionHandoff unsealed = new Tbs5530SameSessionHandoff("session", "epoch");
+        unsealed.select(device);
+        failure("HANDOFF_DESCRIPTOR_UNVERIFIED", () -> unsealed.requireOwnerAdmission("session", "epoch"));
+        admit(); handoff.requireOwnerAdmission("session", "epoch");
+        assertEquals(Tbs5530PermissionState.Callback.IGNORED,
+                permission.callback(attempt.token, attempt.generation, device, false));
+        permission.requireReady(device);
+    }
+    @Test public void systemGrantCannotBypassChangedDescriptorsOrStaleGeneration() throws Exception {
+        pending(); Tbs5530PermissionState.Attempt attempt = permission.attempt();
+        assertTrue(permission.reconcileOsPermission(attempt, device, true));
+        permission.confirmFresh(device, true);
+        byte[] raw = descriptors(); raw[12] ^= 1;
+        failure("HANDOFF_DESCRIPTOR_MISMATCH", () -> handoff.descriptorsBeforeOwner(device, raw, "session", "epoch"));
+        failure("HANDOFF_DESCRIPTOR_MISMATCH", () -> handoff.requireOwnerAdmission("session", "epoch"));
+        permission.invalidate();
+        assertFalse(permission.reconcileOsPermission(attempt, device, true));
+        assertThrows(java.io.IOException.class, () -> permission.requireReady(device));
+    }
     @Test public void pendingDuplicateIsNeverDescriptorOrOwnerProof() throws Exception {
         pending(); duplicate();
         failure("HANDOFF_DESCRIPTOR_UNVERIFIED", () -> handoff.requireOwnerAdmission("session", "epoch"));

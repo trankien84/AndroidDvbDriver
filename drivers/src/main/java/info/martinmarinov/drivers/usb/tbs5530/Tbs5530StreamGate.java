@@ -28,17 +28,17 @@ final class Tbs5530StreamGate implements ByteSource {
     synchronized void pause() throws IOException {
         ready = false;
         if (source != null) {
-            ByteSource previous = source; source = null;
-            try { previous.close(); }
+            try { source.close(); source = null; }
             catch (IOException e) { failure = e; throw e; }
         }
     }
     synchronized boolean active() { return source != null; }
+    synchronized boolean drained() { return source == null; }
     synchronized void fail(IOException error) {
         failure = error; ready = false; notifyAll();
         if (source != null) {
-            ByteSource previous = source; source = null;
-            try { previous.close(); } catch (IOException cleanup) { error.addSuppressed(cleanup); }
+            try { source.close(); source = null; }
+            catch (IOException | RuntimeException cleanup) { error.addSuppressed(cleanup); }
         }
     }
     @Override public void readNext(ByteSink sink) throws IOException, InterruptedException {
@@ -59,8 +59,8 @@ final class Tbs5530StreamGate implements ByteSource {
         if (next[0] != null) sink.consume(next[0], next[0].length);
     }
     @Override public synchronized void close() throws IOException {
-        if (closed) return;
         closed = true; ready = false; notifyAll();
-        if (source != null) { ByteSource previous = source; source = null; previous.close(); }
+        // Keep the source after an unconfirmed drain so later close can finish cleanup.
+        if (source != null) { source.close(); source = null; }
     }
 }

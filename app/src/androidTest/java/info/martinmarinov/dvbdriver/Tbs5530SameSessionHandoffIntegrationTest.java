@@ -44,6 +44,28 @@ public class Tbs5530SameSessionHandoffIntegrationTest {
         assertEquals("ATTACH_DUPLICATE_OR_ABA_UNVERIFIED", assertThrows(IOException.class, this::duplicate).getMessage());
         assertEquals(Tbs5530PermissionState.State.INVALIDATED, permission.state());
     }
+    @Test public void systemChooserGrantWithoutCallbackStillRequiresCurrentGenerationAndDescriptors() throws Exception {
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+            try {
+                pending(); duplicate(); Tbs5530PermissionState.Attempt attempt = permission.attempt();
+                assertFalse(permission.reconcileOsPermission(attempt, device, false));
+                assertTrue(permission.reconcileOsPermission(attempt, device, true));
+                permission.confirmFresh(device, true); permission.requireReady(device);
+                assertEquals(Tbs5530PermissionState.Callback.IGNORED,
+                        permission.callback(attempt.token, attempt.generation, device, false));
+            } catch (Throwable error) { failure.set(error); }
+        });
+        if (failure.get() != null) throw new AssertionError(failure.get());
+        handoff.descriptorsBeforeOwner(device, descriptors(), "fake-session", "fake-epoch");
+        handoff.requireOwnerAdmission("fake-session", "fake-epoch");
+        Tbs5530PermissionState.Attempt old = permission.attempt(); permission.firmwareTransition();
+        Tbs5530PermissionState.Attempt current = permission.begin(device, false, 2000);
+        assertFalse(permission.reconcileOsPermission(old, device, true)); assertTrue(permission.pending());
+        permission.invalidate();
+        assertFalse(permission.reconcileOsPermission(current, device, true));
+        assertThrows(IOException.class, () -> permission.requireReady(device));
+    }
     @Test public void detachAndChangedDescriptorNeverAdmitOwner() throws Exception {
         pending(); duplicate();
         assertEquals("USB_DETACHED", assertThrows(IOException.class, () -> handoff.detached(device)).getMessage());

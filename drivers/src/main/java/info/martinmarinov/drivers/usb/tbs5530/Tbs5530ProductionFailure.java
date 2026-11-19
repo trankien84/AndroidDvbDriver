@@ -9,7 +9,7 @@ import info.martinmarinov.drivers.R;
 
 /** Typed failure provenance survives transport wrappers; UI text never parses English root messages. */
 final class Tbs5530ProductionFailure extends IOException {
-    enum Kind { PERMISSION, PERMISSION_TIMEOUT, HANDOFF_TIMEOUT, FIRMWARE, DESCRIPTOR, BOOTSTRAP, RELOAD, REMOVED, INTERRUPTED }
+    enum Kind { BUSY, PERMISSION, PERMISSION_TIMEOUT, HANDOFF_TIMEOUT, FIRMWARE, DESCRIPTOR, BOOTSTRAP, RELOAD, REMOVED, INTERRUPTED }
     final Kind kind;
     Tbs5530ProductionFailure(Kind kind, String detail) { super(detail); this.kind = kind; }
     Tbs5530ProductionFailure(Kind kind, String detail, Throwable cause) { super(detail,cause); this.kind = kind; }
@@ -28,6 +28,7 @@ final class Tbs5530ProductionFailure extends IOException {
         DvbException.ErrorCode code=fallback;
         int text=fallbackText;
         if (kind != null) switch(kind) {
+            case BUSY: code=DvbException.ErrorCode.BAD_API_USAGE; text=R.string.tbs5530_busy; break;
             case PERMISSION: code=DvbException.ErrorCode.USB_PERMISSION_DENIED; text=R.string.tbs5530_permission_denied; break;
             case PERMISSION_TIMEOUT: code=DvbException.ErrorCode.USB_PERMISSION_DENIED; text=R.string.tbs5530_permission_timeout; break;
             case HANDOFF_TIMEOUT: code=DvbException.ErrorCode.CANNOT_OPEN_USB; text=R.string.tbs5530_handoff_timeout; break;

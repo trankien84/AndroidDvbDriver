@@ -31,6 +31,7 @@
     <string name="tbs5530_discovery_failed">Không thể chuẩn bị TBS5530. Hãy kiểm tra quyền USB, kết nối và firmware gốc đã nhập.</string>
     <string name="tbs5530_open_failed">Không thể khởi tạo TBS5530. Thao tác nạp RAM sẽ không được tự động thử lại.</string>
     <string name="tbs5530_already_open">TBS5530 đang mở.</string>
+    <string name="tbs5530_busy">TBS5530 đang được sử dụng hoặc đang dừng. Hãy dừng app hoặc client đang dùng và chờ dọn USB xong trước khi mở lại.</string>
     <string name="tbs5530_no_retry">TBS5530 đã dừng sau thao tác USB không xác định. Hãy kết nối lại tuner trước khi thử tiếp.</string>
     <string name="tbs5530_interrupted">Thao tác TBS5530 đã bị gián đoạn.</string>
     <string name="tbs5530_dvbt2_only">TBS5530 hiện chỉ hỗ trợ DVB-T2.</string>

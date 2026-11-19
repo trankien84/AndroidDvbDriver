@@ -55,6 +55,8 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
     private final Runnable tick = new Runnable() {
         public void run() {
             if (status != null) status.setText((session == null ? "NOT_STARTED" : session.policy.state().name()) + "\n" + result
+                    + (uploaded && !stopped && ("WAIT_REENUMERATION".equals(result) || "WAIT_DEVICE".equals(result) || permission.pending())
+                    ? "\nThiết bị đã khởi động lại. Bấm OK (hoặc chọn TBS5530 Debug) trong hộp thoại USB. Không tích 'Luôn mở'." : "")
                     + "\nChọn lại interface 0/alt 0: " + (session != null && session.explicitSetInterfaceAlt0 ? "đã yêu cầu quyền riêng" : "TẮT"));
             if (stopped) return;
             try {
@@ -72,8 +74,15 @@ public final class Tbs5530AutonomousDiagnosticActivity extends Activity {
                     }
                     refreshPermissionReceipt();
                     if (permission.pending()) {
-                        if (selected == null || !selected.equals(single())) {
+                        Tbs5530PermissionState.Attempt attempt = permission.attempt();
+                        Tbs5530UsbBinding.Device fresh = single();
+                        if (selected == null || !selected.equals(fresh)) {
                             permission.invalidate(); throw new IOException("Permission attachment changed while waiting");
+                        }
+                        if (uploaded && foreground && !busy && bootstrap == null && handoff == null && approval == null
+                                && permission.reconcileOsPermission(attempt, fresh, manager.hasPermission(fresh))) {
+                            closePermissionRequest(); result = permission.outcome().name();
+                            recordHandoff("PERMISSION_OBSERVED_BY_OS", fresh);
                         }
                         publishPermission();
                     }

@@ -7,6 +7,12 @@
         android:required="false"
         tools:replace="android:required" />
     <application>
+        <activity android:name="info.martinmarinov.dvbservice.UsbDelegate">
+            <meta-data
+                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/device_filter_debug"
+                tools:replace="android:resource" />
+        </activity>
         <activity
             android:name="info.martinmarinov.dvbdriver.Tbs5530ReloadInitActivity"
             android:label="TBS5530 — Khởi tạo reload store, không tuner"

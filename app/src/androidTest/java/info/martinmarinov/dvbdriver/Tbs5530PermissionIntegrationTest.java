@@ -40,10 +40,23 @@ public class Tbs5530PermissionIntegrationTest {
         PackageManager pm = context.getPackageManager();
         ActivityInfo activity = pm.getActivityInfo(new ComponentName(context, Tbs5530AutonomousDiagnosticActivity.class), PackageManager.GET_META_DATA);
         assertTrue(activity.exported); assertEquals(ActivityInfo.LAUNCH_SINGLE_TOP, activity.launchMode);
-        boolean resolved = false;
-        for (ResolveInfo match : pm.queryIntentActivities(new Intent(UsbManager.ACTION_USB_DEVICE_ATTACHED).setPackage(context.getPackageName()), 0))
-            resolved |= Tbs5530AutonomousDiagnosticActivity.class.getName().equals(match.activityInfo.name);
-        assertTrue(resolved);
+        java.util.List<String> handlers = new java.util.ArrayList<>();
+        for (ResolveInfo match : pm.queryIntentActivities(new Intent(UsbManager.ACTION_USB_DEVICE_ATTACHED).setPackage(context.getPackageName()), PackageManager.GET_META_DATA)) {
+            ActivityInfo candidate = match.activityInfo;
+            assertNotNull(candidate.metaData);
+            int filter = candidate.metaData.getInt(UsbManager.ACTION_USB_DEVICE_ATTACHED);
+            assertNotEquals(0, filter);
+            boolean matches = false;
+            try (XmlResourceParser parser = context.getResources().getXml(filter)) {
+                while (parser.next() != XmlPullParser.END_DOCUMENT) if (parser.getEventType() == XmlPullParser.START_TAG && "usb-device".equals(parser.getName())) {
+                    int vid = parser.getAttributeIntValue(null, "vendor-id", -1);
+                    int pid = parser.getAttributeIntValue(null, "product-id", -1);
+                    matches |= (vid == -1 || vid == VID) && (pid == -1 || pid == PID);
+                }
+            }
+            if (matches) handlers.add(candidate.name);
+        }
+        assertEquals(java.util.Collections.singletonList(Tbs5530AutonomousDiagnosticActivity.class.getName()), handlers);
         int resource = activity.metaData.getInt(UsbManager.ACTION_USB_DEVICE_ATTACHED); assertNotEquals(0, resource);
         int devices = 0;
         try (XmlResourceParser parser = context.getResources().getXml(resource)) {

@@ -21,6 +21,7 @@ final class Tbs5530ProductionAttachment implements AutoCloseable {
     private final Object events = new Object();
     private final Tbs5530AttachmentEpoch epoch;
     private final Tbs5530UsbBinding.Registration observer;
+    private final Tbs5530ProductionSession ownership;
     private volatile Runnable removed;
     private UsbDevice selected;
     private boolean closed;
@@ -32,11 +33,17 @@ final class Tbs5530ProductionAttachment implements AutoCloseable {
         if (manager == null) throw new IOException("USB host service unavailable");
         selected = initial;
         epoch = new Tbs5530AttachmentEpoch(identity(initial));
-        facade = new Tbs5530AndroidUsbFacade(this.context);
-        observer = facade.listen(new Tbs5530UsbBinding.Events() {
-            @Override public void attached(Tbs5530UsbBinding.Device d) { event(d, false); }
-            @Override public void detached(Tbs5530UsbBinding.Device d) { event(d, true); }
-        });
+        ownership = Tbs5530ProductionSession.acquire();
+        try {
+            facade = new Tbs5530AndroidUsbFacade(this.context);
+            observer = facade.listen(new Tbs5530UsbBinding.Events() {
+                @Override public void attached(Tbs5530UsbBinding.Device d) { event(d, false); }
+                @Override public void detached(Tbs5530UsbBinding.Device d) { event(d, true); }
+            });
+        } catch (IOException | RuntimeException | Error failure) {
+            ownership.close();
+            throw failure;
+        }
     }
 
     private void event(Tbs5530UsbBinding.Device d, boolean detach) {
@@ -107,35 +114,41 @@ final class Tbs5530ProductionAttachment implements AutoCloseable {
         }
     }
 
-    private void permission(UsbDevice device) throws IOException, InterruptedException {
+    void permission(UsbDevice device) throws IOException, InterruptedException {
         epoch.require();
         requirePresent(device);
-        if (manager.hasPermission(device)) return;
+        if (manager.hasPermission(device)) {
+            epoch.require();
+            requirePresent(device);
+            return;
+        }
         final boolean[] result = {false, false};
         String correlation = UUID.randomUUID().toString();
         Tbs5530UsbBinding.Device expected = metadata(device);
-        Tbs5530UsbBinding.Registration request = facade.requestPermission(expected, correlation, (key, reported, granted) -> {
-            if (!correlation.equals(key) || reported == null || !identity(reported).equals(identity(device))) return;
+        try (Tbs5530UsbBinding.Registration request = facade.requestPermission(expected, correlation, (key, reported, granted) -> {
+            if (!correlation.equals(key) || !expected.equals(reported)) return;
             synchronized (events) { result[0] = true; result[1] = Boolean.TRUE.equals(granted); events.notifyAll(); }
-        });
-        try {
+        })) {
             long deadline = SystemClock.elapsedRealtime() + PERMISSION_MILLIS;
             while (true) {
                 epoch.require();
                 requirePresent(device);
+                // The system attachment chooser can grant access without our PendingIntent callback.
+                if (manager.hasPermission(device)) {
+                    epoch.require();
+                    requirePresent(device);
+                    break;
+                }
                 synchronized (events) {
-                    if (result[0]) {
-                        if (!result[1] || !manager.hasPermission(device)) throw new Tbs5530ProductionFailure(
-                                Tbs5530ProductionFailure.Kind.PERMISSION, "USB permission denied");
-                        break;
-                    }
+                    if (result[0] && !result[1]) throw new Tbs5530ProductionFailure(
+                            Tbs5530ProductionFailure.Kind.PERMISSION, "USB permission denied");
                 }
                 waitEvent(deadline, Tbs5530ProductionFailure.Kind.PERMISSION_TIMEOUT);
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw e;
-        } finally { request.close(); }
+        }
     }
 
     private void waitEvent(long deadline, Tbs5530ProductionFailure.Kind timeout) throws IOException, InterruptedException {
@@ -211,8 +224,10 @@ final class Tbs5530ProductionAttachment implements AutoCloseable {
     private static String identity(UsbDevice d) { return d.getDeviceName() + "|" + d.getDeviceId(); }
     private static String identity(Tbs5530UsbBinding.Device d) { return d.path + "|" + d.id; }
 
-    @Override public void close() throws IOException {
+    /** The operational owner calls this only after streaming and control cleanup have drained. */
+    @Override public synchronized void close() throws IOException {
         synchronized (events) { if (closed) return; closed = true; epoch.close(); events.notifyAll(); }
-        observer.close();
+        try { observer.close(); }
+        finally { ownership.close(); }
     }
 }

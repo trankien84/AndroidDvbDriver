@@ -130,6 +130,40 @@ public class Tbs5530ProductionTest {
         assertThrows(IOException.class, () -> broken.readNext((b,n) -> {}));
         assertThrows(IOException.class, () -> broken.readNext((b,n) -> {})); assertEquals(1, creations.get()); broken.close();
     }
+    @Test public void pauseAndFailureCleanupRetainUndrainedSourceForFinalClose() throws Exception {
+        for (boolean runtime : new boolean[]{false, true}) for (boolean pause : new boolean[]{false, true}) {
+            boolean[] allowDrain = {false};
+            AtomicInteger closes = new AtomicInteger();
+            ByteSource source = new ByteSource() {
+                @Override public void open() { }
+                @Override public void readNext(ByteSink sink) { }
+                @Override public void close() throws IOException {
+                    closes.incrementAndGet();
+                    if (!allowDrain[0]) {
+                        if (runtime) throw new IllegalStateException("fixture pending URBs");
+                        throw new IOException("fixture pending URBs");
+                    }
+                }
+            };
+            Tbs5530StreamGate gate = new Tbs5530StreamGate(() -> source, true);
+            gate.readNext((bytes, count) -> { });
+            assertFalse(gate.drained());
+            if (pause) assertThrows(Exception.class, gate::pause);
+            else {
+                IOException failure = new IOException("fixture receive failure");
+                gate.fail(failure);
+                assertEquals(1, failure.getSuppressed().length);
+            }
+            assertFalse("Failed cleanup must retain the source", gate.drained());
+            assertEquals(1, closes.get());
+            allowDrain[0] = true;
+            gate.close();
+            assertTrue(gate.drained());
+            gate.close();
+            assertEquals(2, closes.get());
+        }
+    }
+
     @Test public void metricsUseMilliDbScaledBerAndUnknownSentinels() {
         List<Tbs5530SignalMonitor.RegisterRead> reads = new ArrayList<>();
         add(reads,0x20,0x10,6); add(reads,0x20,0x28,0x10,0); add(reads,0x20,0x72,0);

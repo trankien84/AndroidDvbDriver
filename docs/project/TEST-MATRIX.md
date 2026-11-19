@@ -1,5 +1,28 @@
 # TBS5530 test matrix
 
+## 2026-11-19 — P4b: gate sửa quyền/owner PASS, card live bị chặn
+
+| Kiểm đã chạy | Kết quả | Evidence / giới hạn |
+| --- | --- | --- |
+| Baseline đầu phiên | PASS | Branch `chore/modernize-android-build`, HEAD `f0a654ff94b7d0ff8fe00516f0fec3837c88238a`, tree sạch. Không stage/commit/push. |
+| JVM cuối | PASS có SKIP giữ nguyên | App debug 132/132, release 13/13; drivers 567 tổng, 562 PASS + 5 SKIP; service 17/17; usbxfer 86/86. Đọc XML của task thật, không cộng các lượt chạy. |
+| Manifest đã merge và resource đã link | PASS | `Tbs5530MergedUsbManifestTest`: ba ca trên mỗi variant. Debug đúng một Activity TBS5530, release giữ `UsbDelegate`/không Activity debug; filter debug bảo toàn các thiết bị khác. |
+| Permission, epoch và khóa production | PASS offline | 13 ca attachment, 2 ca failure, 10 ca production; system grant không callback, request cleanup, constructor/observer lỗi, hai creator, token và drain giữ khóa. Hai ca service kiểm bỏ chuyển tiếp TBS5530 khi active, vẫn chuyển tiếp thiết bị khác/idle. |
+| Cửa sổ debug / quyền mới | PASS offline và emulator | 90 giây có kiểm biên; pending request nhận quyền OS của đúng attachment, từ chối generation/identity sai. Instrumentation permission/handoff chạy trong nhóm app 39 ca. |
+| Build debug/release/AndroidTest và app lint | PASS | Gate v3 exit 0, 8m34s, 466 tasks (102 executed/364 up-to-date). Đủ AndroidTest app/drivers/dvbservice/usbxfer; minSdk 21/Java 8 giữ nguyên. |
+| Driver lint debug/release | FAIL lịch sử, đã chạy lại | Một `UnspecifiedRegisterReceiverFlag` mỗi variant tại `UsbPermissionObtainer:105`, debug 11/release 8 warnings. Không thêm baseline/suppress hoặc sửa unrelated. |
+| Native host | PASS fake | Production 16/32 ×16384 tại 27,5/35,6 Mbps và stop/error/drain/overflow; firmware 397 scenarios; debug stream 87 cases. GCC Windows đã cài, không phần cứng hoặc Linux VM. |
+| Python / helper | PASS fake | Comparison 39/39; B5/P4 helper 174/174. Không ADB thật, grant hoặc consume trong helper fake; không sửa helper. |
+| Instrumentation APK debug mới | PASS | Emulator hiện hữu API37/x86_64: app 39/39 (permission/handoff/lifecycle/B5/firmware UI/Dump/JNI), store 1/1. Emulator đã đóng exit 0. Không chứng nhận USB Host hoặc tuner. |
+| APK/signature/version | PASS tĩnh | Debug `5dafa385…ad2e72`, release thử nghiệm `52610908…e58eda`, cùng certificate `f848b8e4…0fb3`, versionCode 30 bằng bản OnePlus. Release không debuggable, chưa cài điện thoại; không `-d` hoặc uninstall. |
+| Release isolation / JNI / 16 KiB | PASS tĩnh | Production hiện diện, debug classes/JNI diagnostic vắng trong release; 12 ELF đủ bốn ABI, ELF64 LOAD ít nhất 16 KiB; `zipalign -c -P 16 -v 4` hai APK exit 0. Không chạy runtime 16 KiB. |
+| `dumpsys usb` OnePlus | PASS chỉ đọc | GM1900/API30; không thấy mặc định TBS5530 trong `profile_group_settings`. `device_attached_activities` không phải mặc định. Không xóa cài đặt bằng ADB. |
+| Card P4b / pin validator | FAIL — BLOCKED | Pin 504 source/APK/helpers PASS; helper thật trả `B5_CARD_SCHEMA_INVALID`/`P4_ENVELOPE_LIMIT_INVALID`. Card mới yêu cầu 9/2 và retry UI; helper hiện chỉ có P4/10/2/lịch cố định. Không sửa ngoài scope hoặc bỏ guard để chạy. |
+| Phần cứng P4b / hộp quyền debug và release thật | NOT RUN | Không install lên điện thoại, không grant/consume/I/O tuner mới. Chưa hỏi bố trí/tuner rút/sẵn sàng vì điều kiện validator không đạt. |
+| Chức năng/nhiễu/TS/drive | Chưa đạt / INCONCLUSIVE / false / UNKNOWN | Không số đo bước 1/2/4/6/7/11 P4b. B5 cũ giữ nguyên; lượt P4 đầu là `UI_ABORT_BEFORE_RELOAD`, không lượt đo. |
+
+Hai lỗi trung gian đã sửa trước gate v3: release unit task ban đầu chưa bật trong AGP, và test `UsbDelegate` gọi Android stub `startActivity` do cấu hình mock. Không phải lỗi firmware hoặc hardware. Log v1/v2 giữ nguyên ngoài Git, không gọi các lượt lỗi đó PASS.
+
 ## 2026-11-19 — P4 lượt 1 dừng chờ quyền, chưa số đo bố trí mới
 
 | Kiểm thật | Kết quả | Evidence / giới hạn |
@@ -13,7 +36,7 @@
 | Handoff / quyền operational | FAIL điều phối | DETACH → bootstrap drained → ATTACH_BROADCAST; không tới permission-request/descriptor admission. Terminal ATTACH_PERMISSION_UI_TIMEOUT, user thấy hộp chọn app; focus mất khoảng 64 giây, chưa chứng minh crash. |
 | Reload/frontend/OFF–ON/TS | NOT RUN | fx2_reload null, b5_phases rỗng, native null, 0 byte. Không có cơ sở gọi transport -75/-71 tái phát vì chưa Bulk. |
 | Drain / cleanup | PASS | RUNTIME_DRAIN_CONFIRMED; người dùng xác nhận rút tuner. Export những tệp hiện hữu đã đối soát SHA/size, không nạp/receive lại. |
-| Ngân sách | Giữ nguyên 1 đã dùng | Ordinal 1 có grant/132 A0, không PRE_GRANT_REFUSAL; receipt drained=true/session_closed=false giữ nguyên. Không lặp bằng sửa UUID hoặc xóa sổ. |
+| Ngân sách / đính chính P4b | `UI_ABORT_BEFORE_RELOAD`, không phải lượt đo | Ordinal 1 có grant/132 A0, chưa reload/frontend, receipt drained=true giữ nguyên. Theo yêu cầu P4b còn 9 lượt OnePlus + 2 lượt Samsung; lặp UI/quyền trước reload tối đa hai lần mỗi bước, mỗi lần trừ ngân sách, không xóa sổ. |
 | Release UI/chức năng 5–11 | NOT RUN | Chưa SAF, cắm lạnh release, K25/K36 Dump, reopen/detach/client/Samsung. Không thay LIMITED emulator bằng PASS điện thoại. |
 | EMI/TS sạch | INCONCLUSIVE / chưa đạt | Chưa đủ dữ liệu bước 1/2, không so OFF hoặc drive; không mở ferrite tùy chọn. PHASE4_FUNCTIONAL_PASS chưa đạt, TS_SMOKE_PASS=false. |
 
