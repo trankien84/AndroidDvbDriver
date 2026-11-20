@@ -21,9 +21,8 @@
 package info.martinmarinov.drivers.tools;
 
 
-import static android.app.PendingIntent.FLAG_ALLOW_UNSAFE_IMPLICIT_INTENT;
 import static android.app.PendingIntent.FLAG_MUTABLE;
-import static android.content.Context.RECEIVER_EXPORTED;
+import static androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED;
 
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
@@ -36,6 +35,8 @@ import android.hardware.usb.UsbManager;
 import android.os.Build;
 import android.util.Log;
 
+import androidx.core.content.ContextCompat;
+
 import java.util.concurrent.Future;
 
 public class UsbPermissionObtainer {
@@ -43,25 +44,25 @@ public class UsbPermissionObtainer {
     private static final String ACTION_USB_PERMISSION = "com.android.example.USB_PERMISSION";
 
     public static Future<UsbDeviceConnection> obtainFdFor(Context context, UsbDevice usbDevice) {
-        int flags = 0;
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            flags = FLAG_MUTABLE | FLAG_ALLOW_UNSAFE_IMPLICIT_INTENT;
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            flags = FLAG_MUTABLE;
-        }
+        int flags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ? FLAG_MUTABLE : 0;
         UsbManager manager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
         if (!manager.hasPermission(usbDevice)) {
             AsyncFuture<UsbDeviceConnection> task = new AsyncFuture<>();
-            registerNewBroadcastReceiver(context, usbDevice, task);
-            manager.requestPermission(usbDevice, PendingIntent.getBroadcast(context, 0, new Intent(ACTION_USB_PERMISSION), flags));
+            BroadcastReceiver receiver = registerNewBroadcastReceiver(context, usbDevice, task);
+            try {
+                Intent callback = new Intent(ACTION_USB_PERMISSION).setPackage(context.getPackageName());
+                manager.requestPermission(usbDevice, PendingIntent.getBroadcast(context, 0, callback, flags));
+            } catch (RuntimeException e) {
+                context.unregisterReceiver(receiver);
+                throw e;
+            }
             return task;
         } else {
             return new CompletedFuture<>(manager.openDevice(usbDevice));
         }
     }
 
-    private static void registerNewBroadcastReceiver(final Context context, final UsbDevice usbDevice, final AsyncFuture<UsbDeviceConnection> task) {
+    private static BroadcastReceiver registerNewBroadcastReceiver(final Context context, final UsbDevice usbDevice, final AsyncFuture<UsbDeviceConnection> task) {
         BroadcastReceiver broadcastReceiver = new BroadcastReceiver() {
             @Override
             public void onReceive(Context context, Intent intent) {
@@ -74,7 +75,7 @@ public class UsbPermissionObtainer {
                         }
                         UsbManager manager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
                         UsbDevice device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
-                        if (device.equals(usbDevice)) {
+                        if (usbDevice.equals(device)) {
                             if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
                                 if (!manager.hasPermission(device)) {
                                     Log.d(TAG, "Permissions were granted but can't access the device");
@@ -88,22 +89,14 @@ public class UsbPermissionObtainer {
                                 task.setDone(null);
                             }
                             context.unregisterReceiver(this);
-                        } else {
-                            Log.d(TAG, "Got a permission for an unexpected device");
-                            task.setDone(null);
                         }
                     }
-                } else {
-                    Log.d(TAG, "Unexpected action");
-                    task.setDone(null);
                 }
             }
         };
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            context.registerReceiver(broadcastReceiver, new IntentFilter(ACTION_USB_PERMISSION), RECEIVER_EXPORTED);
-        } else {
-            context.registerReceiver(broadcastReceiver, new IntentFilter(ACTION_USB_PERMISSION));
-        }
+        ContextCompat.registerReceiver(context, broadcastReceiver,
+                new IntentFilter(ACTION_USB_PERMISSION), RECEIVER_NOT_EXPORTED);
+        return broadcastReceiver;
     }
 
     private UsbPermissionObtainer() {}

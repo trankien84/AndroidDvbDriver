@@ -33,6 +33,7 @@ import info.martinmarinov.drivers.usb.tbs5530.Tbs5530ProductionSession;
 public class UsbDelegate extends Activity {
     private static final String TAG = UsbDelegate.class.getSimpleName();
     private static final String ACTION_DVB_DEVICE_ATTACHED = "info.martinmarinov.dvbdriver.DVB_DEVICE_ATTACHED";
+    private static final String TELEVIZOR_PACKAGE = "net.petrjanousek.DVBTTelevizor";
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -48,17 +49,29 @@ public class UsbDelegate extends Activity {
 
     void handleAttachment(UsbDevice usbDevice) {
         if (usbDevice == null) return;
-        if (usbDevice.getVendorId() == 0x734c && usbDevice.getProductId() == 0x5530
-                && Tbs5530ProductionSession.isActive()) {
+        boolean tbs5530 = usbDevice.getVendorId() == 0x734c && usbDevice.getProductId() == 0x5530;
+        if (tbs5530 && Tbs5530ProductionSession.isActive()) {
             Log.d(TAG, "TBS5530 production owner active; attachment forwarding suppressed");
             return;
         }
-        Log.d(TAG, "USB DVB-T attached: " + usbDevice.getDeviceName());
+        Log.d(TAG, "USB DVB-T attached; forwarding to TV client");
         Intent newIntent = new Intent(ACTION_DVB_DEVICE_ATTACHED);
         newIntent.putExtra(UsbManager.EXTRA_DEVICE, usbDevice);
         try {
             startActivity(newIntent);
         } catch (ActivityNotFoundException e) {
+            if (tbs5530) {
+                Intent launcher = getPackageManager().getLaunchIntentForPackage(TELEVIZOR_PACKAGE);
+                if (launcher != null) {
+                    try {
+                        startActivity(launcher);
+                        Log.i(TAG, "Opened DVBTTelevizor; client must request the driver");
+                        return;
+                    } catch (ActivityNotFoundException ignored) {
+                        // The client may have been removed after resolving its launcher.
+                    }
+                }
+            }
             Log.d(TAG, "No activity found for DVB-T handling");
         }
     }

@@ -182,7 +182,17 @@ public final class Tbs5530DvbDevice extends DvbDevice {
         session.requireUsable(generation);
     }
 
+    @Override protected boolean resetsDemuxOnReceive() { return true; }
+
     @Override protected void tuneTo(long frequency, long bandwidth, @NonNull DeliverySystem system) throws DvbException {
+        tuneTerrestrial(frequency, bandwidth, system, true);
+    }
+
+    @Override public void tuneForService(long frequency, long bandwidth, @NonNull DeliverySystem system) throws DvbException {
+        tuneTerrestrial(frequency, bandwidth, system, false);
+    }
+
+    private void tuneTerrestrial(long frequency, long bandwidth, DeliverySystem system, boolean requireLock) throws DvbException {
         if (system != DeliverySystem.DVBT2) throw error(DvbException.ErrorCode.DVB_DEVICE_UNSUPPORTED, R.string.tbs5530_dvbt2_only, null);
         if (bandwidth != 6_000_000 && bandwidth != 7_000_000 && bandwidth != 8_000_000)
             throw error(DvbException.ErrorCode.UNSUPPORTED_BANDWIDTH, R.string.tbs5530_bandwidth, null);
@@ -203,7 +213,10 @@ public final class Tbs5530DvbDevice extends DvbDevice {
                 status = frontend.execute(frontend.planPollStatus(3)).status;
             }
             session.frontendLock(generation, status.demodLocked);
-            if (!status.demodLocked) throw error(DvbException.ErrorCode.CANNOT_TUNE_TO_FREQ, R.string.tbs5530_no_lock, null);
+            if (!status.demodLocked) {
+                if (requireLock) throw error(DvbException.ErrorCode.CANNOT_TUNE_TO_FREQ, R.string.tbs5530_no_lock, null);
+                return null;
+            }
             frequencyHz = frequency;
             sampleRssi();
             bridge.selectTerrestrialStream();
@@ -232,10 +245,10 @@ public final class Tbs5530DvbDevice extends DvbDevice {
     }
 
     @Override public int readSnr() throws DvbException {
-        return readControl(() -> Tbs5530ProductionMetrics.snr(metrics()));
+        return readControl(() -> { requireOpen(); return tuned ? Tbs5530ProductionMetrics.snr(metrics()) : -1; });
     }
     @Override public int readBitErrorRate() throws DvbException {
-        return readControl(() -> Tbs5530ProductionMetrics.ber(metrics()));
+        return readControl(() -> { requireOpen(); return tuned ? Tbs5530ProductionMetrics.ber(metrics()) : 0xffff; });
     }
     /** Unscaled pre-BCH ratio from the shared signal sample; null means unavailable. */
     public Double readPreBchBitErrorRate() throws DvbException {
@@ -344,6 +357,8 @@ public final class Tbs5530DvbDevice extends DvbDevice {
             stream = new Tbs5530StreamGate(() -> new ByteSource() {
                 private NativeUsbfsByteSource source;
                 @Override public void open() throws IOException {
+                    // The pump resets partial packets before emitting bytes from the new mux.
+                    resetTransportFraming();
                     active.transaction(token, () -> {
                         UsbDeviceConnection connection = null;
                         try {

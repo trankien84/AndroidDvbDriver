@@ -67,6 +67,22 @@ public class DvbUsbDeviceRegistry {
         return null;
     }
 
+    /** Lists supported attachments without opening USB or bootstrapping firmware. */
+    public static List<DeviceFilter> getUsbDvbDeviceFilters(Context context) {
+        UsbManager manager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
+        List<DeviceFilter> filters = new ArrayList<>();
+        for (UsbDevice device : manager.getDeviceList().values()) {
+            for (DvbUsbDevice.Creator creator : AVAILABLE_DRIVERS) {
+                DeviceFilter filter = new DeviceFilterMatcher(creator.getSupportedDevices()).getFilter(device);
+                if (filter != null) {
+                    filters.add(filter);
+                    break;
+                }
+            }
+        }
+        return filters;
+    }
+
     /**
      * Gets a {@link DvbDevice} if a supported DVB USB dongle is connected to the system.
      * If multiple dongles are connected, a {@link Collection} would be returned
@@ -74,12 +90,18 @@ public class DvbUsbDeviceRegistry {
      * @return a {@link Collection} of available {@link DvbDevice} devices. Can be empty.
      */
     public static List<DvbDevice> getUsbDvbDevices(Context context) throws DvbException {
+        return getUsbDvbDevices(context, null);
+    }
+
+    public static List<DvbDevice> getUsbDvbDevices(Context context, DeviceFilter selected) throws DvbException {
         List<DvbDevice> availableDvbDevices = new ArrayList<>();
 
         UsbManager manager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
         Collection<UsbDevice> availableDevices = manager.getDeviceList().values();
         DvbException lastException = null;
         for (UsbDevice usbDevice : availableDevices) {
+            if (selected != null && (usbDevice.getVendorId() != selected.getVendorId()
+                    || usbDevice.getProductId() != selected.getProductId())) continue;
             try {
                 DvbDevice frontend = getDvbUsbDeviceFor(usbDevice, context);
                 if (frontend != null) availableDvbDevices.add(frontend);

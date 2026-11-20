@@ -33,6 +33,7 @@ import info.martinmarinov.drivers.DvbCapabilities;
 import info.martinmarinov.drivers.DvbDevice;
 import info.martinmarinov.drivers.DvbException;
 import info.martinmarinov.drivers.DvbStatus;
+import info.martinmarinov.drivers.usb.tbs5530.Tbs5530DvbDevice;
 
 /**
  * The client sends a command consisting of a variable number of Longs in the following format:
@@ -71,14 +72,9 @@ enum Request {
     REQ_TUNE(new Executor() {
         @Override
         public Response execute(DvbDevice dvbDevice, long... payload) throws DvbException {
-            long frequency = payload[0];            // frequency in herz
-            long bandwidth = payload[1];            // bandwidth in herz.
-            // Typical value for DVB-T is 8_000_000
-            DeliverySystem deliverySystem = DeliverySystem.values()[(int) payload[2]];
-            // Check enum for actual values
-
-            Log.d(TAG, "Client requested tune to " + frequency + " Hz with bandwidth " + bandwidth + " Hz with delivery system " + deliverySystem);
-            dvbDevice.tune(frequency, bandwidth, deliverySystem);
+            DeliverySystem[] systems = DeliverySystem.values();
+            if (payload.length != 3 || payload[2] < 0 || payload[2] >= systems.length) return Response.ERROR;
+            dvbDevice.tuneForService(payload[0], payload[1], systems[(int) payload[2]]);
             return Response.SUCCESS;
         }
     }),
@@ -94,6 +90,9 @@ enum Request {
             boolean hasCarrier = status.contains(DvbStatus.FE_HAS_CARRIER);
             boolean hasSync = status.contains(DvbStatus.FE_HAS_SYNC);
             boolean hasLock = status.contains(DvbStatus.FE_HAS_LOCK);
+            if (dvbDevice instanceof Tbs5530DvbDevice) Log.i(TAG, "TBS5530 status lock=" + hasLock
+                    + " snr_mdB=" + snr + " ber_u16=" + bitErrorRate + " dropped_fps=" + droppedUsbFps
+                    + " rf_percent=" + rfStrengthPercentage);
 
             return Response.success(
                     (long) snr, // parameter 1
@@ -110,9 +109,16 @@ enum Request {
     REQ_SET_PIDS(new Executor() {
         @Override
         public Response execute(DvbDevice dvbDevice, long... payload) throws DvbException {
-            int[] pids = new int[payload.length];
-            for (int i = 0; i < payload.length; i++) pids[i] = (int) payload[i];
-            dvbDevice.setPidFilter(pids);
+            if (payload.length == 1 && payload[0] == 0x2000) {
+                dvbDevice.disablePidFilter();
+            } else {
+                int[] pids = new int[payload.length];
+                for (int i = 0; i < payload.length; i++) {
+                    if (payload[i] < 0 || payload[i] > 0x1fff) return Response.ERROR;
+                    pids[i] = (int) payload[i];
+                }
+                dvbDevice.setPidFilter(pids);
+            }
             return Response.SUCCESS;
         }
     }),
@@ -152,8 +158,11 @@ enum Request {
     private Response execute(DvbDevice dvbDevice, long... payload) {
         try {
             return executor.execute(dvbDevice, payload);
-        } catch (Exception e) {
-            e.printStackTrace();
+        } catch (DvbException e) {
+            Log.i(TAG, name() + " failed: " + e.getErrorCode().name());
+            return Response.ERROR;
+        } catch (RuntimeException e) {
+            Log.w(TAG, name() + " failed: " + e.getClass().getSimpleName());
             return Response.ERROR;
         }
     }
@@ -204,11 +213,12 @@ enum Request {
         if (ordinal < ALL_REQUESTS.length) {
             req = ALL_REQUESTS[ordinal];
 
-            // This command is recognized, execute and get response
+            boolean trace = dvbDevice instanceof Tbs5530DvbDevice;
+            long start = trace ? System.nanoTime() : 0;
+            if (trace) Log.i(TAG, "TBS5530 " + req.name() + " " + java.util.Arrays.toString(payload));
             Response r = req.execute(dvbDevice, payload);
-
-            // Send response back over the wire
             r.serialize(req, outputStream);
+            if (trace && req == REQ_TUNE) Log.i(TAG, "TBS5530 tune_ms=" + (System.nanoTime() - start) / 1_000_000);
         }
 
         return req;

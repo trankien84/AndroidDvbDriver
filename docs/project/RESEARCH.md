@@ -1,5 +1,38 @@
 # Research log (append-only)
 
+## 2026-11-20 — P5a: giao tiếp giữa DVBTTelevizor và driver
+
+**Nguồn đã đọc:** [DVBTTelevizor tại `28e050f`](https://github.com/petrj/DVBTTelevizor/tree/28e050f97f2f4b04cdc343a98c19f2d0d4db0d58). Đây là phiên bản mã nguồn để đối chiếu, chưa phải phiên bản đã xác minh trên OnePlus.
+
+| Việc | Hành vi thấy trong mã DVBTTelevizor | Ảnh hưởng phía driver |
+| --- | --- | --- |
+| Mở driver | `MainActivity.InitDriver` gọi `ACTION_VIEW` với lược đồ `dtvdriver:` rồi đợi kết quả activity. Sau 10 giây báo timeout; mã không yêu cầu đóng activity driver ở mốc đó. Kết quả hủy bị bỏ qua; lỗi activity hiển thị `ErrorCode`. | Chỉ trả cổng sau khi mở được tuner. Hai hộp quyền và hai lần nạp RAM có thể quá 10 giây; không trả kết quả sớm để né timeout. |
+| Mở socket | `DVBTDriverConnector.Connect` mở cổng điều khiển rồi cổng dữ liệu tại `127.0.0.1`. Mỗi kết nối có mặc định 5 giây; chờ phản hồi lệnh mặc định 20 giây. App đọc TS từ cổng dữ liệu, không dùng HTTP. | Giữ giao thức hiện có và đóng hai socket khi phiên kết thúc. Hiển thị sau khi mất kết nối còn cần quan sát vì luồng đọc client chỉ đọc khi `Available > 0`. |
+| Dò tần số | `TuningSettings` có giá trị khởi đầu 474–852 MHz, 8 MHz; `SetDVBTSettings` đặt giới hạn mặc định đến 858 MHz. App có thể thay giới hạn theo `REQ_GET_CAPABILITIES`. `TuningProgressPageViewModel.AutomaticTune` tăng tần số theo độ rộng kênh; nếu bật cả hai chuẩn thì quét DVB-T trước, sau đó DVB-T2. Có thể bỏ DVB-T; không bắt buộc tune DVB-T. | Chỉ công bố DVB-T2. G1 chọn 474–690 MHz, 8 MHz và chỉ bật DVB-T2 để không tốn lượt dò DVB-T. |
+| Bắt tín hiệu và tìm dịch vụ | `TuneEnhanced` gửi `REQ_TUNE`, `REQ_SET_PIDS` với `0, 17, 18`, rồi `REQ_GET_STATUS` qua `WaitForSignal`. Mốc chờ nhanh: tối đa 3 giây, có thể dừng sau 2 giây nếu không có tín hiệu/sóng mang; mốc thường dùng lúc dò: tương ứng 10 và 5 giây. Khi có tín hiệu, app đọc bảng thông tin kênh qua TS, tìm PID của chương trình. Mã tìm bảng có các cửa sổ 10 hoặc 15 giây tùy hàm. | Tần số hợp lệ không có đài vẫn là lệnh tune đã thực hiện. Phản hồi trạng thái trả cờ không lock và số đo chưa có; không trả lỗi vận chuyển hoặc đóng phiên. |
+| PID, phát và đổi kênh | `MainPage.xaml.cs` bỏ tune khi kênh đang phát và kênh mới có cùng tần số, độ rộng và chuẩn. Khi đổi mux, gọi `TuneEnhanced` và đọc trạng thái, rồi dùng PID đã lưu hoặc tìm lại trước khi phát. Đường đổi kênh dùng lại kết nối đang mở. `Stop` gửi danh sách rỗng; `REQ_EXIT` mới yêu cầu đóng phiên. Cần log G3 để đối chiếu với bản đang cài. | Giữ socket khi tune lại. Đổi PID không xóa tạm PID được giữ. `0x2000` đơn lẻ yêu cầu nhận toàn bộ; chưa thấy client dùng dấu này trong luồng dò đã đọc. |
+| Số đo | `DVBTDriverStatus` đọc số nguyên 64 bit theo thứ tự: SNR, BER, số gói lỗi mỗi giây, mức tín hiệu, rồi bốn cờ. Màn hình dò chia phần trăm tín hiệu cho 100 để vẽ thanh và giữ giá trị SNR nhận được. Chưa xác nhận cách bản đang cài trình bày SNR/BER khi phát. | TBS5530 dùng SNR milli-dB, tỷ lệ lỗi trước BCH nhân 65535 và mức tín hiệu ước tính 0–100%. Af9033 cũng quy BER về 65535, trong khi RTL2832 trả bộ đếm lỗi thô; không coi số đo BER giữa các chip là phép đo tương đương. |
+| Cắm tuner | Mã Android đã đọc đăng ký theo dõi thay đổi USB khi app chạy; không thấy activity nhận `info.martinmarinov.dvbdriver.DVB_DEVICE_ATTACHED` trong manifest và `MainActivity`. | `UsbDelegate` tiếp tục chuyển tiếp intent cũ; với TBS5530, nếu không có app nhận thì thử mở launcher của DVBTTelevizor. Trong bootstrap hoặc handoff có chủ USB thì không chuyển tiếp hoặc mở lại. Số hộp thoại và app thực tế mở: chưa đo. |
+
+**Dải tần xác nhận từ mã nguồn:** TBS Linux `2ce787de9f6e81b4294692a45de15596ae2e1322` và CoreELEC `072f8e99e0ac66d88d7278784e922e08e8253210`, `drivers/media/dvb-frontends/cxd2878.c`, hàm `cxd2878_set_property`, đều đặt DVB-T/T2 từ 174 đến 868 MHz và công bố bước 250 kHz. Mã tune ASCOT3 và port Android dùng tần số theo kHz; Android chỉ nhận bội số chính xác của 1 kHz, với độ rộng kênh 6/7/8 MHz. Mã C `c5fa27eecbe80633cbb365cc44656daea1c0e2e3` có bảng ASCOT3 cho ba độ rộng này; kho Go tại `6aaa1899991c875ba0482fa9098adc6c83b01fd8` không dùng để mở rộng dải tune của frontend Sony. Đây là kiểm tra mã nguồn, không phải bằng chứng bắt được đài trên toàn dải.
+
+### Số đo OnePlus với release P5a
+
+Ban đầu người dùng chọn mục **Bản ghi TS tại 506 MHz**. Kết quả 13 kênh và nhận xét hình giật của lần phát đó không dùng để chấm phần cứng. Ảnh danh sách xác nhận **TBS5530 DVB-T2** là dòng chọn đầu tiên, không phải tiêu đề. Sau khi chọn đúng nguồn, ghi nhận bootstrap và reload đều 132/132 A0; `UsbDelegate` chặn chuyển tiếp lần xuất hiện lại. Người dùng báo một hộp mở app, sau đó hai hộp quyền khi chọn tuner, không hộp lỗi; khoảng 5 giây là ước lượng lúc app mở, không phải phép đo toàn đường tới khi tuner sẵn sàng.
+
+| Mux | Tần số | SNR lần đầu | Mức tín hiệu ước tính | Từ lệnh tune tới trạng thái lock đầu tiên | Số kênh riêng |
+| --- | ---: | ---: | ---: | ---: | --- |
+| K25 | 506 MHz | 28,761 dB | 42% | 2,066 giây | Chưa tách từ tổng |
+| K36 | 594 MHz | 36,005 dB | 46% | 2,084 giây | Chưa tách từ tổng |
+
+G1 quét 28 tần số từ 474 đến 690 MHz theo bước 8 MHz, chỉ DVB-T2. Log từ lệnh tune đầu đến trạng thái cuối dài 3 phút 53,863 giây; người dùng ước hơn 4 phút cho toàn thao tác. Màn hình ghi 2 mux, 27 kênh, 16 kênh mới. Thấy tên như VTV3 HD, HTV7 HD và VTV2 HD; chưa đối chiếu từng tên có dấu với bảng dịch vụ gốc. BER lần đầu ở cả hai mux là 0 trên thang giao thức. Ở 474 MHz, lệnh tune trả sau 2,657 giây và lần đọc trạng thái đầu sau 3,464 giây chưa lock. Mốc trạng thái là thời điểm client hỏi, không phải thời điểm phần cứng khóa chính xác.
+
+G3: VTV6 HD, HTV7 HD và VTV2 HD lần lượt lên hình rõ sau khoảng 10, 10 và 8 giây theo người dùng. Không lấy ba mẫu tín hiệu của G2 để suy thời điểm đổi ở G3. G4: bộ nhớ driver theo PSS giảm từ 32.485 xuống 28.578 KiB; pin từ 71% xuống 51%, nhiệt độ 34,8 lên 40,5 °C. Người dùng không sạc hay tắt màn hình và thấy một lần đứng cả hình lẫn tiếng 5–6 giây khi còn khoảng 9 phút, rồi tự phát tiếp. Trong 278 lần đọc log định kỳ chỉ có một trạng thái mới: 27,966 dB, BER 0, 42% và 3 gói lỗi/giây. Đây là tốc độ lỗi của cửa sổ đó, không phải tổng số gói mất của cả lượt. Chưa có số đo ở thời điểm đứng hình.
+
+G5: Người dùng thấy hình dừng mà không có popup, không cần đóng app. Sau khi cắm lại, log có bootstrap/reload mới, K25 khóa sau lần đọc đầu và client đặt PID phát. Log vòng không còn bản ghi đúng thời điểm rút để phân loại nguyên nhân phía driver; lần này không dùng bằng chứng P4f để thay thế.
+
+**Chưa có mẫu TS K25/K36:** đường **Dump TS** hiện có thuộc màn hình chẩn đoán; nó không ghi từ phiên `dvbservice` đang phát. Không mở màn hình chẩn đoán để tranh tuner hoặc dùng mẫu Phase 4 thay cho G2/G3. Chưa thể quy hiện tượng đứng hình cho RF, USB hay trình phát.
+
 ## 2026-11-20 — P4f: phân biệt lỗi USB với việc rút tuner
 
 **Đính chính P4e (`SOURCE-CONFIRMED`, baseline `2b0f295`).** Điều kiện cũ chỉ kiểm một lần khi đọc lỗi native: `-71` là ứng viên rút, nhưng chưa đủ để kết luận. Nếu lỗi tới trước lúc Android cập nhật danh sách thiết bị hoặc giao sự kiện rút, thông báo USB được gửi trước, còn thông báo rút sau đó bị cơ chế chống lặp bỏ qua. Đây là lỗi thời điểm kiểm tra, không phải thiếu `-71` trong danh sách mã. Chạy hai ca giả trên production cũ: cả sự kiện rút sau 300 ms và danh sách mất thiết bị sau 1500 ms đều cho lỗi native thay vì `DEVICE_DISCONNECTED`. Hai khoảng trễ này là dữ liệu giả, không phải số đo OnePlus hay Samsung.

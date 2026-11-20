@@ -1,5 +1,11 @@
 # Port TBS5530 sang Android — trạng thái hiện tại
 
+## 2026-11-20 — Phase 5a: đã xem được trên OnePlus, chưa đạt kiểm độ ổn định
+
+Bản release thử cục bộ `31` / `1.44-tbs5530-p5a` qua gate phần mềm và validator trên OnePlus. DVBTTelevizor bắt được K25 và K36, báo 27 kênh, đổi kênh và xem lại được sau khi cắm lại. G2 còn giật nhẹ; G4 có một lần đứng 5–6 giây; G5 chỉ dừng hình, không báo mất kết nối. Samsung G6 bị chặn bởi `P5A_ADB_SERVER_PIN`; chưa cài P5a lên Samsung. Chưa đạt `PHASE5A_LIVE_TV_PASS` hoặc `SOAK_45MIN_PASS`.
+
+**Tiếp theo:** Chốt cách quan sát và lấy mẫu ngay trong phiên `dvbservice`, không mở thêm chủ tuner. Lượt G4 chỉ có một mẫu trạng thái mới; chưa có TS K25/K36 từ phiên phát để phân biệt lỗi luồng với lỗi app phát. Giữ kết luận `PHASE4_FUNCTIONAL_PASS`, `TS_SMOKE_PASS=true` và `ROOT_CAUSE_CONFIRMED` theo Phase 4. Xem [số đo P5a](RESEARCH.md), [bảng kiểm](TEST-MATRIX.md) và [hướng dẫn dùng DVBTTelevizor](../user/tbs5530.md).
+
 ## 2026-11-20 — Phase 4 hoàn tất: `PHASE4_FUNCTIONAL_PASS`
 
 F1 và F2 trên OnePlus đều đạt với bản release P4f: mỗi lần rút chỉ hiện một hộp “Tuner đã bị rút. Cắm lại rồi bấm Bắt đầu.”; cắm lại có TS; bấm **Dừng** không hiện lỗi. Tệp đang ghi trong F2 đóng và đọc được. F3 trên Samsung là tùy chọn, không chạy; không thay thế bằng chứng Samsung P4d bằng kết quả P4f.

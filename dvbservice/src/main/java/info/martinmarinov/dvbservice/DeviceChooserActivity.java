@@ -29,8 +29,6 @@ import android.hardware.usb.UsbManager;
 import android.os.Bundle;
 import androidx.annotation.NonNull;
 import androidx.fragment.app.FragmentActivity;
-
-import androidx.fragment.app.FragmentActivity;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
 import java.io.IOException;
@@ -62,6 +60,7 @@ public class DeviceChooserActivity extends FragmentActivity implements ListPicke
     private final Intent response = new Intent();
     private final DvbServiceResponseReceiver serviceReceiver = new DvbServiceResponseReceiver();
     private Thread discovery;
+    private DvbService.OpenRequest openRequest;
     private boolean discoveryStarted;
     private volatile boolean destroyed;
 
@@ -69,6 +68,7 @@ public class DeviceChooserActivity extends FragmentActivity implements ListPicke
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.progress);
+        findViewById(R.id.cancel_device_open).setOnClickListener(view -> onListPickerDialogCanceled());
 
         // Set to receive info from the DvbService
         IntentFilter statusIntentFilter = new IntentFilter(DvbService.BROADCAST_ACTION);
@@ -83,22 +83,20 @@ public class DeviceChooserActivity extends FragmentActivity implements ListPicke
         discovery = new Thread(() -> {
             List<DvbDevice> devices = new ArrayList<>();
             try {
-                devices.addAll(DvbUsbDeviceRegistry.getUsbDvbDevices(getApplicationContext()));
-                List<DvbDevice> files = TsDumpFileUtils.getDevicesForAllRecordings(this);
-                devices.addAll(files);
-                if (devices.isEmpty()) throw new DvbException(NO_DVB_DEVICES_FOUND,
-                        getString(info.martinmarinov.drivers.R.string.no_devices_found));
-                List<DeviceFilter> filters = new ArrayList<>(devices.size());
+                List<DeviceFilter> filters = DvbUsbDeviceRegistry.getUsbDvbDeviceFilters(getApplicationContext());
+                devices.addAll(TsDumpFileUtils.getDevicesForAllRecordings(this));
                 for (DvbDevice device : devices) filters.add(device.getDeviceFilter());
-                boolean showPicker = filters.size() > 1 || !files.isEmpty();
+                if (filters.isEmpty()) throw new DvbException(NO_DVB_DEVICES_FOUND,
+                        getString(info.martinmarinov.drivers.R.string.no_devices_found));
+                boolean showPicker = filters.size() > 1 || !devices.isEmpty();
                 runOnUiThread(() -> {
                     if (destroyed || isFinishing()) return;
                     if (showPicker) ListPickerFragmentDialog.showOneInstanceOnly(getSupportFragmentManager(), filters);
-                    else DvbService.requestOpen(this, filters.get(0));
+                    else onListPickerDialogItemSelected(filters.get(0));
                 });
-            } catch (DvbException e) {
+            } catch (DvbException | RuntimeException e) {
                 runOnUiThread(() -> {
-                    if (!destroyed && !isFinishing()) handleException(e);
+                    if (!destroyed && !isFinishing()) handleException(asDvbException(e));
                 });
             } finally {
                 for (DvbDevice device : devices) {
@@ -116,6 +114,7 @@ public class DeviceChooserActivity extends FragmentActivity implements ListPicke
     @Override
     protected void onDestroy() {
         destroyed = true;
+        if (openRequest != null) openRequest.cancel();
         if (discovery != null) discovery.interrupt();
         LocalBroadcastManager.getInstance(this).unregisterReceiver(serviceReceiver);
         super.onDestroy();
@@ -123,11 +122,17 @@ public class DeviceChooserActivity extends FragmentActivity implements ListPicke
 
     @Override
     public void onListPickerDialogItemSelected(@NonNull DeviceFilter deviceFilter) {
-        DvbService.requestOpen(this, deviceFilter);
+        if (openRequest != null || isFinishing()) return;
+        try {
+            openRequest = DvbService.requestOpen(this, deviceFilter);
+        } catch (DvbException e) {
+            handleException(e);
+        }
     }
 
     @Override
     public void onListPickerDialogCanceled() {
+        if (openRequest != null) openRequest.cancel();
         finishWith(RESULT_CANCELED);
     }
 
@@ -138,17 +143,11 @@ public class DeviceChooserActivity extends FragmentActivity implements ListPicke
         @Override
         public void onReceive(Context context, Intent intent) {
             DvbService.StatusMessage statusMessage = DvbService.parseMessage(intent);
+            if (statusMessage == null || openRequest == null || isFinishing()
+                    || !openRequest.id.equals(statusMessage.requestId)) return;
+            openRequest = null;
             if (statusMessage.exception != null) {
-                Exception exception = statusMessage.exception;
-                if (exception instanceof DvbException) {
-                    handleException((DvbException) exception);
-                } else if (exception instanceof IOException) {
-                    handleException(new DvbException(DvbException.ErrorCode.IO_EXCEPTION, exception));
-                } else if (exception instanceof RuntimeException) {
-                    throw (RuntimeException) exception;
-                } else {
-                    throw new RuntimeException(exception);
-                }
+                handleException(asDvbException(statusMessage.exception));
             } else {
                 handleSuccess(statusMessage.deviceFilter, statusMessage.serverAddresses);
             }
@@ -169,6 +168,11 @@ public class DeviceChooserActivity extends FragmentActivity implements ListPicke
         response.putExtra(CONTRACT_TRANSFER_PORT, addresses.getTransferPort());
 
         finishWith(RESULT_OK);
+    }
+
+    private static DvbException asDvbException(Exception exception) {
+        return exception instanceof DvbException ? (DvbException) exception
+                : new DvbException(DvbException.ErrorCode.IO_EXCEPTION, exception);
     }
 
     private void handleException(DvbException e) {

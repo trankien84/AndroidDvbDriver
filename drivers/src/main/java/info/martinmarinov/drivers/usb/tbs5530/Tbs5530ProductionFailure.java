@@ -28,16 +28,16 @@ final class Tbs5530ProductionFailure extends IOException {
         DvbException.ErrorCode code=fallback;
         int text=fallbackText;
         if (kind != null) switch(kind) {
-            case BUSY: code=DvbException.ErrorCode.BAD_API_USAGE; text=R.string.tbs5530_busy; break;
+            case BUSY: code=DvbException.ErrorCode.DEVICE_BUSY; text=R.string.tbs5530_busy; break;
             case DRAIN_UNCONFIRMED: code=DvbException.ErrorCode.HARDWARE_EXCEPTION; text=R.string.tbs5530_drain_unconfirmed; break;
             case PERMISSION: code=DvbException.ErrorCode.USB_PERMISSION_DENIED; text=R.string.tbs5530_permission_denied; break;
             case PERMISSION_TIMEOUT: code=DvbException.ErrorCode.USB_PERMISSION_DENIED; text=R.string.tbs5530_permission_timeout; break;
             case HANDOFF_TIMEOUT: code=DvbException.ErrorCode.CANNOT_OPEN_USB; text=R.string.tbs5530_handoff_timeout; break;
-            case FIRMWARE: code=DvbException.ErrorCode.CANNOT_OPEN_USB; text=R.string.tbs5530_firmware_failed; break;
+            case FIRMWARE: code=DvbException.ErrorCode.FIRMWARE_UNAVAILABLE; text=R.string.tbs5530_firmware_failed; break;
             case DESCRIPTOR: code=DvbException.ErrorCode.DVB_DEVICE_UNSUPPORTED; text=R.string.tbs5530_descriptor_failed; break;
             case BOOTSTRAP: code=DvbException.ErrorCode.HARDWARE_EXCEPTION; text=R.string.tbs5530_bootstrap_failed; break;
             case RELOAD: code=DvbException.ErrorCode.HARDWARE_EXCEPTION; text=R.string.tbs5530_reload_failed; break;
-            case REMOVED: code=DvbException.ErrorCode.CANNOT_OPEN_USB; text=R.string.tbs5530_removed; break;
+            case REMOVED: code=DvbException.ErrorCode.DEVICE_DISCONNECTED; text=R.string.tbs5530_removed; break;
             case INTERRUPTED: code=DvbException.ErrorCode.IO_EXCEPTION; text=R.string.tbs5530_interrupted; break;
             default: throw new AssertionError(kind);
         }

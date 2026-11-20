@@ -35,15 +35,14 @@ public class DvbDemux implements ByteSink,Closeable {
     private final int pktSize;
     private final byte[] tsBuf = new byte[204];
     private final NativePipe pipe;
-    private final FastIntFilter filter = new FastIntFilter(0x1fff);
+    private volatile FastIntFilter filter;
 
     @SuppressWarnings("ConstantConditions")
     private final byte[] cntStorage = CHECK_PACKET_INTEGRITY ? new byte[(0x1fff / 2) + 1] : null;
 
     private int tsBufP = 0;
-    private int droppedUsbFps;
     private long lastUpdated;
-    private boolean passFullTsStream = false;
+    private final java.util.concurrent.atomic.AtomicInteger droppedPackets = new java.util.concurrent.atomic.AtomicInteger();
 
     public static DvbDemux DvbDmxSwfilter() {
         return new DvbDemux(188);
@@ -52,16 +51,18 @@ public class DvbDemux implements ByteSink,Closeable {
     private DvbDemux(int pktSize) {
         this.pktSize = pktSize;
         this.pipe = new NativePipe();
-        reset();
+        setPidFilter(0);
+        resetTransportFraming();
     }
 
     void setPidFilter(int ... pids) {
-        passFullTsStream = false;
-        filter.setFilter(pids);
+        FastIntFilter next = new FastIntFilter(0x2000);
+        next.setFilter(pids);
+        filter = next;
     }
 
     void disablePidFilter() {
-        passFullTsStream = true;
+        filter = null;
     }
 
     @Override
@@ -114,13 +115,12 @@ public class DvbDemux implements ByteSink,Closeable {
         }
     }
 
-    int getDroppedUsbFps() {
-        long now = System.currentTimeMillis();
+    synchronized int getDroppedUsbFps() {
+        long now = System.nanoTime();
         long elapsed = now - lastUpdated;
+        if (elapsed <= 0) return 0;
         lastUpdated = now;
-        double fps = droppedUsbFps * 1000.0 / elapsed;
-        droppedUsbFps = 0;
-        return (int) Math.abs(fps);
+        return (int) (droppedPackets.getAndSet(0) * 1_000_000_000.0 / elapsed);
     }
 
     private int findNextPacket(byte[] buf, int pos, int count) {
@@ -151,17 +151,18 @@ public class DvbDemux implements ByteSink,Closeable {
         int pid = tsPid(buf, offset);
 
         if ((buf[offset+1] & 0x80) != 0) {
-            droppedUsbFps++; // count this as dropped frame
+            droppedPackets.incrementAndGet();
 		    /* data in this packet cant be trusted - drop it unless
 		     * constant DVB_DEMUX_FEED_ERR_PKTS is set */
             if (!DVB_DEMUX_FEED_ERR_PKTS) return;
         } else {
             if (CHECK_PACKET_INTEGRITY) {
-                if (!checkSequenceIntegrity(pid, buf, offset)) droppedUsbFps++;
+                if (!checkSequenceIntegrity(pid, buf, offset)) droppedPackets.incrementAndGet();
             }
         }
 
-        if (passFullTsStream || filter.isFiltered(pid)) pipe.write(buf, offset, 188);
+        FastIntFilter selected = filter;
+        if (selected == null || selected.isFiltered(pid)) pipe.write(buf, offset, 188);
     }
 
     private boolean checkSequenceIntegrity(int pid, byte[] buf, int offset) {
@@ -205,10 +206,19 @@ public class DvbDemux implements ByteSink,Closeable {
     }
 
     void reset() {
-        droppedUsbFps = 0;
-        lastUpdated = System.currentTimeMillis();
+        resetDroppedPackets();
+        if (filter != null) setPidFilter(0); // by default we let through only pid 0
+    }
 
-        if (!passFullTsStream) setPidFilter(0); // by default we let through only pid 0
+    void resetTransportFraming() {
+        tsBufP = 0;
+        java.util.Arrays.fill(cntStorage, (byte) 0);
+        resetDroppedPackets();
+    }
+
+    private synchronized void resetDroppedPackets() {
+        droppedPackets.set(0);
+        lastUpdated = System.nanoTime();
     }
 
     @Override

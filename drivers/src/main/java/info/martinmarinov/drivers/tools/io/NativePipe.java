@@ -20,10 +20,12 @@
 
 package info.martinmarinov.drivers.tools.io;
 
+import android.os.Build;
 import android.os.ParcelFileDescriptor;
 import android.system.ErrnoException;
 import android.system.Os;
 import android.system.OsConstants;
+import android.system.StructPollfd;
 
 import java.io.Closeable;
 import java.io.FileDescriptor;
@@ -35,6 +37,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class NativePipe implements Closeable {
     private final ParcelFileDescriptor.AutoCloseInputStream inputStream;
     private final ParcelFileDescriptor writeEnd;
+    private final StructPollfd[] legacyPoll;
     private final AtomicBoolean closed = new AtomicBoolean();
 
     public NativePipe() {
@@ -42,8 +45,16 @@ public class NativePipe implements Closeable {
             ParcelFileDescriptor[] pipe = ParcelFileDescriptor.createPipe();
             FileDescriptor fd = pipe[1].getFileDescriptor();
             try {
-                int flags = Os.fcntlInt(fd, OsConstants.F_GETFL, 0);
-                Os.fcntlInt(fd, OsConstants.F_SETFL, flags | OsConstants.O_NONBLOCK);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    int flags = Os.fcntlInt(fd, OsConstants.F_GETFL, 0);
+                    Os.fcntlInt(fd, OsConstants.F_SETFL, flags | OsConstants.O_NONBLOCK);
+                    legacyPoll = null;
+                } else {
+                    StructPollfd poll = new StructPollfd();
+                    poll.fd = fd;
+                    poll.events = (short) OsConstants.POLLOUT;
+                    legacyPoll = new StructPollfd[] {poll};
+                }
             } catch (ErrnoException e) {
                 try { pipe[0].close(); } finally { pipe[1].close(); }
                 throw new IOException("Cannot set up cancellable TS pipe", e);
@@ -60,11 +71,17 @@ public class NativePipe implements Closeable {
     }
 
     public void write(byte[] buf, int offset, int length) throws IOException {
-        // Thread.interrupt() does not cancel a blocking pipe write on Android.
+        // Before API 30 use bounded poll and a single writer with chunks no larger than PIPE_BUF.
         while (length > 0 && !Thread.currentThread().isInterrupted()) {
             if (closed.get()) throw new IOException("TS pipe is closed");
             try {
-                int written = Os.write(writeEnd.getFileDescriptor(), buf, offset, length);
+                if (legacyPoll != null) {
+                    if (Os.poll(legacyPoll, 10) == 0) continue;
+                    if ((legacyPoll[0].revents & OsConstants.POLLOUT) == 0) throw new IOException("TS pipe is not writable");
+                    if (Thread.currentThread().isInterrupted()) break;
+                }
+                int written = Os.write(writeEnd.getFileDescriptor(), buf, offset,
+                        legacyPoll == null ? length : Math.min(length, 512));
                 offset += written;
                 length -= written;
             } catch (ErrnoException e) {

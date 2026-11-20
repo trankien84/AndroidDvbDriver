@@ -71,8 +71,16 @@ public abstract class DvbDevice implements Closeable {
 
     public final void tune(long freqHz, long bandwidthHz, @NonNull DeliverySystem deliverySystem) throws DvbException {
         tuneTo(freqHz, bandwidthHz, deliverySystem);
-        if (dvbDemux != null) dvbDemux.reset();
+        if (dvbDemux != null && !resetsDemuxOnReceive()) dvbDemux.reset();
     }
+
+    public void tuneForService(long freqHz, long bandwidthHz, @NonNull DeliverySystem deliverySystem) throws DvbException {
+        tune(freqHz, bandwidthHz, deliverySystem);
+    }
+
+    protected boolean resetsDemuxOnReceive() { return false; }
+
+    protected final void resetTransportFraming() { dvbDemux.resetTransportFraming(); }
 
     public int readDroppedUsbFps() throws DvbException {
         return dvbDemux.getDroppedUsbFps();
@@ -164,7 +172,7 @@ public abstract class DvbDevice implements Closeable {
                 tsSource = createTsSource();
                 if (stopping) return;
                 tsSource.open();
-                dvbDemux.reset();
+                if (!resetsDemuxOnReceive()) dvbDemux.reset();
                 while (!stopping && !isInterrupted()) tsSource.readNext(dvbDemux);
             } catch (InterruptedException ignored) {
                 // The pump was cancelled.

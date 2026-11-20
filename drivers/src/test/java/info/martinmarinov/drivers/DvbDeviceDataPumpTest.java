@@ -2,6 +2,11 @@
 package info.martinmarinov.drivers;
 
 import org.junit.Test;
+import org.mockito.MockedConstruction;
+import info.martinmarinov.drivers.tools.io.NativePipe;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.util.Collections;
@@ -30,6 +35,45 @@ public class DvbDeviceDataPumpTest {
         @Override public String getDebugString() { return "fixture"; }
         @Override protected void tuneTo(long f, long b, DeliverySystem d) { }
     }
+    @Test public void resetDiscardsPartialMuxPacketButKeepsSelectedPids() throws Exception {
+        List<byte[]> packets = new ArrayList<>();
+        try (MockedConstruction<NativePipe> ignored = mockConstruction(NativePipe.class, (pipe, context) -> {
+            doAnswer(call -> {
+                byte[] data = call.getArgument(0);
+                int offset = call.getArgument(1);
+                packets.add(Arrays.copyOfRange(data, offset, offset + (int) call.getArgument(2)));
+                return null;
+            }).when(pipe).write(any(byte[].class), anyInt(), eq(188));
+        }); DvbDemux demux = DvbDemux.DvbDmxSwfilter()) {
+            byte[] retained = packet(101, 10);
+            byte[] removed = packet(102, 20);
+            byte[] added = packet(103, 30);
+            demux.setPidFilter(101, 102);
+            demux.consume(retained, 50);
+            demux.resetTransportFraming();
+            demux.setPidFilter(101, 103);
+            demux.consume(removed, removed.length);
+            demux.consume(retained, retained.length);
+            demux.consume(added, added.length);
+            demux.disablePidFilter();
+            demux.consume(removed, removed.length);
+            assertEquals(3, packets.size());
+            assertArrayEquals(retained, packets.get(0));
+            assertArrayEquals(added, packets.get(1));
+            assertArrayEquals(removed, packets.get(2));
+        }
+    }
+
+    private static byte[] packet(int pid, int value) {
+        byte[] packet = new byte[188];
+        Arrays.fill(packet, (byte) value);
+        packet[0] = 0x47;
+        packet[1] = (byte) (pid >> 8);
+        packet[2] = (byte) pid;
+        packet[3] = 0x10;
+        return packet;
+    }
+
     @Test public void closingDuringWriteDoesNotReportStreamClosed() throws Exception {
         for (int run = 0; run < 200; run++) {
             DvbDemux demux = mock(DvbDemux.class);

@@ -26,6 +26,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.concurrent.atomic.AtomicReference;
 
 import info.martinmarinov.drivers.DvbDevice;
 
@@ -34,7 +35,7 @@ class TransferThread extends Thread {
     private final ServerSocket serverSocket;
     private final OnClosedCallback callback;
 
-    private volatile IOException lastException = null;
+    private final AtomicReference<IOException> firstFailure = new AtomicReference<>();
     private volatile InputStream transportStream;
     private volatile Socket activeSocket;
 
@@ -72,7 +73,7 @@ class TransferThread extends Thread {
             transportStream = dvbDevice.getTransportStream(new DvbDevice.StreamCallback() {
                 @Override
                 public void onStreamException(IOException exception) {
-                    lastException = exception;
+                    firstFailure.compareAndSet(null, exception);
                     interrupt();
                 }
 
@@ -86,13 +87,14 @@ class TransferThread extends Thread {
 
                 if (inlength > 0) {
                     os.write(buf, 0, inlength);
+                } else if (inlength < 0) {
+                    break;
                 } else {
-                    // No data, sleep for a bit until available
                     quietSleep(10);
                 }
             }
         } catch (IOException e) {
-            lastException = e;
+            firstFailure.compareAndSet(null, e);
         } finally {
             quietClose(os);
             quietClose(socket);
@@ -114,41 +116,23 @@ class TransferThread extends Thread {
             try {
                 c.close();
             } catch (IOException e) {
-                if (lastException == null) lastException = e;
-            }
-        }
-    }
-
-    private void quietClose(Socket s) {
-        if (s != null) {
-            try {
-                s.close();
-            } catch (IOException e) {
-                if (lastException == null) lastException = e;
-            }
-        }
-    }
-
-    private void quietClose(ServerSocket s) {
-        if (s != null) {
-            try {
-                s.close();
-            } catch (IOException e) {
-                if (lastException == null) lastException = e;
+                firstFailure.compareAndSet(null, e);
             }
         }
     }
 
     IOException signalAndWaitToDie() {
-        if (isAlive()) {
-            interrupt();
+        boolean interrupted = false;
+        if (isAlive()) interrupt();
+        while (isAlive()) {
             try {
                 join();
-            } catch (InterruptedException e) {
-                e.printStackTrace();
+            } catch (InterruptedException ignored) {
+                interrupted = true;
             }
         }
-        return lastException;
+        if (interrupted) Thread.currentThread().interrupt();
+        return firstFailure.get();
     }
 
     interface OnClosedCallback {

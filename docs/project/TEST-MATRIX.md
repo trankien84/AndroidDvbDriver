@@ -1,5 +1,28 @@
 # TBS5530 test matrix
 
+## 2026-11-20 — P5a: chuẩn bị xem DVB-T2 bằng DVBTTelevizor
+
+| Hạng mục | Kết quả | Bằng chứng hoặc giới hạn |
+| --- | --- | --- |
+| Request mở, bận và ngắt | PASS JVM | Giữ phiên đang dọn, từ chối client thứ hai; kết thúc luồng hoặc báo rút làm hai socket đóng. |
+| Dò, PID và tune lại | PASS JVM | Client giả qua TCP dò 10 tần số, nhận đúng 3 lock giả; đặt và đổi PID, tune lại, từ chối DVB-T. Fixture frontend thật của port kiểm tần số trống không nạp RAM lại. Test demux kiểm phần gói dở bị bỏ nhưng bộ lọc PID giữ nguyên. |
+| Xin quyền USB của driver cũ | PASS JVM | Kiểm gói đích, receiver không xuất, cấp quyền/từ chối và bỏ qua phản hồi dành cho thiết bị khác. Không phải kết quả cấp quyền USB trên tuner thật. |
+| JVM tất cả mô-đun | PASS | Drivers 573 PASS và 5 SKIP; usbxfer 90, dvbservice 22, app debug 134 và release 15 PASS. |
+| Build và lint | PASS | Wrapper build debug, release, AndroidTest của bốn mô-đun; lint app và driver debug/release đều đạt. Lượt lint riêng ban đầu tìm hai lỗi API 30 ở `NativePipe`; giữ kết quả lịch sử và ghi lần chạy sau sửa riêng. |
+| Release, JNI, 16 KiB | PASS tĩnh | Release ký bằng khóa debug chỉ để thử cục bộ. Kiểm 12 ELF trên bốn ABI, cách ly debug và căn chỉnh ZIP. Chưa kiểm trên máy dùng trang 16 KiB. |
+| Instrumentation AVD | PASS 2/2 | `DeviceFilterXmlEquivalenceTester` và `NativeLibrarySmokeTest`; không dùng tuner. |
+| Native host, Python và helper giả | PASS | Năm bài C, Python 139/139, helper 373/373; không dùng USB thật. |
+| Hồi quy trên code cũ | FAIL như dự kiến | Hai ca mới về callback xin quyền và tắt lọc PID đều thất bại trên bản sao `ceb56ec`; cùng hai ca đạt trên mã hiện tại. |
+| Validator và cài release | PASS OnePlus / BLOCKED Samsung | OnePlus qua `-Execution`, cài đè và hash bản cài khớp. Samsung bị từ chối hai lần vì `P5A_ADB_SERVER_PIN`; không cài. |
+| G0 | PASS chức năng mở; thời gian sẵn sàng chưa đo đủ | Một hộp chọn app, DVBTTelevizor mở khoảng 5 giây theo người dùng. Khi chọn tuner thật có hai hộp quyền, không lỗi; log đủ hai lượt 132 yêu cầu A0 và chặn mở lại trong handoff. |
+| G1 | PASS | Sửa nhầm nguồn bản ghi mà không rút/cắm thêm. Quét tuner thật 28 tần số DVB-T2, 8 MHz; K25 và K36 khóa. Màn hình báo 2 mux, 27 kênh, 16 kênh mới. |
+| G2 | FAIL tiêu chí mượt | VTV3 HD/K25 đủ 10 phút theo người dùng; đôi lúc giật nhẹ 2–3 giây. Thiếu mẫu TS và trạng thái mỗi 10 giây để tìm nguyên nhân. |
+| G3 | PASS thao tác đổi; thời gian ước lượng | VTV6 HD, HTV7 HD, VTV2 HD lên hình rõ sau khoảng 10, 10 và 8 giây. Không còn đủ log để chứng minh thứ tự tune ở từng lần đổi. |
+| G4 | FAIL tiêu chí liên tục | Có một lần đứng hình và tiếng 5–6 giây, tự phát tiếp. Chỉ một trạng thái mới trong 278 lần đọc log; không kết luận mất lock hoặc ước tính tổng số gói bị bỏ. |
+| G5 | PASS cắm lại / FAIL thông báo ngắt | Khi rút chỉ dừng hình; không popup hoặc phải đóng app. Sau cắm lại một hộp chọn app, hai hộp quyền; K25 khóa lại và phát được. Không giữ được log phía driver đúng lúc rút để chứng minh lần xác nhận P4f này. |
+| G6 | BLOCKED | Validator không xác nhận được tệp thực thi của tiến trình ADB; không cài, không cắm tuner vào Samsung. Người dùng chọn không xem thêm bằng app TV trên Samsung. |
+| Mẫu TS K25/K36 từ phiên `dvbservice` | BLOCKED | Dump chẩn đoán hiện cần sở hữu tuner riêng. Không dùng mẫu cũ hoặc mở hai phiên cạnh tranh. |
+
 ## 2026-11-20 — P4f: xác nhận rút tuner trước khi báo lỗi
 
 | Hạng mục | Kết quả | Bằng chứng hoặc giới hạn |

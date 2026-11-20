@@ -40,8 +40,10 @@ class DvbServer implements Closeable {
 
     private final DvbDevice dvbDevice;
     private volatile Socket activeControl;
+    private volatile boolean cancelled;
 
     void cancel() {
+        cancelled = true;
         quietClose(activeControl);
         quietClose(controlSocket);
         quietClose(transferSocket);
@@ -67,7 +69,7 @@ class DvbServer implements Closeable {
 
             return new DvbServerPorts(controlSocket.getLocalPort(), transferSocket.getLocalPort());
         } catch (IOException e) {
-            close();
+            cancel();
             throw e;
         }
     }
@@ -78,9 +80,8 @@ class DvbServer implements Closeable {
 
     @Override
     public void close() {
+        cancel();
         quietClose(dvbDevice);
-        quietClose(controlSocket);
-        quietClose(transferSocket);
     }
 
     void serve() throws IOException {
@@ -90,6 +91,7 @@ class DvbServer implements Closeable {
         try {
             control = controlSocket.accept();
             activeControl = control;
+            if (cancelled) return;
             control.setTcpNoDelay(true);
             inputStream = control.getInputStream();
             outputStream = control.getOutputStream();
@@ -103,22 +105,21 @@ class DvbServer implements Closeable {
                 }
             });
 
+            IOException controlFailure = null;
+            IOException transferFailure;
             try {
                 worker.start();
                 while (worker.isAlive() && !Thread.currentThread().isInterrupted()) {
                     Request c = Request.parseAndExecute(inputStream, outputStream, dvbDevice);
                     if (c == Request.REQ_EXIT) break;
                 }
-            } catch (SocketException e) {
-                IOException workerException = worker.signalAndWaitToDie();
-                if (workerException != null) throw workerException;
-                throw e;
+            } catch (IOException e) {
+                controlFailure = e;
+            } finally {
+                transferFailure = worker.signalAndWaitToDie();
             }
-
-            // Finish successfully due to exit command, if worker failed for anything other
-            // than a socket exception, throw it
-            IOException workerException = worker.signalAndWaitToDie();
-            if (workerException != null && !(workerException instanceof SocketException)) throw workerException;
+            if (transferFailure != null && !(transferFailure instanceof SocketException)) throw transferFailure;
+            if (controlFailure != null && !cancelled) throw controlFailure;
         } finally {
             quietClose(inputStream);
             quietClose(outputStream);

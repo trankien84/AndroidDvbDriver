@@ -1,5 +1,22 @@
 # Architecture decision record (ADR)
 
+## ADR-080 — Giữ giao thức DVB-T Driver cho DVBTTelevizor
+
+**Date:** 2026-11-20, baseline `ceb56ec`. **Status:** Đã triển khai và kiểm một phần trên OnePlus; dò/phát/cắm lại được. Chưa đạt độ ổn định và thông báo ngắt; chưa chạy Samsung.
+
+| Hạng mục | Quyết định |
+| --- | --- |
+| Mở tuner | Màn hình chọn chỉ dò danh sách USB, chưa nạp firmware. Worker dịch vụ mở thiết bị đã chọn, hiển thị vòng chờ cùng nút hủy, rồi mới trả hai cổng đã sẵn sàng. Không chạy mở thiết bị hoặc đợi thread kết thúc trên luồng giao diện. Mỗi kết quả mở gắn với đúng yêu cầu đã gửi. |
+| Dải tune | Áp dụng 174–868 MHz tính cả hai đầu, theo đơn vị kHz nguyên, độ rộng kênh 6/7/8 MHz. Giữ bảng lệnh, ảnh firmware và trình tự đã kiểm của Phase 4. Tune không nạp lại firmware; thử PLP0 rồi AUTO một lần khi chưa lock. |
+| DVB-T và không lock | DVB-T bị từ chối với `DVB_DEVICE_UNSUPPORTED`; giữ khung phản hồi cũ (`success=0`) vì phiên bản giao thức này không có trường mã lỗi cho `REQ_TUNE`. Log ghi mã cụ thể. Tần số hợp lệ có thể không có sóng: service trả tune thành công, cờ lock bằng 0; đường chẩn đoán vẫn có thể báo không lock như trước. |
+| PID và luồng | `REQ_SET_PIDS` danh sách rỗng ngừng chuyển tiếp gói; `0x2000` đứng một mình tắt lọc PID. Công bố toàn bộ bộ lọc trong một lần. Sau retune, dọn nguồn native cũ và đặt lại phần gói dở trên luồng nhận trước khi phát dữ liệu mới; bộ lọc đã chọn được giữ. Không hứa xóa dữ liệu đã nằm trong bộ đệm TCP phía client. |
+| Chủ sở hữu | Dịch vụ có một phiên đang mở, chạy hoặc đang dọn. Client thứ hai nhận `DEVICE_BUSY`, không làm gián đoạn client đầu. Màn hình chẩn đoán và service vẫn dùng khóa TBS5530 chung. `DEVICE_BUSY`, `FIRMWARE_UNAVAILABLE`, `USB_PERMISSION_DENIED` và `DEVICE_DISCONNECTED` phân biệt lỗi trên đường mở. |
+| Khi rút | Giữ xác nhận rút P4f. Khi nguồn báo ngắt hoặc kết thúc, luồng dữ liệu đóng socket và đánh thức socket điều khiển; chỉ trả quyền mở sau khi luồng và thiết bị đã dọn. Không bỏ cơ chế giữ khóa nếu không xác nhận dọn USB an toàn. |
+| Xin quyền và API cũ | Đăng ký callback bằng `ContextCompat` với `RECEIVER_NOT_EXPORTED`; giới hạn `PendingIntent` vào gói driver và giữ cờ mutable từ API 31 để Android điền thông tin. Hai lỗi lint khác ở `NativePipe` là lời gọi `fcntlInt` yêu cầu API 30; dưới API đó dùng `poll` có thời hạn và mỗi lượt chỉ ghi một đoạn nhỏ. Giữ `minSdk=21`. |
+| Intent cắm USB | Giữ intent đã công bố và quy tắc chặn trong bootstrap/handoff. Chỉ khi không có activity nhận intent cũ, `UsbDelegate` mới thử mở DVBTTelevizor cho TBS5530. Mở giao diện client không tự nạp firmware hay bắt đầu dò. |
+
+**Đánh đổi:** Không đổi giao thức nhị phân chỉ để truyền mã lỗi chi tiết; kiểm kết quả hiển thị trên client ở G1/G5. Không hứa vượt được mốc 10 giây của client nếu người dùng còn đang cấp quyền. Giữ một chủ sở hữu ngay cả khi công cụ chẩn đoán muốn lấy mẫu. Xem lại khi có log G0–G6 hoặc khi số đo thật cho thấy cần thay cửa sổ chờ lock.
+
 ## ADR-079 — Chờ bằng chứng rút tuner trước khi báo lỗi
 
 **Date:** 2026-11-20, baseline `2b0f295`. **Status:** Đã kiểm JVM và xác nhận trên OnePlus ở F1/F2. Bổ sung ADR-076.

@@ -95,7 +95,7 @@ public class RequestTest {
         assertThat(response[0], is(1L)); // success
 
         // verify hardware was called
-        verify(dvbDevice).tune(506_000_000L, 8_000_000L, DeliverySystem.DVBT2);
+        verify(dvbDevice).tuneForService(506_000_000L, 8_000_000L, DeliverySystem.DVBT2);
     }
 
     @Test
@@ -129,6 +129,15 @@ public class RequestTest {
 
         // verify hardware was called
         verify(dvbDevice).setPidFilter(0x1FF0, 0x1277, 0x0010);
+    }
+
+    @Test
+    public void allPidMarkerDisablesFilterButEmptyListMutes() throws Exception {
+        assertThat(getRawResponse(4, 0x2000L)[0], is(1L));
+        verify(dvbDevice).disablePidFilter();
+        assertThat(getRawResponse(4)[0], is(1L));
+        verify(dvbDevice).setPidFilter();
+        assertThat(getRawResponse(4, 0x1fffL, 0x2000L)[0], is(0L));
     }
 
     @Test

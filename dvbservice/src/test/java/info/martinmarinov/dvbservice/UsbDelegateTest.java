@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 package info.martinmarinov.dvbservice;
 
+import android.content.ActivityNotFoundException;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbManager;
 import android.util.Log;
@@ -44,6 +46,25 @@ public class UsbDelegateTest {
             Intent forwardedTbs = intents.constructed().get(1);
             verify(forwardedTbs).putExtra(UsbManager.EXTRA_DEVICE, tbs);
             verify(delegate).startActivity(forwardedTbs);
+        }
+    }
+
+    @Test public void tbsWithoutLegacyHandlerOpensTelevizorUsingItsLauncher() {
+        UsbDevice tuner = mock(UsbDevice.class);
+        when(tuner.getVendorId()).thenReturn(0x734c);
+        when(tuner.getProductId()).thenReturn(0x5530);
+        UsbDelegate delegate = mock(UsbDelegate.class);
+        PackageManager packages = mock(PackageManager.class);
+        Intent launcher = mock(Intent.class);
+        when(delegate.getPackageManager()).thenReturn(packages);
+        when(packages.getLaunchIntentForPackage("net.petrjanousek.DVBTTelevizor")).thenReturn(launcher);
+        doThrow(mock(ActivityNotFoundException.class)).when(delegate).startActivity(argThat(i -> i != launcher));
+        doCallRealMethod().when(delegate).handleAttachment(tuner);
+        try (MockedStatic<Log> logs = mockStatic(Log.class);
+             MockedStatic<Tbs5530ProductionSession> production = mockStatic(Tbs5530ProductionSession.class);
+             MockedConstruction<Intent> intents = mockConstruction(Intent.class)) {
+            delegate.handleAttachment(tuner);
+            verify(delegate).startActivity(launcher);
         }
     }
 

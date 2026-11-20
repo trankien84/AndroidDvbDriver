@@ -21,12 +21,15 @@ import static org.mockito.Mockito.*;
 /** Entirely fake Android/firmware/native boundaries: no firmware image or USB access. */
 public class Tbs5530DvbDeviceTest {
     @Test public void normalCloseAndReopenGetsNewSessionAndExactlyOneReloadPerOpen() throws Exception {
-        exercise(false);
+        exercise(false, false);
     }
     @Test public void partialFrontendInitializationCleansOwnerAndCannotRetrySameDeviceObject() throws Exception {
-        exercise(true);
+        exercise(true, false);
     }
-    private static void exercise(boolean shortProbe) throws Exception {
+    @Test public void serviceNoSignalDoesNotFailStatusOrReloadOnNextTune() throws Exception {
+        exercise(false, true);
+    }
+    private static void exercise(boolean shortProbe, boolean scan) throws Exception {
         Context context = mock(Context.class);
         when(context.getApplicationContext()).thenReturn(context); when(context.getString(anyInt())).thenReturn("fixture");
         UsbDevice device = mock(UsbDevice.class); UsbDeviceConnection connection = mock(UsbDeviceConnection.class);
@@ -38,7 +41,17 @@ public class Tbs5530DvbDeviceTest {
         Tbs5530FrontendTest.probeFixture(script, 0x197);
         if (!shortProbe) {
             Tbs5530FrontendTest.initFixture(script);
-            Tbs5530FrontendTest.probeFixture(script, 0x197); Tbs5530FrontendTest.initFixture(script);
+            if (scan) {
+                for (int i = 0; i < 2; i++) {
+                    Tbs5530FrontendTest.tuneFixture(script, new Tbs5530DvbT2TuneParameters(506_000_000L, 8_000_000, 0), i > 0);
+                    Tbs5530FrontendTest.statusFixture(script, 0x10);
+                    Tbs5530FrontendTest.tuneFixture(script, new Tbs5530DvbT2TuneParameters(506_000_000L, 8_000_000,
+                            Tbs5530DvbT2TuneParameters.Selection.automatic()), true);
+                    Tbs5530FrontendTest.statusFixture(script, 0x10);
+                }
+            } else {
+                Tbs5530FrontendTest.probeFixture(script, 0x197); Tbs5530FrontendTest.initFixture(script);
+            }
         }
         AtomicInteger calls = new AtomicInteger(), reloads = new AtomicInteger();
         long[] now = {0};
@@ -75,8 +88,23 @@ public class Tbs5530DvbDeviceTest {
                 } else {
                     dvb.open(); assertEquals(1,reloads.get());
                     assertEquals(java.util.Collections.singleton(DeliverySystem.DVBT2),dvb.readCapabilities().getSupportedDeliverySystems());
-                    dvb.close(); verify(first).close(); dvb.open(); assertEquals(2,reloads.get());
-                    assertEquals(1,reopened.constructed().size()); script.assertComplete();
+                    if (scan) {
+                        assertEquals(DvbException.ErrorCode.DVB_DEVICE_UNSUPPORTED, assertThrows(DvbException.class,
+                                () -> dvb.tuneForService(506_000_000L, 8_000_000, DeliverySystem.DVBT)).getErrorCode());
+                        assertEquals(DvbException.ErrorCode.CANNOT_TUNE_TO_FREQ, assertThrows(DvbException.class,
+                                () -> dvb.tuneForService(900_000_000L, 8_000_000, DeliverySystem.DVBT2)).getErrorCode());
+                        for (int i = 0; i < 2; i++) {
+                            dvb.tuneForService(506_000_000L, 8_000_000, DeliverySystem.DVBT2);
+                            assertEquals(-1, dvb.readSnr());
+                            assertEquals(0xffff, dvb.readBitErrorRate());
+                            assertTrue(dvb.getStatus().isEmpty());
+                            assertEquals(1, reloads.get());
+                        }
+                    } else {
+                        dvb.close(); verify(first).close(); dvb.open(); assertEquals(2,reloads.get());
+                        assertEquals(1,reopened.constructed().size());
+                    }
+                    script.assertComplete();
                 }
             } finally { dvb.close(); }
         }
