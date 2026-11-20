@@ -1,5 +1,18 @@
 # Research log (append-only)
 
+## 2026-11-20 — P4f: phân biệt lỗi USB với việc rút tuner
+
+**Đính chính P4e (`SOURCE-CONFIRMED`, baseline `2b0f295`).** Điều kiện cũ chỉ kiểm một lần khi đọc lỗi native: `-71` là ứng viên rút, nhưng chưa đủ để kết luận. Nếu lỗi tới trước lúc Android cập nhật danh sách thiết bị hoặc giao sự kiện rút, thông báo USB được gửi trước, còn thông báo rút sau đó bị cơ chế chống lặp bỏ qua. Đây là lỗi thời điểm kiểm tra, không phải thiếu `-71` trong danh sách mã. Chạy hai ca giả trên production cũ: cả sự kiện rút sau 300 ms và danh sách mất thiết bị sau 1500 ms đều cho lỗi native thay vì `DEVICE_DISCONNECTED`. Hai khoảng trễ này là dữ liệu giả, không phải số đo OnePlus hay Samsung.
+
+**Đo trên Android thật (`RUNTIME-OBSERVED`).** Tag `TBS5530Detach` dùng đồng hồ `elapsedRealtimeNanos`: `native_fail` là mốc cổng đọc Java quan sát lỗi của nguồn native, không phải mốc kernel hoàn thành giao dịch USB; `detach_broadcast` chỉ ghi khi đúng kết nối; `device_list_gone` ghi khi phép kiểm thấy thiết bị không còn; `decision` ghi kết quả và số ms đã chờ.
+
+| Bước OnePlus | `native_fail` | `detach_broadcast` | Chênh lệch | Quyết định |
+| --- | ---: | ---: | ---: | --- |
+| F1, đang nhận TS | 929252369539399 ns | 929252433292263 ns | 63,753 ms | `DISCONNECTED`, chờ 64 ms |
+| F2, đang ghi TS | 929692107735898 ns | 929692182882356 ns | 75,146 ms | `DISCONNECTED`, chờ 75 ms |
+
+Cả hai lượt nhận `status=-71` và `errno=0`, rồi xác nhận qua sự kiện rút thay vì danh sách. Hai số đo xác nhận thứ tự sự kiện trên OnePlus trong P4f, không đo độ trễ kernel và không gán lại số đo cho P4e. Không chạy F3 nên không có số đo Samsung.
+
 ## 2026-11-19 — P4e: dừng luồng, rút tuner và chấm lại PCR
 
 **Hộp khi dừng (`SOURCE-CONFIRMED` và `OFFLINE-TESTED`).** Trước sửa, `DeviceController` ngắt và chờ `DataHandler` trước khi đóng thiết bị. `DataHandler.interrupt()` đóng đầu đọc; `NativePipe` đóng luôn đầu ghi. Khi ấy `DataPump` chưa được ngắt và vẫn có thể đang ghi gói vào đầu đã đóng. Không cần giả thiết cờ interrupt bị xóa trong đường USB để giải thích stack trace P4d. Test đồng bộ hóa thời điểm đóng với một lần ghi đang chờ, tái hiện lỗi khi phép chờ nhận ngắt rồi ném `IOException`, và kiểm sau sửa không báo lỗi qua 200 vòng.

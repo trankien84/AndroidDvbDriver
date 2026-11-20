@@ -1,5 +1,9 @@
 # Kiểm kê môi trường
 
+## 2026-11-20 — P4f: giữ nguyên môi trường build và hai máy thử
+
+Nhánh `chore/modernize-android-build`, HEAD `2b0f295703ddff1bb9436b6442d45fa3d5fa905a`, cây sạch lúc bắt đầu. Xác minh Oracle JDK `25.0.5.1+4-LTS-20`, Wrapper `9.8.2`, SDK `37.2` revision 2, Build-Tools `37.0.0`, NDK `30.0.16248370`, CMake `4.1.2`, Platform-Tools `37.0.1`, Python `3.12.2` và GCC `16.2.0`. Cấu hình AVD API 37/x86_64 vẫn có, không khởi động. Qua kiểm tra ADB chỉ đọc, hai địa chỉ kết nối OnePlus trỏ cùng một phiên khởi động của GM1900/API 30; Samsung SM-X926B/API 36 hiện diện riêng. Không cài gói công cụ, thay firmware, đổi driver, chủ USB hay VM.
+
 ## 2026-11-19 — P4e: Windows và OnePlus, không đổi công cụ
 
 Nhánh `chore/modernize-android-build`, HEAD `53c2cca96404dff1678de53e08f2486304231101`, cây sạch lúc bắt đầu. Đã kiểm Oracle JDK `25.0.5.1+4-LTS-20`, Wrapper `9.8.2`, Build-Tools `37.0.0`, NDK `30.0.16248370`, Platform-Tools `37.0.1`, Python `3.12.2`, TSDuck `3.45-4798` và GCC `16.2.0`. Tệp AVD hiện có cấu hình API 37/x86_64; không khởi động. ADB ban đầu rỗng; sau khi kết nối, hai alias báo cùng phiên khởi động của một OnePlus GM1900/API 30. Bản đang cài và release ký thử đều `versionCode=30`; cài đè một lần và hash bản đang cài khớp. Không cài gói công cụ, đổi driver, chủ USB sang máy khác, VM, phiên bản SDK hoặc ảnh firmware.

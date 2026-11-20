@@ -70,9 +70,11 @@ public final class Tbs5530SignalMonitor {
         public final String operation, exceptionType, message;
         public final int bank, register;
         public final long timestampNanos;
+        final IOException detachCandidate;
         private Error(String operation, int bank, int register, long timestamp, Exception error) {
             this.operation = operation; this.bank = bank; this.register = register;
             timestampNanos = timestamp; exceptionType = error.getClass().getName();
+            detachCandidate = Tbs5530DetachConfirmation.isControlCandidate(error) ? (IOException) error : null;
             // Do not propagate transport exception text, which may contain USB identities or paths.
             message = error instanceof ShortTransfer ? "SHORT_CONTROL_TRANSFER" : "MONITOR_IO_ERROR";
         }

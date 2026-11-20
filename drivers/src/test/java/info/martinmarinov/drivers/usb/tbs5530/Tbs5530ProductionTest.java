@@ -8,34 +8,159 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import info.martinmarinov.drivers.DvbException;
 import info.martinmarinov.usbxfer.ByteSink;
 import info.martinmarinov.usbxfer.ByteSource;
+import info.martinmarinov.usbxfer.NativeUsbfsByteSource.ReceiveFailure;
 import static org.junit.Assert.*;
 
 public class Tbs5530ProductionTest {
     @Test public void nativeReadFailureRequiresDetachEvidenceAndRetainsOriginalCause() throws Exception {
-        for (int[] detail : new int[][]{{-71, 0}, {-19, 0}, {-108, 0}, {0, 19}, {-75, 0}}) {
-            for (boolean attached : new boolean[]{true, false}) {
-                info.martinmarinov.usbxfer.NativeUsbfsByteSource.ReceiveFailure original =
-                        new info.martinmarinov.usbxfer.NativeUsbfsByteSource.ReceiveFailure(2, detail[0], detail[1]);
-                java.util.List<IOException> reported = new java.util.ArrayList<>();
-                Tbs5530StreamGate gate = new Tbs5530StreamGate(() -> new ByteSource() {
-                    @Override public void open() { }
-                    @Override public void close() { }
-                    @Override public void readNext(ByteSink sink) throws IOException { throw original; }
-                }, true, reported::add, () -> !attached);
-                IOException error = assertThrows(IOException.class, () -> gate.readNext((data, length) -> { }));
-                assertEquals(java.util.Collections.singletonList(error), reported);
-                if (!attached && detail[0] != -75) {
-                    assertEquals(info.martinmarinov.drivers.DvbException.ErrorCode.DEVICE_DISCONNECTED,
-                            ((info.martinmarinov.drivers.DvbException) error).getErrorCode());
-                    assertSame(original, error.getCause());
-                } else assertSame(original, error);
-                gate.close();
+        for (int[] detail : new int[][]{{-71, 0}, {-19, 0}, {-108, 0}, {0, 19}}) {
+            ReceiveFailure original = new ReceiveFailure(2, detail[0], detail[1]);
+            try (FailedRead read = new FailedRead(original)) {
+                read.confirmation.detached();
+                read.assertDisconnected(read.run());
             }
+        }
+    }
+
+    @Test public void nativeErrorWaitsForDetachBroadcast() throws Exception {
+        try (FailedRead read = new FailedRead(new ReceiveFailure(2, -71, 0))) {
+            Future<IOException> result = read.start();
+            Thread.sleep(300);
+            assertFalse(result.isDone());
+            read.confirmation.detached();
+            read.assertDisconnected(result.get(2, TimeUnit.SECONDS));
+            assertTrue(read.trace.contains("detach_broadcast"));
+            assertTrue(read.present.get());
+        }
+    }
+
+    @Test public void nativeErrorWaitsForDeviceListToLoseTuner() throws Exception {
+        try (FailedRead read = new FailedRead(new ReceiveFailure(2, -71, 0))) {
+            Future<IOException> result = read.start();
+            Thread.sleep(1500);
+            assertFalse(result.isDone());
+            read.present.set(false);
+            read.assertDisconnected(result.get(2, TimeUnit.SECONDS));
+            assertTrue(read.trace.contains("device_list_gone"));
+            assertFalse(read.trace.contains("detach_broadcast"));
+        }
+    }
+
+    @Test public void nativeErrorWithTunerStillPresentTimesOutWithoutMaskingError() throws Exception {
+        try (FailedRead read = new FailedRead(new ReceiveFailure(2, -71, 0))) {
+            long before = System.nanoTime();
+            assertSame(read.original, read.run());
+            long elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - before);
+            assertTrue("Waited " + elapsed + " ms", elapsed >= 3000 && elapsed < 4000);
+            assertEquals(Collections.singletonList(read.original), read.reports);
+            assertTrue(read.trace.stream().anyMatch(event -> event.startsWith("decision=USB_ERROR ")));
+        }
+    }
+
+    @Test public void closingDuringConfirmationDoesNotBlockOrReport() throws Exception {
+        try (FailedRead read = new FailedRead(new ReceiveFailure(2, -71, 0))) {
+            Future<InterruptedException> result = read.worker.submit(() ->
+                    assertThrows(InterruptedException.class, () -> read.gate.readNext((bytes, count) -> { })));
+            assertTrue(read.failed.await(2, TimeUnit.SECONDS));
+            Thread.sleep(500);
+            assertFalse(result.isDone());
+            long before = System.nanoTime();
+            read.gate.close();
+            assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - before) < 200);
+            result.get(2, TimeUnit.SECONDS);
+            assertTrue(read.reports.isEmpty());
+            assertTrue(read.trace.stream().anyMatch(event -> event.startsWith("decision=STOPPED ")));
+        }
+    }
+
+    @Test public void nativeErrorThatIsNotDetachCandidateNeverQueriesDeviceList() throws Exception {
+        try (FailedRead read = new FailedRead(new ReceiveFailure(2, -75, 0))) {
+            read.present.set(false);
+            assertSame(read.original, read.run());
+            assertEquals(Collections.singletonList(read.original), read.reports);
+            assertEquals(0, read.polls.get());
+        }
+    }
+
+    @Test public void controlReadWaitsForRemovalInsteadOfReportingI2cError() throws Exception {
+        Tbs5530DetachConfirmation confirmation = new Tbs5530DetachConfirmation(() -> true,
+                System::nanoTime, (now, event) -> { });
+        Tbs5530SignalMonitor monitor = new Tbs5530SignalMonitor((type, request, value, index, bytes, offset, length, timeout) -> {
+            throw new Tbs5530DetachConfirmation.ControlTransferFailure(-1);
+        }, System::nanoTime, false);
+        DvbException original = new DvbException(DvbException.ErrorCode.IO_EXCEPTION,
+                "SNR read failed", monitor.sample().errors.get(0).detachCandidate);
+        ExecutorService worker = Executors.newSingleThreadExecutor();
+        CountDownLatch entered = new CountDownLatch(1);
+        try {
+            Future<DvbException> result = worker.submit(() -> confirmation.controlFailure(original, () -> {
+                entered.countDown();
+                return false;
+            }));
+            assertTrue(entered.await(2, TimeUnit.SECONDS));
+            assertFalse(result.isDone());
+            confirmation.detached();
+            DvbException error = result.get(2, TimeUnit.SECONDS);
+            assertEquals(DvbException.ErrorCode.DEVICE_DISCONNECTED, error.getErrorCode());
+            assertSame(original, error.getCause());
+        } finally { worker.shutdownNow(); }
+    }
+
+    private static final class FailedRead implements AutoCloseable {
+        final ReceiveFailure original;
+        final AtomicBoolean present = new AtomicBoolean(true);
+        final AtomicInteger polls = new AtomicInteger();
+        final CountDownLatch failed = new CountDownLatch(1);
+        final List<String> trace = Collections.synchronizedList(new ArrayList<>());
+        final List<IOException> reports = new ArrayList<>();
+        final ExecutorService worker = Executors.newSingleThreadExecutor();
+        final Tbs5530DetachConfirmation confirmation = new Tbs5530DetachConfirmation(() -> {
+            polls.incrementAndGet();
+            return present.get();
+        }, System::nanoTime, (now, event) -> {
+            trace.add(event);
+            if (event.startsWith("native_fail ")) failed.countDown();
+        });
+        final Tbs5530StreamGate gate;
+
+        FailedRead(ReceiveFailure original) {
+            this.original = original;
+            gate = new Tbs5530StreamGate(() -> new ByteSource() {
+                @Override public void open() { }
+                @Override public void close() { }
+                @Override public void readNext(ByteSink sink) throws IOException { throw original; }
+            }, true, reports::add, confirmation, () -> false);
+        }
+
+        IOException run() {
+            return assertThrows(IOException.class, () -> gate.readNext((bytes, count) -> { }));
+        }
+
+        Future<IOException> start() throws InterruptedException {
+            Future<IOException> result = worker.submit(this::run);
+            assertTrue(failed.await(2, TimeUnit.SECONDS));
+            return result;
+        }
+
+        void assertDisconnected(IOException error) {
+            assertEquals(DvbException.ErrorCode.DEVICE_DISCONNECTED, ((DvbException) error).getErrorCode());
+            assertSame(original, error.getCause());
+            assertEquals(Collections.singletonList(error), reports);
+        }
+
+        @Override public void close() throws IOException {
+            try { gate.close(); }
+            finally { worker.shutdownNow(); }
         }
     }
 

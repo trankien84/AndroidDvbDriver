@@ -1,5 +1,13 @@
 # Architecture decision record (ADR)
 
+## ADR-079 — Chờ bằng chứng rút tuner trước khi báo lỗi
+
+**Date:** 2026-11-20, baseline `2b0f295`. **Status:** Đã kiểm JVM và xác nhận trên OnePlus ở F1/F2. Bổ sung ADR-076.
+
+**Decision:** Với các mã nhận `-71`, `-19`, `-108` hoặc `errno=19` và lỗi điều khiển USB có dấu hiệu mất kết nối, chờ tối đa 3000 ms ngoài khóa cổng đọc TS. Sự kiện rút đúng kết nối đánh thức ngay; nếu không có sự kiện, kiểm danh sách thiết bị mỗi 50 ms. Hủy chờ khi người dùng dừng hoặc app đang đóng. Hết hạn mà chưa xác nhận rút thì giữ lỗi gốc; bản release hướng dẫn kiểm cáp và thử lại, còn nút **Báo lỗi** giữ chi tiết kỹ thuật. Không đổi quy tắc chỉ hiện lỗi đầu tiên trong mỗi phiên.
+
+**Trade-off:** Lỗi USB thật thuộc nhóm ứng viên có thể hiện muộn tối đa ba giây; các lỗi nhận khác không phải chờ. Không đổi mọi `-71` thành lỗi rút vì sẽ che lỗi khi tuner vẫn cắm. Xem lại cửa sổ này nếu log P4f cho thấy xác nhận thường đến sau hạn hoặc việc dừng phải chờ cửa sổ kết thúc.
+
 ## ADR-078 — Giữ kết luận đối chứng nhiễu P4d
 
 **Date:** 2026-11-19, baseline `53c2cca`. **Status:** `ROOT_CAUSE_CONFIRMED`; kế thừa và làm rõ ADR-074.

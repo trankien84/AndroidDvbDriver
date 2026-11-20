@@ -162,6 +162,9 @@ public final class NativeUsbfsByteSource implements ByteSource {
             this.errno = errno;
         }
 
+        public int getStatus() { return status; }
+        public int getErrno() { return errno; }
+
         public boolean isDisconnectCandidate() {
             return status == -71 || status == -19 || status == -108 || errno == 19;
         }

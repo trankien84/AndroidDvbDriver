@@ -1,5 +1,24 @@
 # Port TBS5530 sang Android — trạng thái hiện tại
 
+## 2026-11-20 — Phase 4 hoàn tất: `PHASE4_FUNCTIONAL_PASS`
+
+F1 và F2 trên OnePlus đều đạt với bản release P4f: mỗi lần rút chỉ hiện một hộp “Tuner đã bị rút. Cắm lại rồi bấm Bắt đầu.”; cắm lại có TS; bấm **Dừng** không hiện lỗi. Tệp đang ghi trong F2 đóng và đọc được. F3 trên Samsung là tùy chọn, không chạy; không thay thế bằng chứng Samsung P4d bằng kết quả P4f.
+
+| Hạng mục | Bằng chứng |
+| --- | --- |
+| Nạp hai giai đoạn | P4d/P4e: bootstrap lạnh 132/132, nhận quyền trên kết nối mới, sau đó reload 132/132 vào RAM trên kết nối hoạt động. |
+| Khóa DVB-T2 K25 và K36 | OnePlus khóa cả hai kênh; Samsung khóa K25 trong P4d. |
+| TS release trên OnePlus và Samsung | `TS_SMOKE_PASS=true` từ ba Dump P4d: K25 hai máy và K36 OnePlus. CC nội dung và TEI bằng 0, đủ bảng dịch vụ; PCR K36 đạt theo phép kiểm độ trôi trên 14/14 PID. |
+| Nhiễu khi đọc USB | `ROOT_CAUSE_CONFIRMED` theo đối chứng cùng drive `0x54`. Giữ anten thụ động vào RF IN, RG6 có đầu kim loại, hai ferrite và đường cáp USB tách khỏi cáp anten; chưa tách tác dụng của từng thay đổi. |
+| Dừng, mở lại, rút và cắm lại | P4e: dừng không lỗi, mở lại khi vẫn cắm chỉ reload RAM và không hỏi quyền mới. P4f: hai lần rút hiện đúng một hộp, gồm một lần đang ghi; cắm lại có TS và dừng không lỗi. |
+
+**Chuyển sang Phase 5 — cắm là xem, chưa triển khai trong P4f:**
+
+- Tự nạp firmware khi cắm tuner qua `UsbDelegate` và dịch vụ chạy ở tiền cảnh.
+- Hướng dẫn chọn **Dùng mặc định cho thiết bị USB này** cho cả hai lần Android nhận thiết bị.
+- Xem xét biến thể build chỉ dùng cá nhân: lấy ảnh firmware từ đường dẫn ngoài Git khi build và kiểm SHA-256, với quyền sử dụng phù hợp.
+- Cân nhắc gộp driver vào app TV.
+
 ## 2026-11-19 — P4e: Dừng và mở lại đạt; rút tuner còn hiện lỗi native
 
 `ROOT_CAUSE_CONFIRMED` theo phép đối chứng P4d cùng drive `0x54`; bố trí cáp mới đã khử biểu hiện nhiễu khi đọc USB. `TS_SMOKE_PASS=true` cho ba Dump release P4d: K25 bước 6 và 11 đạt kiểm từng khoảng PCR, K36 bước 7 đạt kiểm độ trôi trên toàn bộ 59,698 giây. Cả ba có CC nội dung và TEI bằng 0, đủ PAT/PMT/SDT và dịch vụ.

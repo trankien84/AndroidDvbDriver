@@ -39,8 +39,9 @@ public final class Tbs5530DvbDevice extends DvbDevice {
     private volatile Tbs5530ProductionAttachment attachment;
     private volatile Tbs5530StreamGate stream;
     private volatile NativeUsbfsByteSource lastNativeSource;
-    private volatile boolean closing, opened, confirmedDetach;
-    private volatile IOException cleanupFailure;
+    private volatile boolean closing, opened, stopRequested;
+    private volatile IOException cleanupFailure, streamFailure;
+    private volatile DvbException detachedFailure;
     private boolean demuxClosed;
     private int closers;
     private volatile boolean poisoned;
@@ -77,7 +78,8 @@ public final class Tbs5530DvbDevice extends DvbDevice {
             if (closers != 0) throw error(DvbException.ErrorCode.BAD_API_USAGE, R.string.tbs5530_busy, null);
             if (opened) throw error(DvbException.ErrorCode.BAD_API_USAGE, R.string.tbs5530_already_open, null);
             if (poisoned) throw error(DvbException.ErrorCode.HARDWARE_EXCEPTION, R.string.tbs5530_no_retry, null);
-            closing = false;
+            closing = false; stopRequested = false;
+            streamFailure = null; detachedFailure = null;
             lastNativeSource = null;
             try {
                 if (demuxClosed) { resetClosedDemux(); demuxClosed = false; }
@@ -116,6 +118,7 @@ public final class Tbs5530DvbDevice extends DvbDevice {
                     requireAttachment();
                     int result = owner.controlTransfer(type, request, value, index, bytes, offset, length, timeout);
                     requireAttachment();
+                    if (result < 0) throw new Tbs5530DetachConfirmation.ControlTransferFailure(result);
                     return result;
                 };
                 bridge = new Tbs5530Bridge(io, session, generation);
@@ -131,7 +134,8 @@ public final class Tbs5530DvbDevice extends DvbDevice {
                 IOException cleanup = cleanupControl();
                 if (cleanup != null) e.addSuppressed(cleanup);
                 if (e instanceof java.io.InterruptedIOException) Thread.currentThread().interrupt();
-                throw error(DvbException.ErrorCode.HARDWARE_EXCEPTION, R.string.tbs5530_open_failed, e);
+                DvbException failure = error(DvbException.ErrorCode.HARDWARE_EXCEPTION, R.string.tbs5530_open_failed, e);
+                throw detachedFailure == null ? failure : Tbs5530StreamGate.disconnected(failure);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 IOException cleanup = cleanupControl(); if (cleanup != null) e.addSuppressed(cleanup);
@@ -158,7 +162,13 @@ public final class Tbs5530DvbDevice extends DvbDevice {
     }
 
     private void requireAttachment() throws IOException {
-        if (closing) throw new IOException("TBS5530 is closing");
+        if (closing) {
+            IOException failure = streamFailure;
+            if (failure != null) throw failure;
+            DvbException detached = detachedFailure;
+            if (detached != null) throw detached;
+            throw new IOException("TBS5530 is closing");
+        }
         Tbs5530ProductionAttachment current = attachment;
         if (current == null) throw new IOException("TBS5530 attachment unavailable");
         current.requireCurrent();
@@ -166,6 +176,8 @@ public final class Tbs5530DvbDevice extends DvbDevice {
 
     private void requireOpen() throws IOException {
         requireAttachment();
+        IOException failure = streamFailure;
+        if (failure != null) throw failure;
         if (!opened || poisoned) throw new IOException("TBS5530 is not open");
         session.requireUsable(generation);
     }
@@ -177,33 +189,28 @@ public final class Tbs5530DvbDevice extends DvbDevice {
         final Tbs5530DvbT2TuneParameters manual;
         try { manual = new Tbs5530DvbT2TuneParameters(frequency, (int) bandwidth, 0); }
         catch (IllegalArgumentException e) { throw error(DvbException.ErrorCode.CANNOT_TUNE_TO_FREQ, R.string.tbs5530_frequency, e); }
-        synchronized (lifecycle) {
-            try {
-                requireOpen();
-                Tbs5530StreamGate gate = stream;
-                if (gate != null) gate.pause();
-                tuned = false; sample = null; rfPercentage = -1;
-                frontend.execute(frontend.planTerrestrialTune(manual));
-                Tbs5530Frontend.Status status = frontend.execute(frontend.planPollStatus(3)).status;
-                // AUTO is a single different PLP strategy after bounded clean no-lock, never an I/O retry.
-                if (!status.demodLocked) {
-                    frontend.execute(frontend.planTerrestrialTune(new Tbs5530DvbT2TuneParameters(frequency,
-                            (int) bandwidth, Tbs5530DvbT2TuneParameters.Selection.automatic())));
-                    status = frontend.execute(frontend.planPollStatus(3)).status;
-                }
-                session.frontendLock(generation, status.demodLocked);
-                if (!status.demodLocked) throw error(DvbException.ErrorCode.CANNOT_TUNE_TO_FREQ, R.string.tbs5530_no_lock, null);
-                frequencyHz = frequency;
-                sampleRssi();
-                bridge.selectTerrestrialStream();
-                tuned = true;
-                if (gate != null) gate.resume();
-            } catch (DvbException e) { throw e; }
-            catch (IOException | RuntimeException e) {
-                fail(e);
-                throw error(DvbException.ErrorCode.HARDWARE_EXCEPTION, R.string.tbs5530_tune_failed, e);
+        runControl(DvbException.ErrorCode.HARDWARE_EXCEPTION, R.string.tbs5530_tune_failed, () -> {
+            requireOpen();
+            Tbs5530StreamGate gate = stream;
+            if (gate != null) gate.pause();
+            tuned = false; sample = null; rfPercentage = -1;
+            frontend.execute(frontend.planTerrestrialTune(manual));
+            Tbs5530Frontend.Status status = frontend.execute(frontend.planPollStatus(3)).status;
+            // AUTO is a single different PLP strategy after bounded clean no-lock, never an I/O retry.
+            if (!status.demodLocked) {
+                frontend.execute(frontend.planTerrestrialTune(new Tbs5530DvbT2TuneParameters(frequency,
+                        (int) bandwidth, Tbs5530DvbT2TuneParameters.Selection.automatic())));
+                status = frontend.execute(frontend.planPollStatus(3)).status;
             }
-        }
+            session.frontendLock(generation, status.demodLocked);
+            if (!status.demodLocked) throw error(DvbException.ErrorCode.CANNOT_TUNE_TO_FREQ, R.string.tbs5530_no_lock, null);
+            frequencyHz = frequency;
+            sampleRssi();
+            bridge.selectTerrestrialStream();
+            tuned = true;
+            if (gate != null) gate.resume();
+            return null;
+        });
     }
 
     private Tbs5530SignalMetrics metrics() throws IOException {
@@ -214,61 +221,82 @@ public final class Tbs5530DvbDevice extends DvbDevice {
             final Tbs5530SignalMonitor.Sample[] result = {null};
             session.transaction(generation, () -> result[0] = monitor.sample());
             sample = result[0];
-            if (!sample.cleanupSucceeded || !sample.errors.isEmpty()) throw new IOException("Signal sample or cleanup failed");
+            if (!sample.cleanupSucceeded || !sample.errors.isEmpty()) {
+                for (Tbs5530SignalMonitor.Error failure : sample.errors) {
+                    if (failure.detachCandidate != null) throw failure.detachCandidate;
+                }
+                throw new IOException("Signal sample or cleanup failed");
+            }
         }
         return sample.metrics;
     }
 
     @Override public int readSnr() throws DvbException {
-        synchronized (lifecycle) {
-            try { return Tbs5530ProductionMetrics.snr(metrics()); }
-            catch (IOException e) { fail(e); throw error(DvbException.ErrorCode.IO_EXCEPTION, R.string.tbs5530_metrics_failed, e); }
-        }
+        return readControl(() -> Tbs5530ProductionMetrics.snr(metrics()));
     }
     @Override public int readBitErrorRate() throws DvbException {
-        synchronized (lifecycle) {
-            try { return Tbs5530ProductionMetrics.ber(metrics()); }
-            catch (IOException e) { fail(e); throw error(DvbException.ErrorCode.IO_EXCEPTION, R.string.tbs5530_metrics_failed, e); }
-        }
+        return readControl(() -> Tbs5530ProductionMetrics.ber(metrics()));
     }
     /** Unscaled pre-BCH ratio from the shared signal sample; null means unavailable. */
     public Double readPreBchBitErrorRate() throws DvbException {
-        synchronized (lifecycle) {
-            try {
-                Tbs5530SignalMetrics current = metrics();
-                return current.lock == Tbs5530SignalMetrics.Lock.LOCKED ? current.ber : null;
-            } catch (IOException e) {
-                fail(e);
-                throw error(DvbException.ErrorCode.IO_EXCEPTION, R.string.tbs5530_metrics_failed, e);
-            }
-        }
+        return readControl(() -> {
+            Tbs5530SignalMetrics current = metrics();
+            return current.lock == Tbs5530SignalMetrics.Lock.LOCKED ? current.ber : null;
+        });
     }
 
     @Override public Set<DvbStatus> getStatus() throws DvbException {
-        synchronized (lifecycle) {
-            try {
-                requireOpen();
-                if (!tuned) return Collections.emptySet();
-                Tbs5530SignalMetrics m = metrics();
-                if (m.lock == Tbs5530SignalMetrics.Lock.LOCKED) return EnumSet.of(DvbStatus.FE_HAS_SIGNAL,
-                        DvbStatus.FE_HAS_CARRIER, DvbStatus.FE_HAS_VITERBI, DvbStatus.FE_HAS_SYNC, DvbStatus.FE_HAS_LOCK);
-                return Collections.emptySet();
-            } catch (IOException e) { fail(e); throw error(DvbException.ErrorCode.IO_EXCEPTION, R.string.tbs5530_metrics_failed, e); }
-        }
+        return readControl(() -> {
+            requireOpen();
+            if (!tuned) return Collections.emptySet();
+            Tbs5530SignalMetrics m = metrics();
+            if (m.lock == Tbs5530SignalMetrics.Lock.LOCKED) return EnumSet.of(DvbStatus.FE_HAS_SIGNAL,
+                    DvbStatus.FE_HAS_CARRIER, DvbStatus.FE_HAS_VITERBI, DvbStatus.FE_HAS_SYNC, DvbStatus.FE_HAS_LOCK);
+            return Collections.emptySet();
+        });
     }
     @Override public int readRfStrengthPercentage() throws DvbException {
+        return readControl(() -> {
+            requireOpen();
+            // ADC changes tuner registers: never disturb a running Bulk receiver for a display update.
+            Tbs5530StreamGate gate = stream;
+            if (tuned && System.nanoTime() - lastRssiNanos >= 2_000_000_000L) {
+                if (gate == null) sampleRssi();
+                else synchronized (gate) { if (!gate.active()) sampleRssi(); }
+            }
+            return rfPercentage;
+        });
+    }
+
+    private interface ControlRead<T> { T run() throws IOException; }
+
+    private <T> T readControl(ControlRead<T> operation) throws DvbException {
+        return runControl(DvbException.ErrorCode.IO_EXCEPTION, R.string.tbs5530_metrics_failed, operation);
+    }
+
+    private <T> T runControl(DvbException.ErrorCode code, int resource, ControlRead<T> operation) throws DvbException {
+        Tbs5530ProductionAttachment current;
+        DvbException error;
         synchronized (lifecycle) {
-            try {
-                requireOpen();
-                // ADC changes tuner registers: never disturb a running Bulk receiver for a display update.
-                Tbs5530StreamGate gate = stream;
-                if (tuned && System.nanoTime() - lastRssiNanos >= 2_000_000_000L) {
-                    if (gate == null) sampleRssi();
-                    else synchronized (gate) { if (!gate.active()) sampleRssi(); }
+            current = attachment;
+            try { return operation.run(); }
+            catch (DvbException e) { throw e; }
+            catch (IOException | RuntimeException e) {
+                error = error(code, resource, e);
+                if (!stopRequested) {
+                    poisoned = true; tuned = false;
+                    if (session != null) session.failed(generation, e);
                 }
-                return rfPercentage;
-            } catch (IOException e) { fail(e); throw error(DvbException.ErrorCode.IO_EXCEPTION, R.string.tbs5530_metrics_failed, e); }
+            }
         }
+        try { error = classifyControlFailure(current, error); }
+        catch (InterruptedException stopped) {
+            Thread.currentThread().interrupt();
+            if (!stopRequested) removed(null);
+            throw error;
+        }
+        removed(error);
+        throw error;
     }
     private void sampleRssi() throws IOException {
         final Tbs5530SignalRssi.Result[] result = {null};
@@ -300,11 +328,11 @@ public final class Tbs5530DvbDevice extends DvbDevice {
             return super.getTransportStream(new StreamCallback() {
                 @Override public void onStreamException(IOException error) {
                     try { callback.onStreamException(error); }
-                    finally { if (poisoned) removed(); }
+                    finally { if (poisoned) removed(error); }
                 }
                 @Override public void onStoppedStreaming() {
                     try { callback.onStoppedStreaming(); }
-                    finally { if (poisoned) removed(); }
+                    finally { if (poisoned) removed(streamFailure); }
                 }
             });
         }
@@ -338,55 +366,55 @@ public final class Tbs5530DvbDevice extends DvbDevice {
                     source.readNext(sink);
                 }
                 @Override public void close() throws IOException { if (source != null) source.close(); }
-            }, tuned && !closing, this::streamFailed, this::attachmentDisconnected);
+            }, tuned && !closing, this::streamFailed, attachment.confirmation(), () -> stopRequested);
             return stream;
         }
     }
     private void streamFailed(IOException error) {
+        streamFailure = error;
         poisoned = true;
         Tbs5530Session active = session;
         if (active != null) active.failed(generation, error);
         // The pump must publish this native error before asynchronous cleanup can interrupt it.
     }
     private void attachmentRemoved() {
-        attachmentDisconnected();
-        removed();
-    }
-
-    private boolean attachmentDisconnected() {
         Tbs5530ProductionAttachment current = attachment;
-        if (!confirmedDetach && current != null && current.disconnected()) confirmedDetach = true;
-        return confirmedDetach;
+        boolean disconnected = current != null && current.disconnected();
+        Tbs5530StreamGate gate = stream;
+        if (disconnected) detachedFailure = Tbs5530StreamGate.disconnected(null);
+        // A native failure already waiting for this signal reports before shutting down the pump.
+        if (disconnected && gate != null && gate.checkingDetach()) return;
+        removed(detachedFailure);
     }
 
-    public Exception classifyControlFailure(Exception error) {
-        return error instanceof IOException && attachmentDisconnected()
-                ? Tbs5530StreamGate.disconnected((IOException) error) : error;
+    private DvbException classifyControlFailure(Tbs5530ProductionAttachment current, DvbException error)
+            throws InterruptedException {
+        // A final native classification also applies to metrics that raced with stream cleanup.
+        IOException nativeError = streamFailure;
+        if (nativeError instanceof DvbException) return (DvbException) nativeError;
+        if (current == null) return error;
+        return current.confirmation().controlFailure(error, () -> stopRequested);
     }
 
-    private void removed() {
+    private void removed(IOException classified) {
         if (!removalCleanup.compareAndSet(false, true)) return;
         poisoned = true; closing = true;
         Tbs5530Session active = session;
         if (active != null) active.requestCancellation(generation, true);
         Thread cleanup = new Thread(() -> {
             try {
-                if (attachmentDisconnected()) reportStreamFailure(Tbs5530StreamGate.disconnected(null));
+                if (!stopRequested && classified != null) reportStreamFailure(classified);
             } finally {
-                try { close(); } catch (IOException error) { cleanupFailure = error; }
+                try { closeDevice(); } catch (IOException error) { cleanupFailure = error; }
             }
         }, "tbs5530-remove-cleanup");
         cleanup.start();
     }
-    private void fail(Exception e) {
-        poisoned = true; tuned = false;
-        if (session != null) session.failed(generation, e);
-        Tbs5530StreamGate gate = stream;
-        if (gate != null) gate.fail(attachmentDisconnected()
-                ? Tbs5530StreamGate.disconnected(new IOException("TBS5530 session failed", e))
-                : new IOException("TBS5530 session failed", e));
-        // Callers hold lifecycle here; joining the pump under it could deadlock a stopped callback.
-        removed();
+
+    public void requestStop() {
+        stopRequested = true;
+        Tbs5530ProductionAttachment current = attachment;
+        if (current != null) current.confirmation().wake();
     }
 
     /**
@@ -403,6 +431,11 @@ public final class Tbs5530DvbDevice extends DvbDevice {
     public IOException getCleanupFailure() { return cleanupFailure; }
 
     @Override public void close() throws IOException {
+        requestStop();
+        closeDevice();
+    }
+
+    private void closeDevice() throws IOException {
         beginStreamStop();
         closing = true;
         synchronized (lifecycle) { closing = true; closers++; }

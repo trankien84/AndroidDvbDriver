@@ -19,12 +19,15 @@ final class Tbs5530AttachmentEpoch {
         } else if (!selected.equals(identity) || sealed) failed = true;
         notifyAll();
     }
-    synchronized void detach(String identity) {
-        if (!closed && !transition && selected.equals(identity)) selectedDetached = true;
-        if (closed || failed) return;
-        if (transition && selected.equals(identity) && !oldDetached && candidate == null) oldDetached = true;
-        else if (selected.equals(identity) || identity.equals(candidate)) failed = true;
-        notifyAll();
+    synchronized boolean detach(String identity) {
+        boolean matches = !closed && !transition && selected.equals(identity);
+        if (matches) selectedDetached = true;
+        if (!closed && !failed) {
+            if (transition && selected.equals(identity) && !oldDetached && candidate == null) oldDetached = true;
+            else if (selected.equals(identity) || identity.equals(candidate)) failed = true;
+            notifyAll();
+        }
+        return matches;
     }
     synchronized void seal(String identity) throws IOException {
         require();

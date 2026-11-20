@@ -22,6 +22,7 @@
     <string name="dump">Ta opp en TS-fil</string>
     <string name="dump_stop">Stopp opptaket</string>
     <string name="tuner_disconnected">Mottakeren er koblet fra. Koble den til igjen og trykk på Start.</string>
+    <string name="tuner_usb_transfer_error">USB-overføringsfeil (kode %1$d). Kontroller kabelen og trykk på Start igjen.</string>
     <string name="mHz">MHz</string>
     <string name="thanks">
         Takk for at du installerte DVB-T Driver. Vennligst bemerk at denne appen ikke er ment å brukes manuelt.

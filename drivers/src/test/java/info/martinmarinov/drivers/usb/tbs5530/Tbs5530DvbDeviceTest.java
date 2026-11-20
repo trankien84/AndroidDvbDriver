@@ -31,6 +31,8 @@ public class Tbs5530DvbDeviceTest {
         when(context.getApplicationContext()).thenReturn(context); when(context.getString(anyInt())).thenReturn("fixture");
         UsbDevice device = mock(UsbDevice.class); UsbDeviceConnection connection = mock(UsbDeviceConnection.class);
         Tbs5530ProductionAttachment first = mock(Tbs5530ProductionAttachment.class);
+        Tbs5530DetachConfirmation confirmation = mock(Tbs5530DetachConfirmation.class);
+        when(first.confirmation()).thenReturn(confirmation);
         when(first.openControl()).thenReturn(connection);
         ScriptedFakeControlIo script = new ScriptedFakeControlIo();
         Tbs5530FrontendTest.probeFixture(script, 0x197);
@@ -56,7 +58,11 @@ public class Tbs5530DvbDeviceTest {
              MockedConstruction<Tbs5530FirmwareStore> store = mockConstruction(Tbs5530FirmwareStore.class,
                      (mock, args) -> when(mock.load()).thenReturn(new byte[8192]));
              MockedConstruction<Tbs5530ProductionAttachment> reopened = mockConstruction(Tbs5530ProductionAttachment.class,
-                     (mock, args) -> { when(mock.openControl()).thenReturn(connection); when(mock.prepare(false)).thenReturn(device); })) {
+                     (mock, args) -> {
+                         when(mock.openControl()).thenReturn(connection);
+                         when(mock.prepare(false)).thenReturn(device);
+                         when(mock.confirmation()).thenReturn(confirmation);
+                     })) {
             demux.when(DvbDemux::DvbDmxSwfilter).thenAnswer(a -> mock(DvbDemux.class));
             firmware.when(() -> Tbs5530ProductionFirmware.load(context)).thenReturn(new byte[8192]);
             nativeControl.when(() -> NativeUsbfsControl.reloadFx2(eq(connection),any(byte[].class),any(NativeUsbfsControl.Guard.class)))

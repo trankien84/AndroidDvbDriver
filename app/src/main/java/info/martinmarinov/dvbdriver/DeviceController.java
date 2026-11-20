@@ -29,6 +29,7 @@ import info.martinmarinov.drivers.DvbException;
 import info.martinmarinov.drivers.DvbStatus;
 import info.martinmarinov.drivers.DeliverySystem;
 import info.martinmarinov.drivers.usb.DvbUsbDeviceRegistry;
+import info.martinmarinov.drivers.usb.tbs5530.Tbs5530DvbDevice;
 
 import static info.martinmarinov.drivers.DvbException.ErrorCode.NO_DVB_DEVICES_FOUND;
 
@@ -39,6 +40,7 @@ class DeviceController extends Thread {
     private volatile long currFreq, currBand;
     private volatile DeliverySystem currDelSystem, desiredDelSystem;
 
+    private volatile Tbs5530DvbDevice tbsDevice;
     private DataHandler dataHandler;
 
     DeviceController(DvbFrontendActivity dvbFrontendActivity, long desiredFreq, long desiredBand, DeliverySystem deliverySystem) {
@@ -61,6 +63,8 @@ class DeviceController extends Thread {
 
     void requestStop() {
         failures.beginClosing();
+        Tbs5530DvbDevice device = tbsDevice;
+        if (device != null) device.requestStop();
         interrupt();
     }
 
@@ -73,6 +77,7 @@ class DeviceController extends Thread {
                 throw new DvbException(NO_DVB_DEVICES_FOUND, dvbFrontendActivity.getString(R.string.no_devices_found));
 
             dvbDevice = availableFrontends.get(0);
+            if (dvbDevice instanceof Tbs5530DvbDevice) tbsDevice = (Tbs5530DvbDevice) dvbDevice;
             for (int i = 1; i < availableFrontends.size(); i++) availableFrontends.get(i).close();
             dvbDevice.open();
             dvbDevice.tune(desiredFreq, desiredBand, desiredDelSystem);
@@ -131,8 +136,7 @@ class DeviceController extends Thread {
                 // Interrupted exceptions are ok
             }
         } catch (Exception e) {
-            failures.report(dvbDevice instanceof info.martinmarinov.drivers.usb.tbs5530.Tbs5530DvbDevice
-                    ? ((info.martinmarinov.drivers.usb.tbs5530.Tbs5530DvbDevice) dvbDevice).classifyControlFailure(e) : e);
+            failures.report(e);
         } finally {
             failures.beginClosing();
             boolean interrupted = Thread.interrupted();

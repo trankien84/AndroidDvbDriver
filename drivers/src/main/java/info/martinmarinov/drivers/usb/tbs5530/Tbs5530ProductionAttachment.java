@@ -20,10 +20,11 @@ final class Tbs5530ProductionAttachment implements AutoCloseable {
     private final Tbs5530AndroidUsbFacade facade;
     private final Object events = new Object();
     private final Tbs5530AttachmentEpoch epoch;
+    private final Tbs5530DetachConfirmation confirmation;
     private final Tbs5530UsbBinding.Registration observer;
     private final Tbs5530ProductionSession ownership;
     private volatile Runnable removed;
-    private UsbDevice selected;
+    private volatile UsbDevice selected;
     private boolean closed;
 
     Tbs5530ProductionAttachment(Context context, UsbDevice initial) throws IOException {
@@ -33,6 +34,8 @@ final class Tbs5530ProductionAttachment implements AutoCloseable {
         if (manager == null) throw new IOException("USB host service unavailable");
         selected = initial;
         epoch = new Tbs5530AttachmentEpoch(identity(initial));
+        confirmation = new Tbs5530DetachConfirmation(() -> isPresent(selected), SystemClock::elapsedRealtimeNanos,
+                (nanos, event) -> android.util.Log.i("TBS5530Detach", "elapsedRealtimeNanos=" + nanos + " " + event));
         ownership = Tbs5530ProductionSession.acquire();
         try {
             facade = new Tbs5530AndroidUsbFacade(this.context);
@@ -48,7 +51,9 @@ final class Tbs5530ProductionAttachment implements AutoCloseable {
 
     private void event(Tbs5530UsbBinding.Device d, boolean detach) {
         if (d == null || d.vendorId != 0x734c || d.productId != 0x5530) return;
-        if (detach) epoch.detach(identity(d)); else epoch.attach(identity(d));
+        if (detach) {
+            if (epoch.detach(identity(d))) confirmation.detached();
+        } else epoch.attach(identity(d));
         synchronized (events) { events.notifyAll(); }
         Runnable callback = removed;
         if (epoch.invalid() && callback != null) callback.run();
@@ -195,7 +200,9 @@ final class Tbs5530ProductionAttachment implements AutoCloseable {
         @Override public void close() { raw.close(); }
     }
 
-    boolean disconnected() { return epoch.selectedDetached() || !isPresent(selected); }
+    Tbs5530DetachConfirmation confirmation() { return confirmation; }
+
+    boolean disconnected() { return confirmation.disconnected(); }
 
     private boolean isPresent(UsbDevice expected) {
         UsbDevice current = manager.getDeviceList().get(expected.getDeviceName());

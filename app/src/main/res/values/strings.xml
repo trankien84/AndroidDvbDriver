@@ -42,6 +42,7 @@
     <string name="dump">Record TS</string>
     <string name="dump_stop">Stop recording</string>
     <string name="tuner_disconnected">The tuner was unplugged. Plug it back in and tap Start.</string>
+    <string name="tuner_usb_transfer_error">USB transfer error (code %1$d). Check the cable, then tap Start again.</string>
     <string name="mHz">MHz</string>
     <string name="thanks">
         Thank you for installing DVB-T Driver. Please note that this app is not meant to be used manually.

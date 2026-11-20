@@ -1,5 +1,21 @@
 # TBS5530 test matrix
 
+## 2026-11-20 — P4f: xác nhận rút tuner trước khi báo lỗi
+
+| Hạng mục | Kết quả | Bằng chứng hoặc giới hạn |
+| --- | --- | --- |
+| Sự kiện rút sau 300 ms; chỉ mất trong danh sách sau 1500 ms | FAIL trước sửa; PASS sau sửa | Hai ca JVM trên baseline `2b0f295` trả lỗi native; bản sửa giữ nguyên nguyên nhân gốc và báo đúng `DEVICE_DISCONNECTED` một lần. |
+| Còn cắm, dừng giữa chừng, lỗi điều khiển, mã không phải ứng viên rút | PASS JVM | Giữ lỗi `-71` sau hạn nếu vẫn cắm; dừng ở 500 ms không báo, `close()` dưới 200 ms với nguồn giả; lỗi điều khiển đợi xác nhận; `-75` không hỏi danh sách USB. |
+| JVM tất cả mô-đun | PASS | Drivers 570 PASS, 5 SKIP; usbxfer 90, dvbservice 17, app debug 134 và release 15 PASS. |
+| Build debug, release, AndroidTest và lint app | PASS | Gradle Wrapper chạy thành công; không chạy instrumentation. Không chạy lại driver lint đã FAIL trong lịch sử. |
+| Native host, Python và helper giả | PASS | 5 chương trình C; Python 139/139; helper 373/373. Không thao tác phần cứng. |
+| Chữ ký, cách ly release, JNI và 16 KiB | PASS | Ký bằng khóa debug chỉ để thử cục bộ; tổng 12 ELF trên bốn ABI. Đây là kiểm tĩnh, không phải kiểm trên máy dùng trang nhớ 16 KiB. |
+| Card P4f | PASS thực thi | Validator thật chỉ đọc kiểm pin của 563 tệp nguồn, APK, firmware, công cụ, kết quả kiểm phần mềm, phiên khởi động OnePlus, bản cài và việc tuner đang rút. Sau `install -r`, hash APK đang cài khớp. |
+| F1, OnePlus K25 | PASS | Một hộp báo rút; sự kiện rút đến sau `-71` 63,753 ms. Lúc cắm lại có một hộp chọn mở app và hai hộp quyền sau **Bắt đầu**; có TS, không có hộp lỗi khi dừng. |
+| F2, OnePlus K25 đang ghi | PASS | Một hộp báo rút; sự kiện rút đến sau `-71` 75,146 ms. Tệp đóng và đọc được, dài 10,069 giây, 44.374.768 byte, 236.036 gói trọn; sync đúng từ đầu, TSDuck nhận 13 dịch vụ và không báo lỗi sync hay lỗi truyền được đánh dấu. Cắm lại có hai hộp quyền, có TS và dừng không lỗi. |
+| F3, Samsung tùy chọn | NOT RUN | Người dùng không chọn chạy; giữ bằng chứng K25 Samsung P4d. |
+| Phase 4 | `PHASE4_FUNCTIONAL_PASS` | F1/F2 đạt, cùng các bằng chứng chức năng P4d/P4e. Dùng 2/3 lượt OnePlus, 0/1 Samsung, 0 Windows; không lặp. |
+
 ## 2026-11-19 — P4e: ngoại tuyến và chấm lại Dump P4d
 
 | Hạng mục | Kết quả | Bằng chứng hoặc giới hạn |

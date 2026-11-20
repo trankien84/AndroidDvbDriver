@@ -37,6 +37,7 @@ import androidx.appcompat.app.AppCompatDialogFragment;
 
 import info.martinmarinov.drivers.DvbException;
 import info.martinmarinov.dvbservice.tools.StackTraceSerializer;
+import info.martinmarinov.usbxfer.NativeUsbfsByteSource;
 
 public class ExceptionDialog extends AppCompatDialogFragment {
     private static final String DIALOG_TAG = ExceptionDialog.class.getSimpleName();
@@ -71,9 +72,7 @@ public class ExceptionDialog extends AppCompatDialogFragment {
 
     @Override
     public @NonNull Dialog onCreateDialog(Bundle savedInstanceState) {
-        final String summary = e instanceof DvbException
-                && ((DvbException) e).getErrorCode() == DvbException.ErrorCode.DEVICE_DISCONNECTED
-                ? getString(R.string.tuner_disconnected) : e.getLocalizedMessage();
+        final String summary = summarize(e);
         final String message = summary == null ? getString(android.R.string.dialog_alert_title) : summary;
         return new AlertDialog.Builder(getActivity())
                 .setCancelable(true)
@@ -97,6 +96,21 @@ public class ExceptionDialog extends AppCompatDialogFragment {
                     }
                 })
                 .create();
+    }
+
+    private String summarize(Exception error) {
+        if (error instanceof DvbException
+                && ((DvbException) error).getErrorCode() == DvbException.ErrorCode.DEVICE_DISCONNECTED)
+            return getString(R.string.tuner_disconnected);
+        if (!BuildConfig.DEBUG) {
+            for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+                if (cause instanceof NativeUsbfsByteSource.ReceiveFailure) {
+                    NativeUsbfsByteSource.ReceiveFailure usb = (NativeUsbfsByteSource.ReceiveFailure) cause;
+                    return getString(R.string.tuner_usb_transfer_error, usb.getStatus() != 0 ? usb.getStatus() : usb.getErrno());
+                }
+            }
+        }
+        return error.getLocalizedMessage();
     }
 
     private String getConstants() {

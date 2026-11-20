@@ -36,6 +36,7 @@ public class Tbs5530ProductionAttachmentTest {
         final AtomicLong now = new AtomicLong();
         final MockedStatic<Looper> loopers = mockStatic(Looper.class);
         final MockedStatic<SystemClock> clock = mockStatic(SystemClock.class);
+        final MockedStatic<android.util.Log> log = mockStatic(android.util.Log.class);
         final MockedConstruction<Tbs5530AndroidUsbFacade> facades;
         Tbs5530UsbBinding.Events events;
         Tbs5530UsbBinding.PermissionCallback callback;
@@ -78,7 +79,7 @@ public class Tbs5530ProductionAttachmentTest {
 
         @Override public void close() throws Exception {
             try { if (attachment != null) attachment.close(); }
-            finally { facades.close(); clock.close(); loopers.close(); }
+            finally { facades.close(); log.close(); clock.close(); loopers.close(); }
         }
     }
 
